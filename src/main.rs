@@ -1,3 +1,4 @@
+mod module_visitor;
 mod solver;
 
 fn main() {
