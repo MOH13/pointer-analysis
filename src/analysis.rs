@@ -1,5 +1,5 @@
-use llvm_ir::instruction::{Load, Store};
-use llvm_ir::{Instruction, Module, Name, Operand, Terminator};
+use llvm_ir::instruction::{GetElementPtr, Load, Phi, Store};
+use llvm_ir::{Constant, ConstantRef, Instruction, Module, Name, Operand, Terminator};
 
 use crate::module_visitor::{Context, ModuleVisitor};
 use crate::solver::{Constraint, Solver};
@@ -8,17 +8,15 @@ pub struct PointsToAnalysis;
 
 impl PointsToAnalysis {
     /// Runs the points-to analysis on LLVM module `module` using `solver`.
-    pub fn run<S>(module: &Module, solver: S) -> PointsToResult
+    pub fn run<S>(module: &Module) -> PointsToResult
     where
-        S: Solver<Term = Cell, Node = Cell>,
+        S: Solver<Term = Cell>,
     {
         let mut cell_finder = PointsToCellFinder::new();
         cell_finder.visit_module(module);
 
-        let mut points_to_solver = PointsToSolver {
-            cells: cell_finder.cells,
-            solver,
-        };
+        let solver = S::new(cell_finder.cells);
+        let mut points_to_solver = PointsToSolver { solver };
         points_to_solver.visit_module(module);
 
         // TODO: add method to `PointsToSolver` that outputs result
@@ -60,16 +58,62 @@ impl ModuleVisitor for PointsToCellFinder {
 
 /// Visits a module, generating and solving constraints using a supplied constraint solver.
 struct PointsToSolver<S> {
-    cells: Vec<Cell>,
     solver: S,
 }
 
 impl<S> ModuleVisitor for PointsToSolver<S>
 where
-    S: Solver<Term = Cell, Node = Cell>,
+    S: Solver<Term = Cell>,
 {
     fn handle_instruction(&mut self, instr: &Instruction, _context: Context) {
         match instr {
+            // x = &y
+            Instruction::GetElementPtr(GetElementPtr {
+                address:
+                    Operand::LocalOperand {
+                        name: addr_name, ..
+                    },
+                indices,
+                dest,
+                ..
+            }) => {
+                if indices.len() != 1
+                    || !matches!(
+                        indices[0].as_constant(),
+                        Some(Constant::Int { value: 0, .. })
+                    )
+                {
+                    return;
+                }
+
+                let c = Constraint::Inclusion {
+                    term: Cell::Local(addr_name.clone()),
+                    node: Cell::Local(dest.clone()),
+                };
+                self.solver.add_constraint(c);
+            }
+
+            // x = \phi(y1, y2, ...)
+            Instruction::Phi(Phi {
+                incoming_values,
+                dest,
+                ..
+            }) => {
+                for (value, _) in incoming_values {
+                    let value_name = match value {
+                        Operand::LocalOperand { name, .. } => name,
+                        _ => continue,
+                    };
+
+                    let c = Constraint::Subset {
+                        left: Cell::Local(value_name.clone()),
+                        right: Cell::Local(dest.clone()),
+                    };
+                    self.solver.add_constraint(c);
+                }
+            }
+
+            // x = *y
             Instruction::Load(Load {
                 address:
                     Operand::LocalOperand {
@@ -78,18 +122,15 @@ where
                 dest,
                 ..
             }) => {
-                for cell in &self.cells {
-                    // TODO: Get rid of clones
-                    let c = Constraint::CondSubset {
-                        term: cell.clone(),
-                        cond_node: Cell::Local(addr_name.clone()),
-                        left: cell.clone(),
-                        right: Cell::Local(dest.clone()),
-                    };
-                    self.solver.add_constraint(c);
-                }
+                // TODO: Get rid of clones
+                let c = Constraint::UnivCondSubsetLeft {
+                    cond_node: Cell::Local(addr_name.clone()),
+                    right: Cell::Local(dest.clone()),
+                };
+                self.solver.add_constraint(c);
             }
 
+            // *x = y
             Instruction::Store(Store {
                 address:
                     Operand::LocalOperand {
@@ -101,22 +142,16 @@ where
                     },
                 ..
             }) => {
-                for cell in &self.cells {
-                    // TODO: Get rid of clones
-                    let c = Constraint::CondSubset {
-                        term: cell.clone(),
-                        cond_node: Cell::Local(addr_name.clone()),
-                        left: Cell::Local(value_name.clone()),
-                        right: cell.clone(),
-                    };
-                    self.solver.add_constraint(c);
-                }
+                let c = Constraint::UnivCondSubsetRight {
+                    cond_node: Cell::Local(addr_name.clone()),
+                    left: Cell::Local(value_name.clone()),
+                };
+                self.solver.add_constraint(c);
             }
+
             _ => {}
         }
     }
 
-    fn handle_terminator(&mut self, term: &Terminator, context: Context) {
-        todo!()
-    }
+    fn handle_terminator(&mut self, _term: &Terminator, _context: Context) {}
 }
