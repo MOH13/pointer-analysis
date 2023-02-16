@@ -26,6 +26,7 @@ impl PointsToAnalysis {
 
         let result_map = cells_copy
             .into_iter()
+            .filter(|c| matches!(c, Cell::Stack(_)))
             .map(|c| {
                 let sol = points_to_solver.solver.get_solution(&c);
                 (c, sol)
