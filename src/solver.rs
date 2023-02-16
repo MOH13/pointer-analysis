@@ -1,4 +1,4 @@
-use hashbrown::HashSet;
+use hashbrown::{HashMap, HashSet};
 use std::collections::VecDeque;
 use std::hash::Hash;
 
@@ -22,7 +22,7 @@ pub trait Solver {
     fn new(terms: Vec<Self::Term>) -> Self;
 
     fn add_constraint(&mut self, c: Constraint<Self::Term>);
-    fn get_solution(&self, node: Self::Term) -> &Self::TermSet;
+    fn get_solution(&self, node: &Self::Term) -> Self::TermSet;
 }
 
 pub struct BasicSolver {
@@ -110,31 +110,155 @@ impl Solver for BasicSolver {
         self.propagate()
     }
 
-    fn get_solution(&self, node: usize) -> &HashSet<usize> {
-        &self.sols[node]
+    fn get_solution(&self, node: &usize) -> HashSet<usize> {
+        self.sols[*node].clone()
     }
 }
 
-pub struct GenericSolver<T> {
+pub struct GenericSolver<T, S> {
     terms: Vec<T>,
+    term_map: HashMap<T, usize>,
+    sub_solver: S,
 }
 
-impl<T> Solver for GenericSolver<T>
+impl<T, S> GenericSolver<T, S>
 where
-    T: Hash + Eq,
+    T: Hash + Eq + Clone,
+{
+    fn term_to_usize(&self, term: &T) -> usize {
+        *self
+            .term_map
+            .get(term)
+            .expect("Invalid lookup for term that was not passed in during initialization")
+    }
+
+    fn usize_to_term(&self, i: usize) -> T {
+        self.terms[i].clone()
+    }
+
+    fn translate_constraint(&self, c: Constraint<T>) -> Constraint<usize> {
+        match c {
+            Constraint::Inclusion { term, node } => Constraint::Inclusion {
+                term: self.term_to_usize(&term),
+                node: self.term_to_usize(&node),
+            },
+            Constraint::Subset { left, right } => Constraint::Subset {
+                left: self.term_to_usize(&left),
+                right: self.term_to_usize(&right),
+            },
+            Constraint::UnivCondSubsetLeft { cond_node, right } => Constraint::UnivCondSubsetLeft {
+                cond_node: self.term_to_usize(&cond_node),
+                right: self.term_to_usize(&right),
+            },
+            Constraint::UnivCondSubsetRight { cond_node, left } => {
+                Constraint::UnivCondSubsetRight {
+                    cond_node: self.term_to_usize(&cond_node),
+                    left: self.term_to_usize(&left),
+                }
+            }
+        }
+    }
+}
+
+impl<T, S> Solver for GenericSolver<T, S>
+where
+    T: Hash + Eq + Clone,
+    S: Solver<Term = usize, TermSet = HashSet<usize>>,
 {
     type Term = T;
     type TermSet = HashSet<T>;
 
     fn new(terms: Vec<Self::Term>) -> Self {
-        todo!()
+        let length = terms.len();
+        Self {
+            terms: terms.clone(),
+            term_map: HashMap::from_iter(terms.into_iter().enumerate().map(|(i, t)| (t, i))),
+            sub_solver: S::new((0..length).collect()),
+        }
     }
 
     fn add_constraint(&mut self, c: Constraint<T>) {
-        todo!()
+        self.sub_solver.add_constraint(self.translate_constraint(c))
     }
 
-    fn get_solution(&self, node: T) -> &HashSet<T> {
-        todo!()
+    fn get_solution(&self, node: &T) -> HashSet<T> {
+        let usize_sol = self.sub_solver.get_solution(&self.term_to_usize(node));
+        HashSet::from_iter(usize_sol.clone().into_iter().map(|i| self.usize_to_term(i)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use core::hash::Hash;
+    use hashbrown::{HashMap, HashSet};
+    use std::fmt::Debug;
+
+    use super::{BasicSolver, Constraint, GenericSolver, Solver};
+
+    fn simple_solver_test_template<
+        T: Eq + Hash + Copy + Debug,
+        S: Solver<Term = T, TermSet = HashSet<T>>,
+    >(
+        x: T,
+        y: T,
+        z: T,
+        w: T,
+    ) {
+        /*
+           Pseudocode:
+               x = &y
+               z = x
+               *z = x
+        */
+        let terms = vec![x, y, z, w];
+
+        let mut solver = S::new(terms.clone());
+        let constraints = [
+            Constraint::Inclusion { term: y, node: x },
+            Constraint::Subset { left: x, right: z },
+            Constraint::UnivCondSubsetRight {
+                cond_node: z,
+                left: x,
+            },
+        ];
+
+        for c in constraints {
+            solver.add_constraint(c);
+        }
+
+        let expected_points_to_sets: HashMap<T, HashSet<T>> = HashMap::from_iter(
+            [(x, vec![y]), (y, vec![y]), (z, vec![y]), (w, vec![])]
+                .map(|(t, elems)| (t, HashSet::from_iter(elems))),
+        );
+
+        for t in terms {
+            let actual_solution = solver.get_solution(&t);
+            assert_eq!(expected_points_to_sets.get(&t).unwrap(), &actual_solution)
+        }
+    }
+
+    #[test]
+    fn simple_solver_test_basic_solver() {
+        let x = 0;
+        let y = 1;
+        let z = 2;
+        let w = 3;
+        simple_solver_test_template::<_, BasicSolver>(x, y, z, w)
+    }
+
+    #[derive(PartialEq, Eq, Hash, Debug)]
+    enum TestEnum {
+        X,
+        Y,
+        Z,
+        W,
+    }
+
+    fn simple_solver_test_generic_solver() {
+        let x = TestEnum::X;
+        let y = TestEnum::Y;
+        let z = TestEnum::Z;
+        let w = TestEnum::W;
+        simple_solver_test_template::<_, GenericSolver<_, BasicSolver>>(&x, &y, &z, &w)
     }
 }
