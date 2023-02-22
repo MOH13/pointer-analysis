@@ -1,4 +1,4 @@
-use std::fmt::{self, Display, Formatter};
+use std::fmt::{self, Debug, Display, Formatter};
 
 use hashbrown::HashMap;
 use llvm_ir::instruction::{AddrSpaceCast, Alloca, BitCast, Load, Phi, Store};
@@ -52,12 +52,22 @@ where
     }
 }
 
-#[derive(Clone, Hash, PartialEq, Eq, Debug)]
+#[derive(Clone, Hash, PartialEq, Eq)]
 pub enum Cell {
     Local { reg_name: Name, fun_name: String },
     // Since LLVM is in SSA, we can use the name of the allocation register to refer to the allocation site
     Stack { reg_name: Name, fun_name: String },
     Heap { reg_name: Name, fun_name: String },
+}
+
+impl Debug for Cell {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match self {
+            Self::Local { reg_name, fun_name } => write!(f, "{reg_name}@{fun_name}"),
+            Self::Stack { reg_name, fun_name } => write!(f, "stack-{reg_name}@{fun_name}"),
+            Self::Heap { reg_name, fun_name } => write!(f, "heap-{reg_name}@{fun_name}"),
+        }
+    }
 }
 
 impl Cell {
