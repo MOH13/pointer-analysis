@@ -2,8 +2,9 @@ use std::fmt::{self, Display, Formatter};
 
 use hashbrown::HashMap;
 use llvm_ir::instruction::{AddrSpaceCast, Alloca, BitCast, Load, Phi, Store};
+use llvm_ir::terminator::Ret;
 use llvm_ir::types::Type;
-use llvm_ir::{Instruction, Module, Name, Operand, Terminator};
+use llvm_ir::{Function, Instruction, Module, Name, Operand, Terminator};
 
 use crate::module_visitor::{Context, ModuleVisitor};
 use crate::solver::{Constraint, Solver};
@@ -16,17 +17,20 @@ impl PointsToAnalysis {
     where
         S: Solver<Term = Cell>,
     {
-        let mut cell_finder = PointsToCellFinder::new();
+        let mut cell_finder = PointsToPreAnalyzer::new();
         cell_finder.visit_module(module);
         let cells_copy = cell_finder.cells.clone();
 
         let solver = S::new(cell_finder.cells);
-        let mut points_to_solver = PointsToSolver { solver };
+        let mut points_to_solver = PointsToSolver {
+            solver,
+            summaries: cell_finder.summaries,
+        };
         points_to_solver.visit_module(module);
 
         let result_map = cells_copy
             .into_iter()
-            .filter(|c| matches!(c, Cell::Stack(_)))
+            .filter(|c| matches!(c, Cell::Stack { .. }))
             .map(|c| {
                 let sol = points_to_solver.solver.get_solution(&c);
                 (c, sol)
@@ -50,33 +54,93 @@ where
 
 #[derive(Clone, Hash, PartialEq, Eq, Debug)]
 pub enum Cell {
-    Local(Name),
-    // Since LLVM is in SSA, we can use the name of the allocation variable to refer to the allocation site
-    Stack(Name),
-    Heap(Name),
+    Local { reg_name: Name, fun_name: String },
+    // Since LLVM is in SSA, we can use the name of the allocation register to refer to the allocation site
+    Stack { reg_name: Name, fun_name: String },
+    Heap { reg_name: Name, fun_name: String },
+}
+
+impl Cell {
+    fn new_local(reg_name: &Name, Context { function, .. }: Context) -> Self {
+        Cell::Local {
+            reg_name: reg_name.clone(),
+            fun_name: function.name.clone(),
+        }
+    }
+
+    fn new_stack(reg_name: &Name, Context { function, .. }: Context) -> Self {
+        Cell::Stack {
+            reg_name: reg_name.clone(),
+            fun_name: function.name.clone(),
+        }
+    }
+
+    fn new_heap(reg_name: &Name, Context { function, .. }: Context) -> Self {
+        Cell::Heap {
+            reg_name: reg_name.clone(),
+            fun_name: function.name.clone(),
+        }
+    }
+}
+
+struct FunctionSummary {
+    params: Vec<Name>,
+    return_reg: Option<Name>,
 }
 
 /// Visits a module and finds all cells in that module.
 /// An allocation site abstraction is used for heap allocations.
 /// TODO: Field sensitivity?
-struct PointsToCellFinder {
+struct PointsToPreAnalyzer {
     cells: Vec<Cell>,
+    summaries: HashMap<String, FunctionSummary>,
 }
 
-impl PointsToCellFinder {
+impl PointsToPreAnalyzer {
     fn new() -> Self {
-        Self { cells: vec![] }
+        Self {
+            cells: vec![],
+            summaries: HashMap::new(),
+        }
+    }
+
+    fn add_local(&mut self, reg_name: &Name, context: Context) {
+        self.cells.push(Cell::new_local(reg_name, context));
+    }
+
+    fn add_stack(&mut self, reg_name: &Name, context: Context) {
+        self.cells.push(Cell::new_stack(reg_name, context));
+    }
+
+    fn add_heap(&mut self, reg_name: &Name, context: Context) {
+        self.cells.push(Cell::new_heap(reg_name, context));
     }
 }
 
-impl ModuleVisitor for PointsToCellFinder {
-    fn handle_instruction(&mut self, instr: &Instruction, _context: Context) {
+impl ModuleVisitor for PointsToPreAnalyzer {
+    fn handle_function(&mut self, function: &Function, _module: &Module) {
+        let mut params = Vec::with_capacity(function.parameters.len());
+        for param in &function.parameters {
+            params.push(param.name.clone());
+            self.cells.push(Cell::Local {
+                reg_name: param.name.clone(),
+                fun_name: function.name.clone(),
+            });
+        }
+        let summary = FunctionSummary {
+            params,
+            return_reg: None,
+        };
+        self.summaries.insert(function.name.clone(), summary);
+    }
+
+    fn handle_instruction(&mut self, instr: &Instruction, context: Context) {
         match instr {
             // Instruction::ExtractElement(_) => todo!(),
             // Instruction::ExtractValue(_) => todo!(),
             Instruction::Alloca(Alloca { dest, .. }) => {
-                self.cells.push(Cell::Local(dest.clone()));
-                self.cells.push(Cell::Stack(dest.clone()));
+                self.add_local(dest, context);
+                self.add_stack(dest, context);
             }
 
             Instruction::Load(Load {
@@ -92,7 +156,7 @@ impl ModuleVisitor for PointsToCellFinder {
                     return;
                 }
 
-                self.cells.push(Cell::Local(dest.clone()));
+                self.add_local(dest, context);
             }
 
             // Instruction::GetElementPtr(_) => todo!(),
@@ -103,7 +167,7 @@ impl ModuleVisitor for PointsToCellFinder {
                 if !matches!(to_type.as_ref(), Type::PointerType { .. }) {
                     return;
                 }
-                self.cells.push(Cell::Local(dest.clone()));
+                self.add_local(dest, context);
             }
 
             // Instruction::Select(_) => todo!(),
@@ -114,25 +178,46 @@ impl ModuleVisitor for PointsToCellFinder {
         }
     }
 
-    fn handle_terminator(&mut self, _term: &Terminator, _context: Context) {}
+    fn handle_terminator(&mut self, term: &Terminator, Context { function, .. }: Context) {
+        if let Terminator::Ret(Ret {
+            return_operand:
+                Some(Operand::LocalOperand {
+                    name: ret_name,
+                    ty: ret_ty,
+                }),
+            ..
+        }) = term
+        {
+            if !matches!(ret_ty.as_ref(), Type::PointerType { .. }) {
+                return;
+            }
+
+            self.summaries.entry_ref(&function.name).and_modify(|s| {
+                s.return_reg = Some(ret_name.clone());
+            });
+        }
+    }
 }
 
 /// Visits a module, generating and solving constraints using a supplied constraint solver.
 struct PointsToSolver<S> {
     solver: S,
+    summaries: HashMap<String, FunctionSummary>,
 }
 
 impl<S> ModuleVisitor for PointsToSolver<S>
 where
     S: Solver<Term = Cell>,
 {
-    fn handle_instruction(&mut self, instr: &Instruction, _context: Context) {
+    fn handle_function(&mut self, _function: &Function, _module: &Module) {}
+
+    fn handle_instruction(&mut self, instr: &Instruction, context: Context) {
         match instr {
             // x = alloca ..
             Instruction::Alloca(Alloca { dest, .. }) => {
                 let c = Constraint::Inclusion {
-                    term: Cell::Stack(dest.clone()),
-                    node: Cell::Local(dest.clone()),
+                    term: Cell::new_stack(dest, context),
+                    node: Cell::new_local(dest, context),
                 };
                 self.solver.add_constraint(c);
             }
@@ -160,8 +245,8 @@ where
                     return;
                 }
                 let c = Constraint::Subset {
-                    left: Cell::Local(value_name.clone()),
-                    right: Cell::Local(dest.clone()),
+                    left: Cell::new_local(value_name, context),
+                    right: Cell::new_local(dest, context),
                 };
                 self.solver.add_constraint(c);
             }
@@ -183,8 +268,8 @@ where
                     };
 
                     let c = Constraint::Subset {
-                        left: Cell::Local(value_name.clone()),
-                        right: Cell::Local(dest.clone()),
+                        left: Cell::new_local(value_name, context),
+                        right: Cell::new_local(dest, context),
                     };
                     self.solver.add_constraint(c);
                 }
@@ -210,8 +295,8 @@ where
 
                 // TODO: Get rid of clones
                 let c = Constraint::UnivCondSubsetLeft {
-                    cond_node: Cell::Local(addr_name.clone()),
-                    right: Cell::Local(dest.clone()),
+                    cond_node: Cell::new_local(addr_name, context),
+                    right: Cell::new_local(dest, context),
                 };
                 self.solver.add_constraint(c);
             }
@@ -233,8 +318,8 @@ where
                     return;
                 }
                 let c = Constraint::UnivCondSubsetRight {
-                    cond_node: Cell::Local(addr_name.clone()),
-                    left: Cell::Local(value_name.clone()),
+                    cond_node: Cell::new_local(addr_name, context),
+                    left: Cell::new_local(value_name, context),
                 };
                 self.solver.add_constraint(c);
             }
