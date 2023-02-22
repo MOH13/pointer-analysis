@@ -48,7 +48,10 @@ where
     S::TermSet: fmt::Debug,
 {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "{:?}", self.0)
+        for (cell, set) in &self.0 {
+            writeln!(f, "[[{cell:?}]] = {set:#?}")?;
+        }
+        Ok(())
     }
 }
 
