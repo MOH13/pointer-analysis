@@ -1,5 +1,6 @@
 use hashbrown::{HashMap, HashSet};
 use std::collections::VecDeque;
+use std::fmt::Debug;
 use std::hash::Hash;
 
 pub enum Constraint<T> {
@@ -123,13 +124,12 @@ pub struct GenericSolver<T, S> {
 
 impl<T, S> GenericSolver<T, S>
 where
-    T: Hash + Eq + Clone,
+    T: Hash + Eq + Clone + Debug,
 {
     fn term_to_usize(&self, term: &T) -> usize {
-        *self
-            .term_map
-            .get(term)
-            .expect("Invalid lookup for term that was not passed in during initialization")
+        *self.term_map.get(term).expect(&format!(
+            "Invalid lookup for term that was not passed in during initialization: {term:?}"
+        ))
     }
 
     fn usize_to_term(&self, i: usize) -> T {
@@ -162,7 +162,7 @@ where
 
 impl<T, S> Solver for GenericSolver<T, S>
 where
-    T: Hash + Eq + Clone,
+    T: Hash + Eq + Clone + Debug,
     S: Solver<Term = usize, TermSet = HashSet<usize>>,
 {
     type Term = T;
@@ -254,6 +254,7 @@ mod tests {
         W,
     }
 
+    #[test]
     fn simple_solver_test_generic_solver() {
         let x = TestEnum::X;
         let y = TestEnum::Y;

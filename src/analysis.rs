@@ -1,10 +1,14 @@
 use std::fmt::{self, Debug, Display, Formatter};
 
+use either::Either;
 use hashbrown::HashMap;
-use llvm_ir::instruction::{AddrSpaceCast, Alloca, BitCast, Load, Phi, Store};
-use llvm_ir::terminator::Ret;
+use llvm_ir::function::ParameterAttribute;
+use llvm_ir::instruction::{
+    AddrSpaceCast, Alloca, BitCast, Call, InlineAssembly, Load, Phi, Store,
+};
+use llvm_ir::terminator::{Invoke, Ret};
 use llvm_ir::types::Type;
-use llvm_ir::{Function, Instruction, Module, Name, Operand, Terminator};
+use llvm_ir::{Constant, Function, Instruction, Module, Name, Operand, Terminator};
 
 use crate::module_visitor::{Context, ModuleVisitor};
 use crate::solver::{Constraint, Solver};
@@ -185,7 +189,11 @@ impl ModuleVisitor for PointsToPreAnalyzer {
 
             // Instruction::Select(_) => todo!(),
             // Instruction::Freeze(_) => todo!(),
-            // Instruction::Call(_) => todo!(),
+            Instruction::Call(Call {
+                dest: Some(dest), ..
+            }) => {
+                self.add_local(dest, context);
+            }
             // Instruction::VAArg(_) => todo!(),
             _ => {}
         }
@@ -216,6 +224,68 @@ impl ModuleVisitor for PointsToPreAnalyzer {
 struct PointsToSolver<S> {
     solver: S,
     summaries: HashMap<String, FunctionSummary>,
+}
+
+impl<S> PointsToSolver<S>
+where
+    S: Solver<Term = Cell>,
+{
+    fn handle_call(
+        &mut self,
+        function: &Either<InlineAssembly, Operand>,
+        arguments: &[(Operand, Vec<ParameterAttribute>)],
+        dest: Option<&Name>,
+        context: Context,
+    ) {
+        let fun_name = match function {
+            Either::Right(Operand::ConstantOperand(name_ref)) => match name_ref.as_ref() {
+                Constant::GlobalReference {
+                    name: Name::Name(name),
+                    ..
+                } => &**name,
+                _ => return,
+            },
+            _ => return,
+        };
+
+        let summary = &self.summaries[fun_name];
+        for (arg, param) in
+            arguments
+                .iter()
+                .zip(&summary.params)
+                .filter_map(|((a, _), p)| match a {
+                    Operand::LocalOperand { name, ty }
+                        if matches!(ty.as_ref(), Type::PointerType { .. }) =>
+                    {
+                        Some((name, p))
+                    }
+                    _ => None,
+                })
+        {
+            let c = Constraint::Subset {
+                left: Cell::new_local(arg, context),
+                right: Cell::Local {
+                    reg_name: param.clone(),
+                    fun_name: fun_name.clone(),
+                },
+            };
+            self.solver.add_constraint(c);
+        }
+
+        match (&summary.return_reg, dest) {
+            (Some(return_name), Some(dest_name)) => {
+                let c = Constraint::Subset {
+                    left: Cell::Local {
+                        reg_name: return_name.clone(),
+                        fun_name: fun_name.clone(),
+                    },
+                    right: Cell::new_local(dest_name, context),
+                };
+                self.solver.add_constraint(c);
+            }
+            _ => {}
+        }
+    }
 }
 
 impl<S> ModuleVisitor for PointsToSolver<S>
@@ -337,9 +407,28 @@ where
                 self.solver.add_constraint(c);
             }
 
+            // x = f(y_1, y_2, ..)
+            Instruction::Call(Call {
+                function,
+                arguments,
+                dest,
+                ..
+            }) => self.handle_call(function, arguments, dest.as_ref(), context),
+
             _ => {}
         }
     }
 
-    fn handle_terminator(&mut self, _term: &Terminator, _context: Context) {}
+    fn handle_terminator(&mut self, term: &Terminator, context: Context) {
+        match term {
+            Terminator::Invoke(Invoke {
+                function,
+                arguments,
+                result,
+                ..
+            }) => self.handle_call(function, arguments, Some(result), context),
+
+            _ => {}
+        }
+    }
 }
