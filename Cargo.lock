@@ -129,6 +129,7 @@ name = "pointer-analysis"
 version = "0.1.0"
 dependencies = [
  "bitvec",
+ "either",
  "hashbrown",
  "llvm-ir",
 ]
