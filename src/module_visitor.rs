@@ -41,7 +41,7 @@ pub trait ModuleVisitor {
     }
 }
 
-enum PointerInstruction<'a> {
+pub enum PointerInstruction<'a> {
     /// x = y
     Assign { dest: &'a Name, value: &'a Name },
     /// *x = y
@@ -55,7 +55,7 @@ enum PointerInstruction<'a> {
         dest: &'a Name,
         incoming_values: Vec<&'a Name>,
     },
-    /// (x =) f(y_1, y_2, ..)
+    /// [x =] f(y1, y2, ..)
     Call {
         dest: Option<&'a Name>,
         function: &'a str,
@@ -63,9 +63,12 @@ enum PointerInstruction<'a> {
     },
 }
 
-struct PointerContext;
+pub struct PointerContext<'a> {
+    function: &'a str,
+}
 
 pub trait PointerVisitor {
+    fn handle_ptr_function(&mut self, name: &str, parameters: Vec<&Name>);
     fn handle_ptr_instruction(&mut self, instr: PointerInstruction, context: PointerContext);
 
     fn handle_call(
@@ -73,17 +76,23 @@ pub trait PointerVisitor {
         function: &Either<InlineAssembly, Operand>,
         arguments: &[(Operand, Vec<ParameterAttribute>)],
         dest: Option<&Name>,
-        context: Context,
+        caller: &str,
     ) {
-        let function = match function {
+        // TODO: Filter out irrelevant function calls
+        let (function, ty) = match function {
             Either::Right(Operand::ConstantOperand(name_ref)) => match name_ref.as_ref() {
                 Constant::GlobalReference {
                     name: Name::Name(name),
-                    ..
-                } => &**name,
+                    ty,
+                } => (&**name, ty),
                 _ => return,
             },
             _ => return,
+        };
+
+        let dest = match ty.as_ref() {
+            Type::FuncType { result_type, .. } if is_ptr_type(result_type) => dest,
+            _ => None,
         };
 
         let arguments = arguments
@@ -96,20 +105,25 @@ pub trait PointerVisitor {
             function,
             arguments,
         };
-        self.handle_ptr_instruction(instr, PointerContext)
+        let context = PointerContext { function: caller };
+        self.handle_ptr_instruction(instr, context);
     }
 }
 
 impl<T: PointerVisitor> ModuleVisitor for T {
-    fn handle_function(&mut self, function: &Function, module: &Module) {
-        todo!()
+    fn handle_function(&mut self, function: &Function, _module: &Module) {
+        let parameters = function.parameters.iter().map(|p| &p.name).collect();
+        self.handle_ptr_function(&function.name, parameters)
     }
 
-    fn handle_instruction(&mut self, instr: &Instruction, context: Context) {
+    fn handle_instruction(&mut self, instr: &Instruction, Context { function, .. }: Context) {
         match instr {
             Instruction::Alloca(Alloca { dest, .. }) => {
                 let instr = PointerInstruction::Alloca { dest };
-                self.handle_ptr_instruction(instr, PointerContext);
+                let context = PointerContext {
+                    function: &function.name,
+                };
+                self.handle_ptr_instruction(instr, context);
             }
 
             Instruction::BitCast(BitCast {
@@ -123,10 +137,13 @@ impl<T: PointerVisitor> ModuleVisitor for T {
                 to_type,
                 dest,
                 ..
-            }) if is_pointer_type(to_type) => {
+            }) if is_ptr_type(to_type) => {
                 if let Some((value, _)) = get_operand_name_type(operand) {
                     let instr = PointerInstruction::Assign { dest, value };
-                    self.handle_ptr_instruction(instr, PointerContext);
+                    let context = PointerContext {
+                        function: &function.name,
+                    };
+                    self.handle_ptr_instruction(instr, context);
                 };
             }
 
@@ -135,7 +152,7 @@ impl<T: PointerVisitor> ModuleVisitor for T {
                 dest,
                 to_type,
                 ..
-            }) if is_pointer_type(to_type) => {
+            }) if is_ptr_type(to_type) => {
                 let incoming_values = incoming_values
                     .iter()
                     .filter_map(|(value, _)| get_operand_name_type(value))
@@ -146,13 +163,19 @@ impl<T: PointerVisitor> ModuleVisitor for T {
                     dest,
                     incoming_values,
                 };
-                self.handle_ptr_instruction(instr, PointerContext);
+                let context = PointerContext {
+                    function: &function.name,
+                };
+                self.handle_ptr_instruction(instr, context);
             }
 
             Instruction::Load(Load { address, dest, .. }) => match get_operand_name_type(address) {
-                Some((address, address_ty)) if is_pointer_pointer_type(address_ty) => {
+                Some((address, address_ty)) if is_ptr_ptr_type(address_ty) => {
                     let instr = PointerInstruction::Load { dest, address };
-                    self.handle_ptr_instruction(instr, PointerContext);
+                    let context = PointerContext {
+                        function: &function.name,
+                    };
+                    self.handle_ptr_instruction(instr, context);
                 }
                 _ => {}
             },
@@ -160,47 +183,56 @@ impl<T: PointerVisitor> ModuleVisitor for T {
             // *x = y
             Instruction::Store(Store { address, value, .. }) => {
                 let value = match get_operand_name_type(value) {
-                    Some((name, ty)) if is_pointer_type(ty) => name,
+                    Some((name, ty)) if is_ptr_type(ty) => name,
                     _ => return,
                 };
                 if let Some((address, _)) = get_operand_name_type(address) {
                     let instr = PointerInstruction::Store { address, value };
-                    self.handle_ptr_instruction(instr, PointerContext);
+                    let context = PointerContext {
+                        function: &function.name,
+                    };
+                    self.handle_ptr_instruction(instr, context);
                 }
             }
 
             Instruction::Call(Call {
-                function,
+                function: callee,
                 arguments,
                 dest,
                 ..
-            }) => self.handle_call(function, arguments, dest.as_ref(), context),
+            }) => self.handle_call(callee, arguments, dest.as_ref(), &function.name),
 
             _ => {}
         }
     }
 
-    fn handle_terminator(&mut self, term: &Terminator, context: Context) {
+    fn handle_terminator(
+        &mut self,
+        term: &Terminator,
+        Context {
+            function: caller, ..
+        }: Context,
+    ) {
         match term {
             Terminator::Invoke(Invoke {
                 function,
                 arguments,
                 result,
                 ..
-            }) => self.handle_call(function, arguments, Some(result), context),
+            }) => self.handle_call(function, arguments, Some(result), &caller.name),
 
             _ => {}
         }
     }
 }
 
-fn is_pointer_type(ty: &TypeRef) -> bool {
+fn is_ptr_type(ty: &TypeRef) -> bool {
     matches!(ty.as_ref(), Type::PointerType { .. })
 }
 
-fn is_pointer_pointer_type(ty: &TypeRef) -> bool {
+fn is_ptr_ptr_type(ty: &TypeRef) -> bool {
     match ty.as_ref() {
-        Type::PointerType { pointee_type, .. } => is_pointer_type(pointee_type),
+        Type::PointerType { pointee_type, .. } => is_ptr_type(pointee_type),
         _ => false,
     }
 }
