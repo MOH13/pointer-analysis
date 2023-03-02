@@ -27,7 +27,7 @@ impl PointsToAnalysis {
 
         let result_map = cells_copy
             .into_iter()
-            .filter(|c| matches!(c, Cell::Stack { .. }))
+            .filter(|c| matches!(c, Cell::Stack(..) | Cell::Global(..)))
             .map(|c| {
                 let sol = points_to_solver.solver.get_solution(&c);
                 (c, sol)
@@ -113,7 +113,7 @@ impl<'a> PointerModuleVisitor<'a> for PointsToPreAnalyzer<'a> {
         self.summaries.insert(name, summary);
     }
 
-    fn handle_ptr_global(&mut self, ident: VarIdent<'a>) {
+    fn handle_ptr_global(&mut self, ident: VarIdent<'a>, _init_ref: Option<VarIdent<'a>>) {
         self.cells.push(Cell::Var(ident));
         self.cells.push(Cell::Global(ident));
     }
@@ -155,14 +155,20 @@ where
 {
     fn handle_ptr_function(&mut self, _name: &str, _parameters: Vec<VarIdent>) {}
 
-    fn handle_ptr_global(&mut self, ident: VarIdent<'a>) {
+    fn handle_ptr_global(&mut self, ident: VarIdent<'a>, init_ref: Option<VarIdent<'a>>) {
         let c = Constraint::Inclusion {
             term: Cell::Global(ident),
             node: Cell::Var(ident),
         };
         self.solver.add_constraint(c);
 
-        // TODO: Fix global initializer stuff
+        if let Some(init_ident) = init_ref {
+            let c = Constraint::Inclusion {
+                term: Cell::Global(init_ident),
+                node: Cell::Global(ident),
+            };
+            self.solver.add_constraint(c);
+        }
     }
 
     fn handle_ptr_instruction(&mut self, instr: PointerInstruction<'a>, _fun_name: &'a str) {
