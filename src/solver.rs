@@ -1,6 +1,11 @@
-use hashbrown::{HashMap, HashSet};
+use bitvec::prelude::*;
+use hashbrown::{hash_set, HashMap, HashSet};
 use std::collections::VecDeque;
+use std::fmt::Debug;
 use std::hash::Hash;
+use std::iter::Copied;
+
+use crate::bit_index_utils::no_alloc_difference;
 
 pub enum Constraint<T> {
     Inclusion { term: T, node: T },
@@ -84,11 +89,9 @@ impl Solver for BasicSolver {
         match c {
             Constraint::Inclusion { term, node } => {
                 self.add_token(term, node);
-                self.propagate();
             }
             Constraint::Subset { left, right } => {
                 self.add_edge(left, right);
-                self.propagate();
             }
             Constraint::UnivCondSubsetLeft { cond_node, right } => {
                 self.conds[cond_node].push(UnivCond::SubsetLeft(right));
@@ -115,6 +118,121 @@ impl Solver for BasicSolver {
     }
 }
 
+pub struct BasicBitVecSolver {
+    worklist: VecDeque<(usize, usize)>,
+    sols: Vec<BitVec<usize>>,
+    edges: Vec<BitVec<usize>>,
+    conds: Vec<Vec<UnivCond<usize>>>,
+    temp_mem: Vec<usize>,
+}
+
+impl BasicBitVecSolver {
+    fn propagate(&mut self) {
+        while let Some((term, node)) = self.worklist.pop_front() {
+            for cond in &self.conds[node].clone() {
+                match cond {
+                    UnivCond::SubsetLeft(right) => self.add_edge(node, *right),
+                    UnivCond::SubsetRight(left) => self.add_edge(*left, node),
+                }
+            }
+
+            for n2 in self.edges[node].iter_ones().collect::<Vec<_>>() {
+                self.add_token(term, n2);
+            }
+        }
+    }
+
+    fn add_token(&mut self, term: usize, node: usize) {
+        if !self.sols[node][term] {
+            self.sols[node].set(term, true);
+            self.worklist.push_back((term, node));
+        }
+    }
+
+    fn add_edge(&mut self, left: usize, right: usize) {
+        if !self.edges[left][right] {
+            self.edges[left].set(right, true);
+
+            for i in no_alloc_difference(&self.sols[left], &self.sols[right]).collect::<Vec<_>>() {
+                self.add_token(i, right)
+            }
+        }
+    }
+}
+
+impl Solver for BasicBitVecSolver {
+    type Term = usize;
+    type TermSet = BitVec;
+
+    fn new(terms: Vec<usize>) -> Self {
+        Self {
+            worklist: VecDeque::new(),
+            sols: vec![bitvec![0; terms.len()]; terms.len()],
+            edges: vec![bitvec![0; terms.len()]; terms.len()],
+            conds: vec![vec![]; terms.len()],
+            temp_mem: vec![],
+        }
+    }
+
+    fn add_constraint(&mut self, c: Constraint<usize>) {
+        match c {
+            Constraint::Inclusion { term, node } => {
+                self.add_token(term, node);
+            }
+            Constraint::Subset { left, right } => {
+                self.add_edge(left, right);
+            }
+            Constraint::UnivCondSubsetLeft { cond_node, right } => {
+                self.conds[cond_node].push(UnivCond::SubsetLeft(right));
+                let terms: Vec<_> = self.sols[cond_node].iter_ones().collect();
+
+                for t in terms {
+                    self.add_edge(t, right);
+                }
+            }
+            Constraint::UnivCondSubsetRight { cond_node, left } => {
+                self.conds[cond_node].push(UnivCond::SubsetRight(left));
+                let terms: Vec<_> = self.sols[cond_node].iter_ones().collect();
+
+                for t in terms {
+                    self.add_edge(left, t);
+                }
+            }
+        };
+        self.propagate()
+    }
+
+    fn get_solution(&self, node: &usize) -> BitVec {
+        self.sols[*node].clone()
+    }
+}
+
+trait IterableTermSet<T> {
+    type Iter<'a>: Iterator<Item = T>
+    where
+        Self: 'a;
+    fn iter_term_set<'a>(&'a self) -> Self::Iter<'a>;
+}
+
+impl<T> IterableTermSet<T> for HashSet<T>
+where
+    T: Copy,
+{
+    type Iter<'a> = Copied<hash_set::Iter<'a, T>> where T: 'a;
+
+    fn iter_term_set<'a>(&'a self) -> Self::Iter<'a> {
+        self.iter().copied()
+    }
+}
+
+impl IterableTermSet<usize> for BitVec {
+    type Iter<'a> = bitvec::slice::IterOnes<'a, usize, Lsb0>;
+
+    fn iter_term_set<'a>(&'a self) -> Self::Iter<'a> {
+        self.iter_ones()
+    }
+}
+
 pub struct GenericSolver<T, S> {
     terms: Vec<T>,
     term_map: HashMap<T, usize>,
@@ -123,13 +241,12 @@ pub struct GenericSolver<T, S> {
 
 impl<T, S> GenericSolver<T, S>
 where
-    T: Hash + Eq + Clone,
+    T: Hash + Eq + Clone + Debug,
 {
     fn term_to_usize(&self, term: &T) -> usize {
-        *self
-            .term_map
-            .get(term)
-            .expect("Invalid lookup for term that was not passed in during initialization")
+        *self.term_map.get(term).expect(&format!(
+            "Invalid lookup for term that was not passed in during initialization {term:?}"
+        ))
     }
 
     fn usize_to_term(&self, i: usize) -> T {
@@ -162,8 +279,9 @@ where
 
 impl<T, S> Solver for GenericSolver<T, S>
 where
-    T: Hash + Eq + Clone,
-    S: Solver<Term = usize, TermSet = HashSet<usize>>,
+    T: Hash + Eq + Clone + Debug,
+    S: Solver<Term = usize>,
+    S::TermSet: IterableTermSet<usize>,
 {
     type Term = T;
     type TermSet = HashSet<T>;
@@ -182,8 +300,8 @@ where
     }
 
     fn get_solution(&self, node: &T) -> HashSet<T> {
-        let usize_sol = self.sub_solver.get_solution(&self.term_to_usize(node));
-        HashSet::from_iter(usize_sol.clone().into_iter().map(|i| self.usize_to_term(i)))
+        let sol = self.sub_solver.get_solution(&self.term_to_usize(node));
+        HashSet::from_iter(sol.iter_term_set().map(|i| self.usize_to_term(i)))
     }
 }
 
@@ -193,17 +311,16 @@ mod tests {
     use hashbrown::{HashMap, HashSet};
     use std::fmt::Debug;
 
-    use super::{BasicSolver, Constraint, GenericSolver, Solver};
+    use super::{
+        BasicBitVecSolver, BasicSolver, Constraint, GenericSolver, IterableTermSet, Solver,
+    };
 
-    fn simple_solver_test_template<
+    fn simple_solver_test_template<T, S>(x: T, y: T, z: T, w: T)
+    where
         T: Eq + Hash + Copy + Debug,
-        S: Solver<Term = T, TermSet = HashSet<T>>,
-    >(
-        x: T,
-        y: T,
-        z: T,
-        w: T,
-    ) {
+        S: Solver<Term = T>,
+        S::TermSet: IterableTermSet<T>,
+    {
         /*
            Pseudocode:
                x = &y
@@ -231,10 +348,15 @@ mod tests {
                 .map(|(t, elems)| (t, HashSet::from_iter(elems))),
         );
 
-        for t in terms {
-            let actual_solution = solver.get_solution(&t);
-            assert_eq!(expected_points_to_sets.get(&t).unwrap(), &actual_solution)
-        }
+        let actual_points_to_sets: HashMap<T, HashSet<T>> =
+            HashMap::from_iter(vec![x, y, z, w].into_iter().map(|t| {
+                (
+                    t,
+                    HashSet::from_iter(solver.get_solution(&t).iter_term_set()),
+                )
+            }));
+
+        assert_eq!(expected_points_to_sets, actual_points_to_sets);
     }
 
     #[test]
@@ -246,6 +368,15 @@ mod tests {
         simple_solver_test_template::<_, BasicSolver>(x, y, z, w)
     }
 
+    #[test]
+    fn simple_solver_test_basic_bit_vec_solver() {
+        let x = 0;
+        let y = 1;
+        let z = 2;
+        let w = 3;
+        simple_solver_test_template::<_, BasicBitVecSolver>(x, y, z, w)
+    }
+
     #[derive(PartialEq, Eq, Hash, Debug)]
     enum TestEnum {
         X,
@@ -254,6 +385,7 @@ mod tests {
         W,
     }
 
+    #[test]
     fn simple_solver_test_generic_solver() {
         let x = TestEnum::X;
         let y = TestEnum::Y;
