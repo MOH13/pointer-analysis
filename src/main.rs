@@ -11,7 +11,7 @@ mod solver;
 fn main() -> io::Result<()> {
     let file_path = env::args().nth(1).expect("Missing bc file path");
     let module = Module::from_bc_path(&file_path).expect("Error parsing bc file");
-    
+
     let result = PointsToAnalysis::run::<GenericSolver<_, BasicSolver>>(&module);
     println!("{result}");
 
