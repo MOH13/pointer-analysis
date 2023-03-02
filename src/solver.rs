@@ -245,7 +245,7 @@ where
 {
     fn term_to_usize(&self, term: &T) -> usize {
         *self.term_map.get(term).expect(&format!(
-            "Invalid lookup for term that was not passed in during initialization {term:?}"
+            "Invalid lookup for term that was not passed in during initialization: {term:?}"
         ))
     }
 
