@@ -113,7 +113,7 @@ pub enum PointerInstruction<'a> {
 
 pub trait PointerModuleVisitor<'a> {
     fn handle_ptr_function(&mut self, name: &'a str, parameters: Vec<VarIdent<'a>>);
-    fn handle_ptr_global(&mut self, ident: VarIdent<'a>);
+    fn handle_ptr_global(&mut self, ident: VarIdent<'a>, init_ref: Option<VarIdent<'a>>);
     fn handle_ptr_instruction(&mut self, instr: PointerInstruction<'a>, fun_name: &'a str);
 
     fn handle_call(
@@ -170,7 +170,14 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
 
     fn handle_global(&mut self, global: &'a GlobalVariable, _module: &'a Module) {
         if !global.is_constant {
-            self.handle_ptr_global(VarIdent::Global { name: &global.name });
+            let init_ref = global
+                .initializer
+                .as_ref()
+                .and_then(|init| match init.as_ref() {
+                    Constant::GlobalReference { name, .. } => Some(VarIdent::Global { name }),
+                    _ => None,
+                });
+            self.handle_ptr_global(VarIdent::Global { name: &global.name }, init_ref);
         }
     }
 
