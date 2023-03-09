@@ -1,6 +1,7 @@
 use std::fmt::{self, Display, Formatter};
 
 use either::Either;
+use hashbrown::HashMap;
 use llvm_ir::function::ParameterAttribute;
 use llvm_ir::instruction::{
     AddrSpaceCast, Alloca, BitCast, Call, InlineAssembly, Load, Phi, Store,
@@ -11,22 +12,32 @@ use llvm_ir::{
     BasicBlock, Constant, Function, Instruction, Module, Name, Operand, Terminator, Type, TypeRef,
 };
 
-#[derive(Clone, Copy)]
-pub struct Context<'a> {
+#[derive(Clone)]
+pub struct Context<'a, 'b, Type> {
     pub module: &'a Module,
     pub function: &'a Function,
     pub block: &'a BasicBlock,
+    pub types: &'b HashMap<&'a Name, &'b Type>,
 }
 
 /// This trait allows implementors to define the `handle_instruction` and `handle_terminator` functions,
 /// which the `visit_module` function will call on all instructions and terminators.
 pub trait ModuleVisitor<'a> {
+    type Type;
+    fn handle_type(&mut self, typ: &'a llvm_ir::Type, module: &'a Module) -> Type;
     fn handle_function(&mut self, function: &'a Function, module: &'a Module);
     fn handle_global(&mut self, global: &'a GlobalVariable, module: &'a Module);
-    fn handle_instruction(&mut self, instr: &'a Instruction, context: Context<'a>);
-    fn handle_terminator(&mut self, term: &'a Terminator, context: Context<'a>);
+    fn handle_instruction(&mut self, instr: &'a Instruction, context: Context<'a, '_, Self::Type>);
+    fn handle_terminator(&mut self, term: &'a Terminator, context: Context<'a, '_, Self::Type>);
 
     fn visit_module(&mut self, module: &'a Module) {
+        let types = HashMap::from_iter(
+            module.types.all_struct_names().filter_map(|name| module.types.named_struct_def(name)).map(|typ| typ., self.handle_type(typ, module))
+        );
+        for typ in  {
+            self.handle
+        }
+
         for global in &module.global_vars {
             self.handle_global(global, module);
         }
@@ -78,6 +89,12 @@ impl<'a> Display for VarIdent<'a> {
     }
 }
 
+type Field<'a> = (&'a Name, Option<StructType<'a>>);
+
+pub struct StructType<'a> {
+    fields: Vec<Field<'a>>,
+}
+
 pub enum PointerInstruction<'a> {
     /// x = y
     Assign {
@@ -123,7 +140,7 @@ pub trait PointerModuleVisitor<'a> {
         dest: Option<&'a Name>,
         Context {
             function: caller, ..
-        }: Context<'a>,
+        }: Context<'a, '_, StructType>,
     ) {
         // TODO: Filter out irrelevant function calls
         let (function, ty) = match function {
@@ -184,7 +201,7 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
     fn handle_instruction(
         &mut self,
         instr: &'a Instruction,
-        context @ Context { function, .. }: Context<'a>,
+        context @ Context { function, .. }: Context<'a, '_, StructType>,
     ) {
         match instr {
             // Instruction::ExtractElement(_) => todo!(),
@@ -268,7 +285,7 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
         context @ Context {
             function: context_fun,
             ..
-        }: Context<'a>,
+        }: Context<'a, '_, StructType>,
     ) {
         match term {
             Terminator::Invoke(Invoke {
