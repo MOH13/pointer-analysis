@@ -5,6 +5,7 @@ use std::env;
 use std::io;
 
 mod analysis;
+mod bit_index_utils;
 mod module_visitor;
 mod solver;
 
