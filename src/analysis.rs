@@ -1,11 +1,9 @@
 use std::fmt::{self, Debug, Display, Formatter};
 
 use hashbrown::HashMap;
-use llvm_ir::{Module, Name};
+use llvm_ir::Module;
 
-use crate::module_visitor::{
-    ModuleVisitor, PointerContext, PointerInstruction, PointerModuleVisitor,
-};
+use crate::module_visitor::{ModuleVisitor, PointerInstruction, PointerModuleVisitor, VarIdent};
 use crate::solver::{Constraint, Solver};
 
 pub struct PointsToAnalysis;
@@ -29,7 +27,7 @@ impl PointsToAnalysis {
 
         let result_map = cells_copy
             .into_iter()
-            .filter(|c| matches!(c, Cell::Stack { .. }))
+            .filter(|c| matches!(c, Cell::Stack(..) | Cell::Global(..)))
             .map(|c| {
                 let sol = points_to_solver.solver.get_solution(&c);
                 (c, sol)
@@ -48,7 +46,7 @@ where
 {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         for (cell, set) in &self.0 {
-            writeln!(f, "[[{cell:?}]] = {set:#?}")?;
+            writeln!(f, "[[{cell}]] = {set:#?}")?;
         }
         Ok(())
     }
@@ -56,46 +54,33 @@ where
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub enum Cell<'a> {
-    Local {
-        reg_name: &'a Name,
-        fun_name: &'a str,
-    },
+    Var(VarIdent<'a>),
     // Since LLVM is in SSA, we can use the name of the allocation register to refer to the allocation site
-    Stack {
-        reg_name: &'a Name,
-        fun_name: &'a str,
-    },
-    Heap {
-        reg_name: &'a Name,
-        fun_name: &'a str,
-    },
+    Stack(VarIdent<'a>),
+    Heap(VarIdent<'a>),
+    Global(VarIdent<'a>),
 }
 
-impl<'a> Cell<'a> {
-    fn new_local(reg_name: &'a Name, fun_name: &'a str) -> Self {
-        Self::Local { reg_name, fun_name }
-    }
-    fn new_stack(reg_name: &'a Name, fun_name: &'a str) -> Self {
-        Self::Stack { reg_name, fun_name }
-    }
-    fn new_heap(reg_name: &'a Name, fun_name: &'a str) -> Self {
-        Self::Heap { reg_name, fun_name }
+impl<'a> Display for Cell<'a> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match self {
+            Self::Var(ident) => write!(f, "{ident}"),
+            Self::Stack(ident) => write!(f, "stack-{ident}"),
+            Self::Heap(ident) => write!(f, "heap-{ident}"),
+            Self::Global(ident) => write!(f, "global-{ident}"),
+        }
     }
 }
 
 impl<'a> Debug for Cell<'a> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match self {
-            Self::Local { reg_name, fun_name } => write!(f, "{reg_name}@{fun_name}"),
-            Self::Stack { reg_name, fun_name } => write!(f, "stack-{reg_name}@{fun_name}"),
-            Self::Heap { reg_name, fun_name } => write!(f, "heap-{reg_name}@{fun_name}"),
-        }
+        <Self as Display>::fmt(self, f)
     }
 }
 
 struct FunctionSummary<'a> {
-    parameters: Vec<&'a Name>,
-    return_reg: Option<&'a Name>,
+    parameters: Vec<VarIdent<'a>>,
+    return_reg: Option<VarIdent<'a>>,
 }
 
 /// Visits a module and finds all cells in that module.
@@ -113,28 +98,14 @@ impl<'a> PointsToPreAnalyzer<'a> {
             summaries: HashMap::new(),
         }
     }
-
-    fn add_local(&mut self, reg_name: &'a Name, fun_name: &'a str) {
-        self.cells.push(Cell::Local { reg_name, fun_name });
-    }
-
-    fn add_stack(&mut self, reg_name: &'a Name, fun_name: &'a str) {
-        self.cells.push(Cell::Stack { reg_name, fun_name });
-    }
-
-    fn add_heap(&mut self, reg_name: &'a Name, fun_name: &'a str) {
-        self.cells.push(Cell::Heap { reg_name, fun_name });
-    }
 }
 
 impl<'a> PointerModuleVisitor<'a> for PointsToPreAnalyzer<'a> {
-    fn handle_ptr_function(&mut self, name: &'a str, parameters: Vec<&'a Name>) {
+    fn handle_ptr_function(&mut self, name: &'a str, parameters: Vec<VarIdent<'a>>) {
         for &param in &parameters {
-            self.cells.push(Cell::Local {
-                reg_name: param,
-                fun_name: name,
-            });
+            self.cells.push(Cell::Var(param));
         }
+
         let summary = FunctionSummary {
             parameters,
             return_reg: None,
@@ -142,26 +113,27 @@ impl<'a> PointerModuleVisitor<'a> for PointsToPreAnalyzer<'a> {
         self.summaries.insert(name, summary);
     }
 
-    fn handle_ptr_instruction(
-        &mut self,
-        instr: PointerInstruction<'a>,
-        context: PointerContext<'a>,
-    ) {
+    fn handle_ptr_global(&mut self, ident: VarIdent<'a>, _init_ref: Option<VarIdent<'a>>) {
+        self.cells.push(Cell::Var(ident));
+        self.cells.push(Cell::Global(ident));
+    }
+
+    fn handle_ptr_instruction(&mut self, instr: PointerInstruction<'a>, fun_name: &'a str) {
         match instr {
             PointerInstruction::Assign { dest, .. }
             | PointerInstruction::Load { dest, .. }
             | PointerInstruction::Phi { dest, .. }
             | PointerInstruction::Call {
                 dest: Some(dest), ..
-            } => self.add_local(dest, context.fun_name),
+            } => self.cells.push(Cell::Var(dest)),
 
             PointerInstruction::Alloca { dest } => {
-                self.add_local(dest, context.fun_name);
-                self.add_stack(dest, context.fun_name)
+                self.cells.push(Cell::Var(dest));
+                self.cells.push(Cell::Stack(dest));
             }
 
             PointerInstruction::Return { return_reg } => {
-                self.summaries.entry_ref(&context.fun_name).and_modify(|s| {
+                self.summaries.entry_ref(fun_name).and_modify(|s| {
                     s.return_reg = Some(return_reg);
                 });
             }
@@ -181,42 +153,54 @@ impl<'a, S> PointerModuleVisitor<'a> for PointsToSolver<'a, S>
 where
     S: Solver<Term = Cell<'a>>,
 {
-    fn handle_ptr_function(&mut self, _name: &str, _parameters: Vec<&Name>) {}
+    fn handle_ptr_function(&mut self, _name: &str, _parameters: Vec<VarIdent>) {}
 
-    fn handle_ptr_instruction(
-        &mut self,
-        instr: PointerInstruction<'a>,
-        context: PointerContext<'a>,
-    ) {
+    fn handle_ptr_global(&mut self, ident: VarIdent<'a>, init_ref: Option<VarIdent<'a>>) {
+        let c = Constraint::Inclusion {
+            term: Cell::Global(ident),
+            node: Cell::Var(ident),
+        };
+        self.solver.add_constraint(c);
+
+        if let Some(init_ident) = init_ref {
+            let c = Constraint::Inclusion {
+                term: Cell::Global(init_ident),
+                node: Cell::Global(ident),
+            };
+            self.solver.add_constraint(c);
+        }
+    }
+
+    fn handle_ptr_instruction(&mut self, instr: PointerInstruction<'a>, _fun_name: &'a str) {
         match instr {
             PointerInstruction::Assign { dest, value } => {
                 let c = Constraint::Subset {
-                    left: Cell::new_local(value, context.fun_name),
-                    right: Cell::new_local(dest, context.fun_name),
+                    left: Cell::Var(value),
+                    right: Cell::Var(dest),
                 };
                 self.solver.add_constraint(c);
             }
 
             PointerInstruction::Store { address, value } => {
                 let c = Constraint::UnivCondSubsetRight {
-                    cond_node: Cell::new_local(address, context.fun_name),
-                    left: Cell::new_local(value, context.fun_name),
+                    cond_node: Cell::Var(address),
+                    left: Cell::Var(value),
                 };
                 self.solver.add_constraint(c);
             }
 
             PointerInstruction::Load { dest, address } => {
                 let c = Constraint::UnivCondSubsetLeft {
-                    cond_node: Cell::new_local(address, context.fun_name),
-                    right: Cell::new_local(dest, context.fun_name),
+                    cond_node: Cell::Var(address),
+                    right: Cell::Var(dest),
                 };
                 self.solver.add_constraint(c);
             }
 
             PointerInstruction::Alloca { dest } => {
                 let c = Constraint::Inclusion {
-                    term: Cell::new_stack(dest, context.fun_name),
-                    node: Cell::new_local(dest, context.fun_name),
+                    term: Cell::Stack(dest),
+                    node: Cell::Var(dest),
                 };
                 self.solver.add_constraint(c);
             }
@@ -227,8 +211,8 @@ where
             } => {
                 for value in incoming_values {
                     let c = Constraint::Subset {
-                        left: Cell::new_local(value, context.fun_name),
-                        right: Cell::new_local(dest, context.fun_name),
+                        left: Cell::Var(value),
+                        right: Cell::Var(dest),
                     };
                     self.solver.add_constraint(c);
                 }
@@ -246,8 +230,8 @@ where
                     .filter_map(|(a, p)| a.map(|a| (a, p)))
                 {
                     let c = Constraint::Subset {
-                        left: Cell::new_local(arg, context.fun_name),
-                        right: Cell::new_local(param, function),
+                        left: Cell::Var(arg),
+                        right: Cell::Var(param),
                     };
                     self.solver.add_constraint(c);
                 }
@@ -255,8 +239,8 @@ where
                 match (summary.return_reg, dest) {
                     (Some(return_name), Some(dest_name)) => {
                         let c = Constraint::Subset {
-                            left: Cell::new_local(return_name, function),
-                            right: Cell::new_local(dest_name, context.fun_name),
+                            left: Cell::Var(return_name),
+                            right: Cell::Var(dest_name),
                         };
                         self.solver.add_constraint(c);
                     }
