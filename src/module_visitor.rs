@@ -12,31 +12,39 @@ use llvm_ir::{
     BasicBlock, Constant, Function, Instruction, Module, Name, Operand, Terminator, Type, TypeRef,
 };
 
-#[derive(Clone)]
+#[derive(Copy, Clone)]
 pub struct Context<'a, 'b, Type> {
     pub module: &'a Module,
     pub function: &'a Function,
     pub block: &'a BasicBlock,
-    pub types: &'b HashMap<&'a Name, &'b Type>,
+    pub types: &'b HashMap<&'a String, Type>,
 }
 
 /// This trait allows implementors to define the `handle_instruction` and `handle_terminator` functions,
 /// which the `visit_module` function will call on all instructions and terminators.
 pub trait ModuleVisitor<'a> {
-    type Type;
-    fn handle_type(&mut self, typ: &'a llvm_ir::Type, module: &'a Module) -> Type;
+    type Type: Clone;
+    fn handle_type(&mut self, typ: &'a llvm_ir::TypeRef, module: &'a Module) -> Option<Self::Type>;
     fn handle_function(&mut self, function: &'a Function, module: &'a Module);
     fn handle_global(&mut self, global: &'a GlobalVariable, module: &'a Module);
     fn handle_instruction(&mut self, instr: &'a Instruction, context: Context<'a, '_, Self::Type>);
     fn handle_terminator(&mut self, term: &'a Terminator, context: Context<'a, '_, Self::Type>);
 
     fn visit_module(&mut self, module: &'a Module) {
-        let types = HashMap::from_iter(
-            module.types.all_struct_names().filter_map(|name| module.types.named_struct_def(name)).map(|typ| typ., self.handle_type(typ, module))
-        );
-        for typ in  {
-            self.handle
-        }
+        let types = HashMap::from_iter(module.types.all_struct_names().filter_map(|name| {
+            match module.types.named_struct_def(name) {
+                Some(typ) => match typ {
+                    llvm_ir::types::NamedStructDef::Opaque => None,
+                    llvm_ir::types::NamedStructDef::Defined(typdef) => {
+                        match self.handle_type(typdef, module) {
+                            Some(t) => Some((name, t)),
+                            None => None,
+                        }
+                    }
+                },
+                None => None,
+            }
+        }));
 
         for global in &module.global_vars {
             self.handle_global(global, module);
@@ -49,10 +57,11 @@ pub trait ModuleVisitor<'a> {
                     module,
                     function,
                     block,
+                    types: &types,
                 };
 
                 for instr in &block.instrs {
-                    self.handle_instruction(instr, context);
+                    self.handle_instruction(instr, context.clone()); // Fix this
                 }
                 self.handle_terminator(&block.term, context)
             }
@@ -89,8 +98,9 @@ impl<'a> Display for VarIdent<'a> {
     }
 }
 
-type Field<'a> = (&'a Name, Option<StructType<'a>>);
+type Field<'a> = Option<&'a String>;
 
+#[derive(Clone)]
 pub struct StructType<'a> {
     fields: Vec<Field<'a>>,
 }
@@ -176,6 +186,23 @@ pub trait PointerModuleVisitor<'a> {
 }
 
 impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
+    type Type = StructType<'a>;
+
+    fn handle_type(&mut self, typ: &'a llvm_ir::TypeRef, module: &'a Module) -> Option<Self::Type> {
+        match typ.as_ref() {
+            Type::StructType { element_types, .. } => Some(StructType {
+                fields: element_types
+                    .iter()
+                    .map(|t| match t.as_ref() {
+                        Type::NamedStructType { name } => Some(name),
+                        _ => None,
+                    })
+                    .collect(),
+            }),
+            _ => None,
+        }
+    }
+
     fn handle_function(&mut self, function: &'a Function, _module: &'a Module) {
         let parameters = function
             .parameters
