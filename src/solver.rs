@@ -10,6 +10,7 @@ use crate::bit_index_utils::no_alloc_difference;
 pub enum Constraint<T> {
     Inclusion { term: T, node: T },
     Subset { left: T, right: T },
+    SubsetOffset { left: T, right: T, offset: usize },
     UnivCondSubsetLeft { cond_node: T, right: T },
     UnivCondSubsetRight { cond_node: T, left: T },
 }
@@ -30,10 +31,19 @@ pub trait Solver {
     fn get_solution(&self, node: &Self::Term) -> Self::TermSet;
 }
 
+macro_rules! add_token {
+    ($solver:expr, $term:expr, $node:expr) => {
+        if $solver.sols[$node].insert($term) {
+            $solver.worklist.push_back(($term, $node));
+        }
+    };
+}
+
 pub struct BasicSolver {
     worklist: VecDeque<(usize, usize)>,
     sols: Vec<HashSet<usize>>,
     edges: Vec<HashSet<usize>>,
+    offset_edges: Vec<HashMap<usize, usize>>,
     conds: Vec<Vec<UnivCond<usize>>>,
 }
 
@@ -47,17 +57,21 @@ impl BasicSolver {
                 }
             }
 
-            for n2 in self.edges[node].clone() {
-                self.add_token(term, n2);
+            for &n2 in &self.edges[node] {
+                add_token!(self, term, n2);
+            }
+
+            for (&n2, &offset) in &self.offset_edges[node] {
+                add_token!(self, term + offset, n2);
             }
         }
     }
 
-    fn add_token(&mut self, term: usize, node: usize) {
-        if self.sols[node].insert(term) {
-            self.worklist.push_back((term, node));
-        }
-    }
+    // fn add_token(&mut self, term: usize, node: usize) {
+    //     if self.sols[node].insert(term) {
+    //         self.worklist.push_back((term, node));
+    //     }
+    // }
 
     fn add_edge(&mut self, left: usize, right: usize) {
         if self.edges[left].insert(right) {
@@ -66,8 +80,23 @@ impl BasicSolver {
                 .copied()
                 .collect();
             for t in not_in_right {
-                self.add_token(t, right);
+                add_token!(self, t, right);
             }
+        }
+    }
+
+    fn add_offset_edge(&mut self, left: usize, right: usize, offset: usize) {
+        if self.offset_edges[left].insert(right, offset).is_none() {
+            let not_in_right: Vec<_> = self.sols[left]
+                .iter()
+                .map(|&t| t + offset)
+                .filter(|t| !self.sols[right].contains(t))
+                .collect();
+            for t in not_in_right {
+                add_token!(self, t, right);
+            }
+        } else {
+            panic!("Use of parallel offset edges is unsuported");
         }
     }
 }
@@ -81,6 +110,7 @@ impl Solver for BasicSolver {
             worklist: VecDeque::new(),
             sols: vec![HashSet::new(); terms.len()],
             edges: vec![HashSet::new(); terms.len()],
+            offset_edges: vec![HashMap::new(); terms.len()],
             conds: vec![vec![]; terms.len()],
         }
     }
@@ -91,6 +121,13 @@ impl Solver for BasicSolver {
                 self.add_token(term, node);
             }
             Constraint::Subset { left, right } => {
+                self.add_edge(left, right);
+            }
+            Constraint::SubsetOffset {
+                left,
+                right,
+                offset,
+            } => {
                 self.add_edge(left, right);
             }
             Constraint::UnivCondSubsetLeft { cond_node, right } => {
