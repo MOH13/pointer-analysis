@@ -52,7 +52,7 @@ pub fn no_alloc_difference<'a>(
     BitIndexIter::new(
         left.as_raw_slice()
             .iter()
-            .zip(right.as_raw_slice().iter())
+            .zip(right.as_raw_slice())
             .map(|(lblock, rblock)| lblock & !rblock),
     )
 }
