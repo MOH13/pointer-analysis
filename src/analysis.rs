@@ -177,6 +177,7 @@ where
                 let c = Constraint::Subset {
                     left: Cell::Var(value),
                     right: Cell::Var(dest),
+                    offset: 0,
                 };
                 self.solver.add_constraint(c);
             }
@@ -213,6 +214,7 @@ where
                     let c = Constraint::Subset {
                         left: Cell::Var(value),
                         right: Cell::Var(dest),
+                        offset: 0,
                     };
                     self.solver.add_constraint(c);
                 }
@@ -232,6 +234,7 @@ where
                     let c = Constraint::Subset {
                         left: Cell::Var(arg),
                         right: Cell::Var(param),
+                        offset: 0,
                     };
                     self.solver.add_constraint(c);
                 }
@@ -241,6 +244,7 @@ where
                         let c = Constraint::Subset {
                             left: Cell::Var(return_name),
                             right: Cell::Var(dest_name),
+                            offset: 0,
                         };
                         self.solver.add_constraint(c);
                     }
