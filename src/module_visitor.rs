@@ -8,39 +8,36 @@ use llvm_ir::instruction::{
 };
 use llvm_ir::module::GlobalVariable;
 use llvm_ir::terminator::{Invoke, Ret};
+use llvm_ir::types::NamedStructDef;
 use llvm_ir::{
     BasicBlock, Constant, Function, Instruction, Module, Name, Operand, Terminator, Type, TypeRef,
 };
 
 #[derive(Copy, Clone)]
-pub struct Context<'a, 'b, Type> {
+pub struct Context<'a, 'b> {
     pub module: &'a Module,
     pub function: &'a Function,
     pub block: &'a BasicBlock,
-    pub types: &'b HashMap<&'a String, Type>,
+    pub structs: &'b HashMap<&'a String, StructType<'a>>,
 }
 
 /// This trait allows implementors to define the `handle_instruction` and `handle_terminator` functions,
 /// which the `visit_module` function will call on all instructions and terminators.
 pub trait ModuleVisitor<'a> {
-    type Type: Clone;
-    fn handle_type(&mut self, typ: &'a llvm_ir::TypeRef, module: &'a Module) -> Option<Self::Type>;
     fn handle_function(&mut self, function: &'a Function, module: &'a Module);
     fn handle_global(&mut self, global: &'a GlobalVariable, module: &'a Module);
-    fn handle_instruction(&mut self, instr: &'a Instruction, context: Context<'a, '_, Self::Type>);
-    fn handle_terminator(&mut self, term: &'a Terminator, context: Context<'a, '_, Self::Type>);
+    fn handle_instruction(&mut self, instr: &'a Instruction, context: Context<'a, '_>);
+    fn handle_terminator(&mut self, term: &'a Terminator, context: Context<'a, '_>);
 
     fn visit_module(&mut self, module: &'a Module) {
-        let types = HashMap::from_iter(module.types.all_struct_names().filter_map(|name| {
+        let structs = HashMap::from_iter(module.types.all_struct_names().filter_map(|name| {
             match module.types.named_struct_def(name) {
                 Some(typ) => match typ {
-                    llvm_ir::types::NamedStructDef::Opaque => None,
-                    llvm_ir::types::NamedStructDef::Defined(typdef) => {
-                        match self.handle_type(typdef, module) {
-                            Some(t) => Some((name, t)),
-                            None => None,
-                        }
-                    }
+                    NamedStructDef::Opaque => None,
+                    NamedStructDef::Defined(typdef) => match get_struct_type(typdef) {
+                        Some(t) => Some((name, t)),
+                        None => None,
+                    },
                 },
                 None => None,
             }
@@ -57,11 +54,11 @@ pub trait ModuleVisitor<'a> {
                     module,
                     function,
                     block,
-                    types: &types,
+                    structs: &structs,
                 };
 
                 for instr in &block.instrs {
-                    self.handle_instruction(instr, context.clone()); // Fix this
+                    self.handle_instruction(instr, context);
                 }
                 self.handle_terminator(&block.term, context)
             }
@@ -98,11 +95,11 @@ impl<'a> Display for VarIdent<'a> {
     }
 }
 
-type Field<'a> = Option<&'a String>;
+type Field<'a> = Option<&'a str>;
 
 #[derive(Clone)]
 pub struct StructType<'a> {
-    fields: Vec<Field<'a>>,
+    pub fields: Vec<Field<'a>>,
 }
 
 pub enum PointerInstruction<'a> {
@@ -122,7 +119,10 @@ pub enum PointerInstruction<'a> {
         address: VarIdent<'a>,
     },
     /// x = alloca ..
-    Alloca { dest: VarIdent<'a> },
+    Alloca {
+        dest: VarIdent<'a>,
+        struct_type: Option<StructType<'a>>,
+    },
     /// x = \phi(y1, y2, ..)
     Phi {
         dest: VarIdent<'a>,
@@ -138,10 +138,19 @@ pub enum PointerInstruction<'a> {
     Return { return_reg: VarIdent<'a> },
 }
 
+pub struct PointerContext<'a, 'b> {
+    pub fun_name: &'a str,
+    pub structs: &'b HashMap<&'a String, StructType<'a>>,
+}
+
 pub trait PointerModuleVisitor<'a> {
     fn handle_ptr_function(&mut self, name: &'a str, parameters: Vec<VarIdent<'a>>);
     fn handle_ptr_global(&mut self, ident: VarIdent<'a>, init_ref: Option<VarIdent<'a>>);
-    fn handle_ptr_instruction(&mut self, instr: PointerInstruction<'a>, fun_name: &'a str);
+    fn handle_ptr_instruction(
+        &mut self,
+        instr: PointerInstruction<'a>,
+        context: PointerContext<'a, '_>,
+    );
 
     fn handle_call(
         &mut self,
@@ -149,8 +158,10 @@ pub trait PointerModuleVisitor<'a> {
         arguments: &'a [(Operand, Vec<ParameterAttribute>)],
         dest: Option<&'a Name>,
         Context {
-            function: caller, ..
-        }: Context<'a, '_, StructType>,
+            function: caller,
+            structs,
+            ..
+        }: Context<'a, '_>,
     ) {
         // TODO: Filter out irrelevant function calls
         let (function, ty) = match function {
@@ -181,28 +192,15 @@ pub trait PointerModuleVisitor<'a> {
             function,
             arguments,
         };
-        self.handle_ptr_instruction(instr, &caller.name);
+        let context = PointerContext {
+            fun_name: &caller.name,
+            structs,
+        };
+        self.handle_ptr_instruction(instr, context);
     }
 }
 
 impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
-    type Type = StructType<'a>;
-
-    fn handle_type(&mut self, typ: &'a llvm_ir::TypeRef, module: &'a Module) -> Option<Self::Type> {
-        match typ.as_ref() {
-            Type::StructType { element_types, .. } => Some(StructType {
-                fields: element_types
-                    .iter()
-                    .map(|t| match t.as_ref() {
-                        Type::NamedStructType { name } => Some(name),
-                        _ => None,
-                    })
-                    .collect(),
-            }),
-            _ => None,
-        }
-    }
-
     fn handle_function(&mut self, function: &'a Function, _module: &'a Module) {
         let parameters = function
             .parameters
@@ -228,15 +226,30 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
     fn handle_instruction(
         &mut self,
         instr: &'a Instruction,
-        context @ Context { function, .. }: Context<'a, '_, StructType>,
+        context @ Context {
+            function, structs, ..
+        }: Context<'a, '_>,
     ) {
+        let pointer_context = PointerContext {
+            fun_name: &function.name,
+            structs,
+        };
         match instr {
             // Instruction::ExtractElement(_) => todo!(),
             // Instruction::ExtractValue(_) => todo!(),
-            Instruction::Alloca(Alloca { dest, .. }) => {
+            Instruction::Alloca(Alloca {
+                dest,
+                allocated_type,
+                ..
+            }) => {
                 let dest = VarIdent::new_local(dest, function);
-                let instr = PointerInstruction::Alloca { dest };
-                self.handle_ptr_instruction(instr, &function.name);
+                let struct_type = match allocated_type.as_ref() {
+                    Type::StructType { .. } => get_struct_type(allocated_type),
+                    Type::NamedStructType { name } => structs.get(name).cloned(),
+                    _ => None,
+                };
+                let instr = PointerInstruction::Alloca { dest, struct_type };
+                self.handle_ptr_instruction(instr, pointer_context);
             }
 
             Instruction::BitCast(BitCast { operand, dest, .. })
@@ -244,7 +257,7 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
                 if let Some((value, _)) = get_operand_ident_type(operand, function) {
                     let dest = VarIdent::new_local(dest, function);
                     let instr = PointerInstruction::Assign { dest, value };
-                    self.handle_ptr_instruction(instr, &function.name);
+                    self.handle_ptr_instruction(instr, pointer_context);
                 };
             }
 
@@ -266,7 +279,7 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
                     dest,
                     incoming_values,
                 };
-                self.handle_ptr_instruction(instr, &function.name);
+                self.handle_ptr_instruction(instr, pointer_context);
             }
 
             Instruction::Load(Load { address, dest, .. }) => {
@@ -274,7 +287,7 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
                     Some((address, address_ty)) if is_ptr_type(address_ty) => {
                         let dest = VarIdent::new_local(dest, function);
                         let instr = PointerInstruction::Load { dest, address };
-                        self.handle_ptr_instruction(instr, &function.name);
+                        self.handle_ptr_instruction(instr, pointer_context);
                     }
                     _ => {}
                 }
@@ -288,7 +301,7 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
                 };
                 if let Some((address, _)) = get_operand_ident_type(address, function) {
                     let instr = PointerInstruction::Store { address, value };
-                    self.handle_ptr_instruction(instr, &function.name);
+                    self.handle_ptr_instruction(instr, pointer_context);
                 }
             }
 
@@ -311,9 +324,14 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
         term: &'a Terminator,
         context @ Context {
             function: context_fun,
+            structs,
             ..
-        }: Context<'a, '_, StructType>,
+        }: Context<'a, '_>,
     ) {
+        let pointer_context = PointerContext {
+            fun_name: &context_fun.name,
+            structs,
+        };
         match term {
             Terminator::Invoke(Invoke {
                 function,
@@ -332,7 +350,7 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
                 };
 
                 let instr = PointerInstruction::Return { return_reg };
-                self.handle_ptr_instruction(instr, &context_fun.name);
+                self.handle_ptr_instruction(instr, pointer_context);
             }
 
             _ => {}
@@ -362,5 +380,20 @@ fn get_operand_ident_type<'a>(
             _ => None,
         },
         Operand::MetadataOperand => None,
+    }
+}
+
+fn get_struct_type(typ: &TypeRef) -> Option<StructType> {
+    match typ.as_ref() {
+        Type::StructType { element_types, .. } => Some(StructType {
+            fields: element_types
+                .iter()
+                .map(|t| match t.as_ref() {
+                    Type::NamedStructType { name } => Some(name.as_str()),
+                    _ => None,
+                })
+                .collect(),
+        }),
+        _ => None,
     }
 }
