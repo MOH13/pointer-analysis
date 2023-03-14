@@ -3,7 +3,9 @@ use std::fmt::{self, Debug, Display, Formatter};
 use hashbrown::HashMap;
 use llvm_ir::Module;
 
-use crate::module_visitor::{ModuleVisitor, PointerInstruction, PointerModuleVisitor, VarIdent};
+use crate::module_visitor::{
+    ModuleVisitor, PointerContext, PointerInstruction, PointerModuleVisitor, StructType, VarIdent,
+};
 use crate::solver::{Constraint, Solver};
 
 pub struct PointsToAnalysis;
@@ -98,6 +100,13 @@ impl<'a> PointsToPreAnalyzer<'a> {
             summaries: HashMap::new(),
         }
     }
+
+    fn add_stack_cells(&mut self, dest: VarIdent<'a>, struct_type: Option<StructType<'a>>) {
+        match struct_type {
+            Some(StructType { fields }) => todo!(),
+            None => self.cells.push(Cell::Stack(dest)),
+        }
+    }
 }
 
 impl<'a> PointerModuleVisitor<'a> for PointsToPreAnalyzer<'a> {
@@ -118,7 +127,11 @@ impl<'a> PointerModuleVisitor<'a> for PointsToPreAnalyzer<'a> {
         self.cells.push(Cell::Global(ident));
     }
 
-    fn handle_ptr_instruction(&mut self, instr: PointerInstruction<'a>, fun_name: &'a str) {
+    fn handle_ptr_instruction(
+        &mut self,
+        instr: PointerInstruction<'a>,
+        context: PointerContext<'a, '_>,
+    ) {
         match instr {
             PointerInstruction::Assign { dest, .. }
             | PointerInstruction::Load { dest, .. }
@@ -127,13 +140,12 @@ impl<'a> PointerModuleVisitor<'a> for PointsToPreAnalyzer<'a> {
                 dest: Some(dest), ..
             } => self.cells.push(Cell::Var(dest)),
 
-            PointerInstruction::Alloca { dest } => {
+            PointerInstruction::Alloca { dest, struct_type } => {
                 self.cells.push(Cell::Var(dest));
-                self.cells.push(Cell::Stack(dest));
             }
 
             PointerInstruction::Return { return_reg } => {
-                self.summaries.entry_ref(fun_name).and_modify(|s| {
+                self.summaries.entry_ref(context.fun_name).and_modify(|s| {
                     s.return_reg = Some(return_reg);
                 });
             }
@@ -171,7 +183,7 @@ where
         }
     }
 
-    fn handle_ptr_instruction(&mut self, instr: PointerInstruction<'a>, _fun_name: &'a str) {
+    fn handle_ptr_instruction(&mut self, instr: PointerInstruction<'a>, _context: PointerContext) {
         match instr {
             PointerInstruction::Assign { dest, value } => {
                 let c = Constraint::Subset {
@@ -198,7 +210,7 @@ where
                 self.solver.add_constraint(c);
             }
 
-            PointerInstruction::Alloca { dest } => {
+            PointerInstruction::Alloca { dest, struct_type } => {
                 let c = Constraint::Inclusion {
                     term: Cell::Stack(dest),
                     node: Cell::Var(dest),
