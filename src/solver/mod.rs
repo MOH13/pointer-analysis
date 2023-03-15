@@ -342,4 +342,51 @@ mod tests {
         let z = FieldLoadStoreTerm::Z;
         field_load_store_template::<_, GenericSolver<_, BasicHashSolver>>(x, yf, yg, py, pg, z);
     }
+
+    /// Pseudo code:
+    /// ```
+    /// x = null
+    /// y = { f: 0, g: &x }
+    /// py = &y
+    /// pg = &py->g
+    /// z = *pg
+    /// *z = py
+    /// *pg = py
+    /// ```
+    fn positive_cycle_template<T, S>(x1: T, x2: T, y: T)
+    where
+        T: Eq + Hash + Copy + Debug,
+        S: Solver<Term = T>,
+        S::TermSet: IterableTermSet<T>,
+    {
+        let terms = vec![x1, x2, y];
+        let constraints = [cstr!(x1 in x1), cstr!(x1 + 1 <= x2), cstr!(x2 <= x1)];
+        let expected_output = output![x1 -> {x1,x2}, x2 -> {x2}, y -> {}];
+        solver_test_template::<T, S>(terms, vec![(x1, 1)], constraints, expected_output);
+    }
+
+    #[test]
+    fn positive_cycle_basic_hash_solver() {
+        positive_cycle_template::<_, BasicHashSolver>(0, 1, 2);
+    }
+
+    #[test]
+    fn positive_cycle_basic_bit_vec_solver() {
+        positive_cycle_template::<_, BasicBitVecSolver>(0, 1, 2);
+    }
+
+    #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
+    enum PositiveCycleTerm {
+        X1,
+        X2,
+        Y,
+    }
+
+    #[test]
+    fn positive_cycle_generic_solver() {
+        let x1 = PositiveCycleTerm::X1;
+        let x2 = PositiveCycleTerm::X2;
+        let y = PositiveCycleTerm::Y;
+        positive_cycle_template::<_, GenericSolver<_, BasicHashSolver>>(x1, x2, y);
+    }
 }

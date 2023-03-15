@@ -9,6 +9,7 @@ pub struct BasicHashSolver {
     sols: Vec<HashSet<usize>>,
     edges: Vec<HashMap<usize, usize>>,
     conds: Vec<Vec<UnivCond<usize>>>,
+    allowed_offsets: HashMap<usize, usize>,
 }
 
 macro_rules! add_token {
@@ -30,7 +31,18 @@ impl BasicHashSolver {
             }
 
             for (&n2, &offset) in &self.edges[node] {
-                add_token!(self, term + offset, n2);
+                if offset == 0 {
+                    add_token!(self, term, n2);
+                } else {
+                    match self.allowed_offsets.get(&term) {
+                        Some(max_offset) => {
+                            if *max_offset <= offset {
+                                add_token!(self, term + offset, n2)
+                            }
+                        }
+                        None => (),
+                    }
+                }
             }
         }
     }
@@ -39,12 +51,21 @@ impl BasicHashSolver {
         if self.edges[left].insert(right, offset).is_none() {
             let not_in_right: Vec<_> = self.sols[left]
                 .iter()
-                .map(|&t| t + offset)
+                .filter_map(|&t| {
+                    if offset == 0 {
+                        Some(t)
+                    } else {
+                        self.allowed_offsets
+                            .get(&t)
+                            .and_then(|&max_offset| (max_offset <= offset).then(|| t + offset))
+                    }
+                })
                 .filter(|t| !self.sols[right].contains(t))
                 .collect();
             for t in not_in_right {
                 add_token!(self, t, right);
             }
+            println!("{left},{right},{offset}");
         } else {
             panic!("Use of parallel offset edges is unsuported");
         }
@@ -61,6 +82,7 @@ impl Solver for BasicHashSolver {
             sols: vec![HashSet::new(); terms.len()],
             edges: vec![HashMap::new(); terms.len()],
             conds: vec![vec![]; terms.len()],
+            allowed_offsets: allowed_offsets.into_iter().collect(),
         }
     }
 
