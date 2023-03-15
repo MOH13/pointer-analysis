@@ -21,7 +21,7 @@ impl PointsToAnalysis {
         pre_analyzer.visit_module(module);
         let cells_copy = pre_analyzer.cells.clone();
 
-        let solver = S::new(pre_analyzer.cells);
+        let solver = S::new(pre_analyzer.cells, vec![]);
         let mut points_to_solver = PointsToSolver {
             solver,
             summaries: pre_analyzer.summaries,

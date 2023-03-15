@@ -56,7 +56,7 @@ impl Solver for BasicBitVecSolver {
     type Term = usize;
     type TermSet = BitVec;
 
-    fn new(terms: Vec<usize>) -> Self {
+    fn new(terms: Vec<usize>, allowed_offsets: Vec<(usize, usize)>) -> Self {
         Self {
             worklist: VecDeque::new(),
             sols: vec![bitvec![0; terms.len()]; terms.len()],
