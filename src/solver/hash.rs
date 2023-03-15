@@ -65,7 +65,6 @@ impl BasicHashSolver {
             for t in not_in_right {
                 add_token!(self, t, right);
             }
-            println!("{left},{right},{offset}");
         } else {
             panic!("Use of parallel offset edges is unsuported");
         }
