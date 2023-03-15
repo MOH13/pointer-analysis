@@ -55,7 +55,7 @@ impl Solver for BasicHashSolver {
     type Term = usize;
     type TermSet = HashSet<usize>;
 
-    fn new(terms: Vec<usize>) -> Self {
+    fn new(terms: Vec<usize>, allowed_offsets: Vec<(usize, usize)>) -> Self {
         Self {
             worklist: VecDeque::new(),
             sols: vec![HashSet::new(); terms.len()],

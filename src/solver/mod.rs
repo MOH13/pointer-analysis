@@ -169,16 +169,17 @@ where
             .enumerate()
             .map(|(i, t)| (t, i))
             .collect();
+        let sub_solver = S::new(
+            (0..length).collect(),
+            allowed_offsets
+                .into_iter()
+                .map(|(term, offset)| (term_to_usize(&term_map, &term), offset))
+                .collect(),
+        );
         Self {
-            terms: terms.clone(),
-            term_map: term_map,
-            sub_solver: S::new(
-                (0..length).collect(),
-                allowed_offsets
-                    .into_iter()
-                    .map(|(term, offset)| (term_to_usize(&term_map, &term), offset))
-                    .collect(),
-            ),
+            terms,
+            term_map,
+            sub_solver,
         }
     }
 
