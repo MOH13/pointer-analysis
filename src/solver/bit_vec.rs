@@ -30,8 +30,8 @@ impl BasicBitVecSolver {
         while let Some((term, node)) = self.worklist.pop_front() {
             for cond in &self.conds[node].clone() {
                 match cond {
-                    UnivCond::SubsetLeft(right) => self.add_edge(node, *right),
-                    UnivCond::SubsetRight(left) => self.add_edge(*left, node),
+                    UnivCond::SubsetLeft(right) => self.add_edge(node, *right, 0),
+                    UnivCond::SubsetRight(left) => self.add_edge(*left, node, 0),
                 }
             }
 
@@ -41,7 +41,7 @@ impl BasicBitVecSolver {
         }
     }
 
-    fn add_edge(&mut self, left: usize, right: usize) {
+    fn add_edge(&mut self, left: usize, right: usize, offset: usize) {
         if !self.edges[left][right] {
             self.edges[left].set(right, true);
 
@@ -76,14 +76,14 @@ impl Solver for BasicBitVecSolver {
                 right,
                 offset,
             } => {
-                self.add_edge(left, right);
+                self.add_edge(left, right, offset);
             }
             Constraint::UnivCondSubsetLeft { cond_node, right } => {
                 self.conds[cond_node].push(UnivCond::SubsetLeft(right));
                 let terms: Vec<_> = self.sols[cond_node].iter_ones().collect();
 
                 for t in terms {
-                    self.add_edge(t, right);
+                    self.add_edge(t, right, 0);
                 }
             }
             Constraint::UnivCondSubsetRight { cond_node, left } => {
@@ -91,7 +91,7 @@ impl Solver for BasicBitVecSolver {
                 let terms: Vec<_> = self.sols[cond_node].iter_ones().collect();
 
                 for t in terms {
-                    self.add_edge(left, t);
+                    self.add_edge(left, t, 0);
                 }
             }
         };
