@@ -63,7 +63,7 @@ pub trait Solver {
     type Term;
     type TermSet;
 
-    fn new(terms: Vec<Self::Term>) -> Self;
+    fn new(terms: Vec<Self::Term>, allowed_offsets: Vec<(Self::Term, usize)>) -> Self;
 
     fn add_constraint(&mut self, c: Constraint<Self::Term>);
     fn get_solution(&self, node: &Self::Term) -> Self::TermSet;
@@ -101,14 +101,21 @@ pub struct GenericSolver<T, S> {
     sub_solver: S,
 }
 
+fn term_to_usize<T>(term_map: &HashMap<T, usize>, term: &T) -> usize
+where
+    T: Hash + Eq + Debug,
+{
+    *term_map.get(term).expect(&format!(
+        "Invalid lookup for term that was not passed in during initialization: {term:?}"
+    ))
+}
+
 impl<T, S> GenericSolver<T, S>
 where
     T: Hash + Eq + Clone + Debug,
 {
     fn term_to_usize(&self, term: &T) -> usize {
-        *self.term_map.get(term).expect(&format!(
-            "Invalid lookup for term that was not passed in during initialization: {term:?}"
-        ))
+        term_to_usize(&self.term_map, term)
     }
 
     fn usize_to_term(&self, i: usize) -> T {
@@ -154,12 +161,24 @@ where
     type Term = T;
     type TermSet = HashSet<T>;
 
-    fn new(terms: Vec<Self::Term>) -> Self {
+    fn new(terms: Vec<Self::Term>, allowed_offsets: Vec<(Self::Term, usize)>) -> Self {
         let length = terms.len();
+        let term_map = terms
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(i, t)| (t, i))
+            .collect();
         Self {
             terms: terms.clone(),
-            term_map: HashMap::from_iter(terms.into_iter().enumerate().map(|(i, t)| (t, i))),
-            sub_solver: S::new((0..length).collect()),
+            term_map: term_map,
+            sub_solver: S::new(
+                (0..length).collect(),
+                allowed_offsets
+                    .into_iter()
+                    .map(|(term, offset)| (term_to_usize(&term_map, &term), offset))
+                    .collect(),
+            ),
         }
     }
 
@@ -195,6 +214,7 @@ mod tests {
 
     fn solver_test_template<T, S>(
         terms: Vec<T>,
+        allowed_offsets: Vec<(T, usize)>,
         constraints: impl IntoIterator<Item = Constraint<T>>,
         expected_output: HashMap<T, HashSet<T>>,
     ) where
@@ -202,7 +222,7 @@ mod tests {
         S: Solver<Term = T>,
         S::TermSet: IterableTermSet<T>,
     {
-        let mut solver = S::new(terms.clone());
+        let mut solver = S::new(terms.clone(), allowed_offsets);
         for c in constraints {
             solver.add_constraint(c);
         }
@@ -231,7 +251,7 @@ mod tests {
         let terms = vec![x, y, z, w];
         let constraints = [cstr!(y in x), cstr!(x <= z), cstr!(c in z : x <= c)];
         let expected_output = output![x -> {y}, y -> {y}, z -> {y}, w -> {}];
-        solver_test_template::<T, S>(terms, constraints, expected_output);
+        solver_test_template::<T, S>(terms, vec![], constraints, expected_output);
     }
 
     #[test]
@@ -288,7 +308,7 @@ mod tests {
         ];
         let expected_output =
             output![x -> {yf}, yf -> {}, yg -> {x, yf}, py -> {yf}, pg -> {yg}, z -> {x, yf}];
-        solver_test_template::<T, S>(terms, constraints, expected_output);
+        solver_test_template::<T, S>(terms, vec![(yf, 1)], constraints, expected_output);
     }
 
     #[test]
