@@ -3,6 +3,7 @@ use std::fmt::{self, Debug, Display, Formatter};
 use hashbrown::HashMap;
 use llvm_ir::Module;
 
+use crate::cstr;
 use crate::module_visitor::{
     ModuleVisitor, PointerContext, PointerInstruction, PointerModuleVisitor, StructType, VarIdent,
 };
@@ -142,6 +143,7 @@ impl<'a> PointerModuleVisitor<'a> for PointsToPreAnalyzer<'a> {
 
             PointerInstruction::Alloca { dest, struct_type } => {
                 self.cells.push(Cell::Var(dest));
+                self.add_stack_cells(dest, struct_type);
             }
 
             PointerInstruction::Return { return_reg } => {
@@ -168,17 +170,14 @@ where
     fn handle_ptr_function(&mut self, _name: &str, _parameters: Vec<VarIdent>) {}
 
     fn handle_ptr_global(&mut self, ident: VarIdent<'a>, init_ref: Option<VarIdent<'a>>) {
-        let c = Constraint::Inclusion {
-            term: Cell::Global(ident),
-            node: Cell::Var(ident),
-        };
+        let global_cell = Cell::Global(ident);
+        let var_cell = Cell::Var(ident);
+        let c = cstr!(global_cell in var_cell);
         self.solver.add_constraint(c);
 
         if let Some(init_ident) = init_ref {
-            let c = Constraint::Inclusion {
-                term: Cell::Global(init_ident),
-                node: Cell::Global(ident),
-            };
+            let init_global_cell = Cell::Global(init_ident);
+            let c = cstr!(init_global_cell in global_cell);
             self.solver.add_constraint(c);
         }
     }
@@ -186,35 +185,30 @@ where
     fn handle_ptr_instruction(&mut self, instr: PointerInstruction<'a>, _context: PointerContext) {
         match instr {
             PointerInstruction::Assign { dest, value } => {
-                let c = Constraint::Subset {
-                    left: Cell::Var(value),
-                    right: Cell::Var(dest),
-                    offset: 0,
-                };
+                let value_cell = Cell::Var(value);
+                let dest_cell = Cell::Var(dest);
+                let c = cstr!(value_cell <= dest_cell);
                 self.solver.add_constraint(c);
             }
 
             PointerInstruction::Store { address, value } => {
-                let c = Constraint::UnivCondSubsetRight {
-                    cond_node: Cell::Var(address),
-                    left: Cell::Var(value),
-                };
+                let address_cell = Cell::Var(address);
+                let value_cell = Cell::Var(value);
+                let c = cstr!(c in address_cell : value_cell <= c);
                 self.solver.add_constraint(c);
             }
 
             PointerInstruction::Load { dest, address } => {
-                let c = Constraint::UnivCondSubsetLeft {
-                    cond_node: Cell::Var(address),
-                    right: Cell::Var(dest),
-                };
+                let address_cell = Cell::Var(address);
+                let dest_cell = Cell::Var(dest);
+                let c = cstr!(c in address_cell : c <= dest_cell);
                 self.solver.add_constraint(c);
             }
 
             PointerInstruction::Alloca { dest, struct_type } => {
-                let c = Constraint::Inclusion {
-                    term: Cell::Stack(dest),
-                    node: Cell::Var(dest),
-                };
+                let stack_cell = Cell::Stack(dest);
+                let var_cell = Cell::Var(dest);
+                let c = cstr!(stack_cell in var_cell);
                 self.solver.add_constraint(c);
             }
 
@@ -223,11 +217,9 @@ where
                 incoming_values,
             } => {
                 for value in incoming_values {
-                    let c = Constraint::Subset {
-                        left: Cell::Var(value),
-                        right: Cell::Var(dest),
-                        offset: 0,
-                    };
+                    let value_cell = Cell::Var(value);
+                    let dest_cell = Cell::Var(dest);
+                    let c = cstr!(value_cell <= dest_cell);
                     self.solver.add_constraint(c);
                 }
             }
@@ -243,21 +235,17 @@ where
                     .zip(&summary.parameters)
                     .filter_map(|(a, p)| a.map(|a| (a, p)))
                 {
-                    let c = Constraint::Subset {
-                        left: Cell::Var(arg),
-                        right: Cell::Var(param),
-                        offset: 0,
-                    };
+                    let arg_cell = Cell::Var(arg);
+                    let param_cell = Cell::Var(param);
+                    let c = cstr!(arg_cell <= param_cell);
                     self.solver.add_constraint(c);
                 }
 
                 match (summary.return_reg, dest) {
                     (Some(return_name), Some(dest_name)) => {
-                        let c = Constraint::Subset {
-                            left: Cell::Var(return_name),
-                            right: Cell::Var(dest_name),
-                            offset: 0,
-                        };
+                        let return_cell = Cell::Var(return_name);
+                        let dest_cell = Cell::Var(dest_name);
+                        let c = cstr!(return_cell <= dest_cell);
                         self.solver.add_constraint(c);
                     }
                     _ => {}
