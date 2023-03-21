@@ -7,7 +7,7 @@ use crate::cstr;
 use crate::module_visitor::{
     ModuleVisitor, PointerContext, PointerInstruction, PointerModuleVisitor, StructType, VarIdent,
 };
-use crate::solver::{Constraint, Solver};
+use crate::solver::Solver;
 
 pub struct PointsToAnalysis;
 
@@ -21,7 +21,7 @@ impl PointsToAnalysis {
         pre_analyzer.visit_module(module);
         let cells_copy = pre_analyzer.cells.clone();
 
-        let solver = S::new(pre_analyzer.cells, vec![]);
+        let solver = S::new(pre_analyzer.cells, pre_analyzer.allowed_offsets);
         let mut points_to_solver = PointsToSolver {
             solver,
             summaries: pre_analyzer.summaries,
@@ -30,7 +30,7 @@ impl PointsToAnalysis {
 
         let result_map = cells_copy
             .into_iter()
-            .filter(|c| matches!(c, Cell::Stack(..) | Cell::Global(..)))
+            .filter(|c| matches!(c, Cell::Stack(..) | Cell::Global(..) | Cell::Offset(..)))
             .map(|c| {
                 let sol = points_to_solver.solver.get_solution(&c);
                 (c, sol)
@@ -55,13 +55,14 @@ where
     }
 }
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Clone, Hash, PartialEq, Eq)]
 pub enum Cell<'a> {
     Var(VarIdent<'a>),
     // Since LLVM is in SSA, we can use the name of the allocation register to refer to the allocation site
     Stack(VarIdent<'a>),
     Heap(VarIdent<'a>),
     Global(VarIdent<'a>),
+    Offset(Box<Cell<'a>>, usize),
 }
 
 impl<'a> Display for Cell<'a> {
@@ -71,6 +72,7 @@ impl<'a> Display for Cell<'a> {
             Self::Stack(ident) => write!(f, "stack-{ident}"),
             Self::Heap(ident) => write!(f, "heap-{ident}"),
             Self::Global(ident) => write!(f, "global-{ident}"),
+            Self::Offset(sub_cell, offset) => write!(f, "{sub_cell}.{offset}"),
         }
     }
 }
@@ -91,6 +93,7 @@ struct FunctionSummary<'a> {
 /// TODO: Field sensitivity?
 struct PointsToPreAnalyzer<'a> {
     cells: Vec<Cell<'a>>,
+    allowed_offsets: Vec<(Cell<'a>, usize)>,
     summaries: HashMap<&'a str, FunctionSummary<'a>>,
 }
 
@@ -98,14 +101,39 @@ impl<'a> PointsToPreAnalyzer<'a> {
     fn new() -> Self {
         Self {
             cells: vec![],
+            allowed_offsets: vec![],
             summaries: HashMap::new(),
         }
     }
 
-    fn add_stack_cells(&mut self, dest: VarIdent<'a>, struct_type: Option<StructType<'a>>) {
+    fn add_stack_cells(
+        &mut self,
+        stack_cell: Cell<'a>,
+        struct_type: Option<&StructType<'a>>,
+        context: PointerContext<'a, '_>,
+    ) -> usize {
         match struct_type {
-            Some(StructType { fields }) => todo!(),
-            None => self.cells.push(Cell::Stack(dest)),
+            Some(StructType { fields }) => {
+                let mut num_sub_cells = 0;
+
+                for (i, field) in fields.iter().enumerate() {
+                    let offset_cell = Cell::Offset(Box::new(stack_cell.clone()), i);
+                    num_sub_cells += self.add_stack_cells(
+                        offset_cell,
+                        field.and_then(|(s, _)| context.structs.get(s)),
+                        context,
+                    );
+                }
+
+                let offset_cell = Cell::Offset(Box::new(stack_cell.clone()), 0);
+                self.allowed_offsets.push((offset_cell, num_sub_cells));
+                num_sub_cells
+            }
+
+            None => {
+                self.cells.push(stack_cell);
+                1
+            }
         }
     }
 }
@@ -136,6 +164,7 @@ impl<'a> PointerModuleVisitor<'a> for PointsToPreAnalyzer<'a> {
         match instr {
             PointerInstruction::Assign { dest, .. }
             | PointerInstruction::Load { dest, .. }
+            | PointerInstruction::Gep { dest, .. }
             | PointerInstruction::Phi { dest, .. }
             | PointerInstruction::Call {
                 dest: Some(dest), ..
@@ -143,7 +172,7 @@ impl<'a> PointerModuleVisitor<'a> for PointsToPreAnalyzer<'a> {
 
             PointerInstruction::Alloca { dest, struct_type } => {
                 self.cells.push(Cell::Var(dest));
-                self.add_stack_cells(dest, struct_type);
+                self.add_stack_cells(Cell::Stack(dest), struct_type.as_ref(), context);
             }
 
             PointerInstruction::Return { return_reg } => {
@@ -176,13 +205,14 @@ where
         self.solver.add_constraint(c);
 
         if let Some(init_ident) = init_ref {
+            let global_cell = Cell::Global(ident);
             let init_global_cell = Cell::Global(init_ident);
             let c = cstr!(init_global_cell in global_cell);
             self.solver.add_constraint(c);
         }
     }
 
-    fn handle_ptr_instruction(&mut self, instr: PointerInstruction<'a>, _context: PointerContext) {
+    fn handle_ptr_instruction(&mut self, instr: PointerInstruction<'a>, context: PointerContext) {
         match instr {
             PointerInstruction::Assign { dest, value } => {
                 let value_cell = Cell::Var(value);
@@ -206,9 +236,42 @@ where
             }
 
             PointerInstruction::Alloca { dest, struct_type } => {
-                let stack_cell = Cell::Stack(dest);
+                let stack_cell = match struct_type {
+                    Some(_) => Cell::Offset(Box::new(Cell::Stack(dest)), 0),
+                    None => Cell::Stack(dest),
+                };
                 let var_cell = Cell::Var(dest);
                 let c = cstr!(stack_cell in var_cell);
+                self.solver.add_constraint(c);
+            }
+
+            PointerInstruction::Gep {
+                dest,
+                address,
+                indices,
+                struct_type,
+            } => {
+                let mut offset = 0;
+                let mut next_sty = Some(&struct_type);
+                for i in indices {
+                    let sty = next_sty.expect("Gep indices should correspond to struct fields");
+                    next_sty = sty.fields[i].map(|(s, _)| &context.structs[s]);
+
+                    if i == 0 {
+                        continue;
+                    }
+
+                    for j in 0..i {
+                        offset += match sty.fields[j] {
+                            Some((s, _)) => count_struct_cells(&context.structs[s], context),
+                            None => 1,
+                        }
+                    }
+                }
+
+                let dest_cell = Cell::Var(dest);
+                let address_cell = Cell::Var(address);
+                let c = cstr!(address_cell + offset <= dest_cell);
                 self.solver.add_constraint(c);
             }
 
@@ -255,4 +318,17 @@ where
             _ => {}
         }
     }
+}
+
+fn count_struct_cells(struct_type: &StructType, context: PointerContext) -> usize {
+    let mut num_sub_cells = 0;
+
+    for &field in &struct_type.fields {
+        num_sub_cells += match field {
+            Some((s, _)) => count_struct_cells(&context.structs[s], context),
+            None => 1,
+        };
+    }
+
+    num_sub_cells
 }

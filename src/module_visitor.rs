@@ -1,10 +1,11 @@
+use std::borrow::Cow;
 use std::fmt::{self, Display, Formatter};
 
 use either::Either;
 use hashbrown::HashMap;
 use llvm_ir::function::ParameterAttribute;
 use llvm_ir::instruction::{
-    AddrSpaceCast, Alloca, BitCast, Call, InlineAssembly, Load, Phi, Store,
+    AddrSpaceCast, Alloca, BitCast, Call, GetElementPtr, InlineAssembly, Load, Phi, Store,
 };
 use llvm_ir::module::GlobalVariable;
 use llvm_ir::terminator::{Invoke, Ret};
@@ -31,16 +32,9 @@ pub trait ModuleVisitor<'a> {
 
     fn visit_module(&mut self, module: &'a Module) {
         let structs = HashMap::from_iter(module.types.all_struct_names().filter_map(|name| {
-            match module.types.named_struct_def(name) {
-                Some(typ) => match typ {
-                    NamedStructDef::Opaque => None,
-                    NamedStructDef::Defined(typdef) => match get_struct_type(typdef) {
-                        Some(t) => Some((name, t)),
-                        None => None,
-                    },
-                },
-                None => None,
-            }
+            get_struct_from_name(name, module)
+                .and_then(StructType::from_ty)
+                .map(|t| (name, t))
         }));
 
         for global in &module.global_vars {
@@ -95,11 +89,32 @@ impl<'a> Display for VarIdent<'a> {
     }
 }
 
-type Field<'a> = Option<&'a str>;
+type Field<'a> = Option<(&'a String, usize)>;
 
 #[derive(Clone)]
 pub struct StructType<'a> {
     pub fields: Vec<Field<'a>>,
+}
+
+impl<'a> StructType<'a> {
+    fn from_ty(ty: &'a TypeRef) -> Option<Self> {
+        match ty.as_ref() {
+            Type::StructType { element_types, .. } => {
+                let fields = element_types
+                    .iter()
+                    .map(|t| {
+                        let (ty, degree) = strip_array_types(t);
+                        match ty.as_ref() {
+                            Type::NamedStructType { name } => Some((name, degree)),
+                            _ => None,
+                        }
+                    })
+                    .collect();
+                Some(Self { fields })
+            }
+            _ => None,
+        }
+    }
 }
 
 pub enum PointerInstruction<'a> {
@@ -123,6 +138,13 @@ pub enum PointerInstruction<'a> {
         dest: VarIdent<'a>,
         struct_type: Option<StructType<'a>>,
     },
+    /// x = gep y, o1, o2, ..
+    Gep {
+        dest: VarIdent<'a>,
+        address: VarIdent<'a>,
+        indices: Vec<usize>,
+        struct_type: StructType<'a>,
+    },
     /// x = \phi(y1, y2, ..)
     Phi {
         dest: VarIdent<'a>,
@@ -138,6 +160,7 @@ pub enum PointerInstruction<'a> {
     Return { return_reg: VarIdent<'a> },
 }
 
+#[derive(Clone, Copy)]
 pub struct PointerContext<'a, 'b> {
     pub fun_name: &'a str,
     pub structs: &'b HashMap<&'a String, StructType<'a>>,
@@ -184,7 +207,7 @@ pub trait PointerModuleVisitor<'a> {
 
         let arguments = arguments
             .iter()
-            .map(|(arg, _)| get_operand_ident_type(arg, caller).map(|(ident, _)| ident))
+            .map(|(arg, _)| get_operand_ident_type(arg, caller).map(|(ident, _, _)| ident))
             .collect();
 
         let instr = PointerInstruction::Call {
@@ -243,25 +266,75 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
                 ..
             }) => {
                 let dest = VarIdent::new_local(dest, function);
-                let struct_type = match allocated_type.as_ref() {
-                    Type::StructType { .. } => get_struct_type(allocated_type),
-                    Type::NamedStructType { name } => structs.get(name).cloned(),
-                    _ => None,
-                };
+                let struct_type = get_struct_type(allocated_type, context).map(Cow::into_owned);
                 let instr = PointerInstruction::Alloca { dest, struct_type };
                 self.handle_ptr_instruction(instr, pointer_context);
             }
 
             Instruction::BitCast(BitCast { operand, dest, .. })
             | Instruction::AddrSpaceCast(AddrSpaceCast { operand, dest, .. }) => {
-                if let Some((value, _)) = get_operand_ident_type(operand, function) {
+                if let Some((value, _, _)) = get_operand_ident_type(operand, function) {
                     let dest = VarIdent::new_local(dest, function);
                     let instr = PointerInstruction::Assign { dest, value };
                     self.handle_ptr_instruction(instr, pointer_context);
                 };
             }
 
-            // Instruction::GetElementPtr(_) => todo!(),
+            Instruction::GetElementPtr(GetElementPtr {
+                address,
+                indices,
+                dest,
+                ..
+            }) => {
+                let (address, ty, degree) =
+                    get_operand_ident_type(address, function).expect(&format!(
+                    "GEP address should always be a pointer or array of pointers, got {address}"
+                ));
+                let dest = VarIdent::new_local(dest, function);
+
+                let instr = match get_struct_type(ty, context) {
+                    Some(struct_type) => {
+                        let mut reduced_indices = vec![];
+                        let mut sub_struct_type = struct_type.as_ref();
+                        let mut remaining_indices = &indices[degree..];
+                        loop {
+                            // All indices into structs must be constant i32
+                            let i = match &remaining_indices[0] {
+                                Operand::ConstantOperand(c) => match c.as_ref() {
+                                    Constant::Int { value, .. } => *value as usize,
+                                    _ => panic!("All indices into structs should be constant i32"),
+                                },
+                                _ => continue,
+                            };
+
+                            reduced_indices.push(i);
+
+                            match sub_struct_type.fields[i] {
+                                Some((s, d)) => {
+                                    sub_struct_type = &structs[s];
+                                    remaining_indices = &remaining_indices[d + 1..];
+                                }
+                                None => break,
+                            }
+                        }
+
+                        PointerInstruction::Gep {
+                            dest,
+                            address,
+                            indices: reduced_indices,
+                            struct_type: struct_type.into_owned(),
+                        }
+                    }
+
+                    None => PointerInstruction::Assign {
+                        dest,
+                        value: address,
+                    },
+                };
+
+                self.handle_ptr_instruction(instr, pointer_context);
+            }
+
             // Instruction::IntToPtr(_) => todo!(),
             Instruction::Phi(Phi {
                 incoming_values,
@@ -271,7 +344,7 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
                 let incoming_values = incoming_values
                     .iter()
                     .filter_map(|(value, _)| get_operand_ident_type(value, function))
-                    .map(|(name, _)| name)
+                    .map(|(name, _, _)| name)
                     .collect();
 
                 let dest = VarIdent::new_local(dest, function);
@@ -284,7 +357,7 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
 
             Instruction::Load(Load { address, dest, .. }) => {
                 match get_operand_ident_type(address, function) {
-                    Some((address, address_ty)) if is_ptr_type(address_ty) => {
+                    Some((address, address_ty, _)) if is_ptr_type(address_ty) => {
                         let dest = VarIdent::new_local(dest, function);
                         let instr = PointerInstruction::Load { dest, address };
                         self.handle_ptr_instruction(instr, pointer_context);
@@ -296,10 +369,10 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
             // *x = y
             Instruction::Store(Store { address, value, .. }) => {
                 let value = match get_operand_ident_type(value, function) {
-                    Some((ident, _)) => ident,
+                    Some((ident, _, _)) => ident,
                     _ => return,
                 };
-                if let Some((address, _)) = get_operand_ident_type(address, function) {
+                if let Some((address, _, _)) = get_operand_ident_type(address, function) {
                     let instr = PointerInstruction::Store { address, value };
                     self.handle_ptr_instruction(instr, pointer_context);
                 }
@@ -345,7 +418,7 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
                     .as_ref()
                     .and_then(|op| get_operand_ident_type(op, context_fun))
                 {
-                    Some((name, _)) => name,
+                    Some((name, _, _)) => name,
                     _ => return,
                 };
 
@@ -365,17 +438,22 @@ fn is_ptr_type(ty: &TypeRef) -> bool {
 fn get_operand_ident_type<'a>(
     operand: &'a Operand,
     function: &'a Function,
-) -> Option<(VarIdent<'a>, &'a TypeRef)> {
+) -> Option<(VarIdent<'a>, &'a TypeRef, usize)> {
     match operand {
-        Operand::LocalOperand { name, ty } => match ty.as_ref() {
-            Type::PointerType { pointee_type, .. } => {
-                Some((VarIdent::new_local(name, function), pointee_type))
+        Operand::LocalOperand { name, ty } => {
+            let (ty, degree) = strip_array_types(ty);
+            match ty.as_ref() {
+                Type::PointerType { pointee_type, .. } => Some((
+                    VarIdent::new_local(name, function),
+                    pointee_type,
+                    degree + 1,
+                )),
+                _ => None,
             }
-            _ => None,
-        },
+        }
         Operand::ConstantOperand(constant) => match constant.as_ref() {
             llvm_ir::Constant::GlobalReference { name, ty } => {
-                Some((VarIdent::Global { name }, ty))
+                Some((VarIdent::Global { name }, ty, 1))
             }
             _ => None,
         },
@@ -383,17 +461,30 @@ fn get_operand_ident_type<'a>(
     }
 }
 
-fn get_struct_type(typ: &TypeRef) -> Option<StructType> {
-    match typ.as_ref() {
-        Type::StructType { element_types, .. } => Some(StructType {
-            fields: element_types
-                .iter()
-                .map(|t| match t.as_ref() {
-                    Type::NamedStructType { name } => Some(name.as_str()),
-                    _ => None,
-                })
-                .collect(),
-        }),
+fn get_struct_type<'a, 'b>(
+    ty: &'a TypeRef,
+    context: Context<'a, 'b>,
+) -> Option<Cow<'b, StructType<'a>>> {
+    match ty.as_ref() {
+        Type::NamedStructType { name } => context.structs.get(name).map(Cow::Borrowed),
+        Type::StructType { .. } => StructType::from_ty(ty).map(Cow::Owned),
         _ => None,
     }
+}
+
+fn strip_array_types(ty: &TypeRef) -> (&TypeRef, usize) {
+    match ty.as_ref() {
+        Type::ArrayType { element_type, .. } | Type::VectorType { element_type, .. } => {
+            let (ty, degree) = strip_array_types(element_type);
+            (ty, degree + 1)
+        }
+        _ => (ty, 0),
+    }
+}
+
+fn get_struct_from_name<'a>(name: &str, Module { types, .. }: &'a Module) -> Option<&'a TypeRef> {
+    types.named_struct_def(name).and_then(|def| match def {
+        NamedStructDef::Opaque => None,
+        NamedStructDef::Defined(ty) => Some(ty),
+    })
 }
