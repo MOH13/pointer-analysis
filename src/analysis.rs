@@ -21,8 +21,6 @@ impl PointsToAnalysis {
         pre_analyzer.visit_module(module);
         let cells_copy = pre_analyzer.cells.clone();
 
-        dbg!(&pre_analyzer.allowed_offsets);
-
         let solver = S::new(pre_analyzer.cells, pre_analyzer.allowed_offsets);
         let mut points_to_solver = PointsToSolver {
             solver,
@@ -32,7 +30,7 @@ impl PointsToAnalysis {
 
         let result_map = cells_copy
             .into_iter()
-            // .filter(|c| matches!(c, Cell::Stack(..) | Cell::Global(..) | Cell::Offset(..)))
+            .filter(|c| matches!(c, Cell::Stack(..) | Cell::Global(..) | Cell::Offset(..)))
             .map(|c| {
                 let sol = points_to_solver.solver.get_solution(&c);
                 (c, sol)
