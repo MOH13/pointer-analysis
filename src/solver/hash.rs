@@ -34,14 +34,9 @@ impl BasicHashSolver {
                 for &offset in edges {
                     if offset == 0 {
                         add_token!(self, term, n2);
-                    } else {
-                        match self.allowed_offsets.get(&term) {
-                            Some(max_offset) => {
-                                if *max_offset <= offset {
-                                    add_token!(self, term + offset, n2)
-                                }
-                            }
-                            None => (),
+                    } else if let Some(&max_offset) = self.allowed_offsets.get(&term) {
+                        if offset <= max_offset {
+                            add_token!(self, term + offset, n2)
                         }
                     }
                 }

@@ -21,6 +21,8 @@ impl PointsToAnalysis {
         pre_analyzer.visit_module(module);
         let cells_copy = pre_analyzer.cells.clone();
 
+        dbg!(&pre_analyzer.allowed_offsets);
+
         let solver = S::new(pre_analyzer.cells, pre_analyzer.allowed_offsets);
         let mut points_to_solver = PointsToSolver {
             solver,
@@ -126,7 +128,7 @@ impl<'a> PointsToPreAnalyzer<'a> {
                 }
 
                 let offset_cell = Cell::Offset(Box::new(stack_cell.clone()), 0);
-                self.allowed_offsets.push((offset_cell, num_sub_cells));
+                self.allowed_offsets.push((offset_cell, num_sub_cells - 1));
                 num_sub_cells
             }
 

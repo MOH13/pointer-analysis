@@ -12,7 +12,6 @@ pub struct BasicBitVecSolver {
     worklist: VecDeque<(usize, usize)>,
     sols: Vec<BitVec<usize>>,
     edges: Vec<BitVec<usize>>,
-    // offset_edges: Vec<HashMap<usize, usize>>,
     conds: Vec<Vec<UnivCond<usize>>>,
     weighted_edges: Vec<HashMap<usize, usize>>,
     offset_bitmask: BitVec<usize>,
@@ -63,19 +62,16 @@ impl BasicBitVecSolver {
             let offset_mask_iter = self.offset_bitmask.as_raw_slice().iter().copied();
 
             for i in BitIndexIter::new(no_alloc_and(left_block_iter, offset_mask_iter))
+                .filter_map(|i| {
+                    self.allowed_offsets
+                        .get(&i)
+                        .filter(|&&o| offset <= o)
+                        .map(|_| i)
+                })
                 .collect::<Vec<_>>()
             {
-                match self.allowed_offsets.get(&i) {
-                    Some(&max_offset) => {
-                        if max_offset <= offset {
-                            add_token!(self, i + max_offset, right)
-                        }
-                    }
-                    None => (),
-                }
+                add_token!(self, i + offset, right)
             }
-        } else {
-            panic!("Use of parallel offset edges is unsuported");
         }
     }
 }
