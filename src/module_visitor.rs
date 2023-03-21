@@ -138,6 +138,8 @@ pub enum PointerInstruction<'a> {
         dest: VarIdent<'a>,
         struct_type: Option<StructType<'a>>,
     },
+    /// x = malloc()
+    Malloc { dest: VarIdent<'a> },
     /// x = gep y, o1, o2, ..
     Gep {
         dest: VarIdent<'a>,
@@ -198,6 +200,11 @@ pub trait PointerModuleVisitor<'a> {
             _ => return,
         };
 
+        let context = PointerContext {
+            fun_name: &caller.name,
+            structs,
+        };
+
         let dest = match ty.as_ref() {
             Type::FuncType { result_type, .. } if is_ptr_type(result_type) => {
                 dest.map(|d| VarIdent::new_local(d, caller))
@@ -205,20 +212,25 @@ pub trait PointerModuleVisitor<'a> {
             _ => None,
         };
 
-        let arguments = arguments
-            .iter()
-            .map(|(arg, _)| get_operand_ident_type(arg, caller).map(|(ident, _, _)| ident))
-            .collect();
+        // TODO: What if someone defines their own function called malloc?
+        //       Maybe look at function signature?
+        let instr = if function == "malloc" && dest.is_some() {
+            PointerInstruction::Malloc {
+                dest: dest.unwrap(),
+            }
+        } else {
+            let arguments = arguments
+                .iter()
+                .map(|(arg, _)| get_operand_ident_type(arg, caller).map(|(ident, _, _)| ident))
+                .collect();
 
-        let instr = PointerInstruction::Call {
-            dest,
-            function,
-            arguments,
+            PointerInstruction::Call {
+                dest,
+                function,
+                arguments,
+            }
         };
-        let context = PointerContext {
-            fun_name: &caller.name,
-            structs,
-        };
+
         self.handle_ptr_instruction(instr, context);
     }
 }

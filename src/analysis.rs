@@ -170,6 +170,11 @@ impl<'a> PointerModuleVisitor<'a> for PointsToPreAnalyzer<'a> {
                 dest: Some(dest), ..
             } => self.cells.push(Cell::Var(dest)),
 
+            PointerInstruction::Malloc { dest } => {
+                self.cells.push(Cell::Var(dest));
+                self.cells.push(Cell::Heap(dest));
+            }
+
             PointerInstruction::Alloca { dest, struct_type } => {
                 self.cells.push(Cell::Var(dest));
                 self.add_stack_cells(Cell::Stack(dest), struct_type.as_ref(), context);
@@ -242,6 +247,13 @@ where
                 };
                 let var_cell = Cell::Var(dest);
                 let c = cstr!(stack_cell in var_cell);
+                self.solver.add_constraint(c);
+            }
+
+            PointerInstruction::Malloc { dest } => {
+                let heap_cell = Cell::Heap(dest);
+                let var_cell = Cell::Var(dest);
+                let c = cstr!(heap_cell in var_cell);
                 self.solver.add_constraint(c);
             }
 
