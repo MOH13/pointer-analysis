@@ -1,5 +1,3 @@
-use bitvec::prelude::*;
-
 #[derive(Debug)]
 pub struct BitIndexIter<I> {
     iter: I,
