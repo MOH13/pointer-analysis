@@ -45,16 +45,26 @@ impl<I: Iterator<Item = usize>> Iterator for BitIndexIter<I> {
     }
 }
 
-pub fn no_alloc_difference<'a>(
-    left: &'a BitVec<usize>,
-    right: &'a BitVec<usize>,
-) -> impl Iterator<Item = usize> + 'a {
-    BitIndexIter::new(
-        left.as_raw_slice()
-            .iter()
-            .zip(right.as_raw_slice())
-            .map(|(lblock, rblock)| lblock & !rblock),
-    )
+pub fn no_alloc_combine(
+    left: impl Iterator<Item = usize>,
+    right: impl Iterator<Item = usize>,
+    f: fn((usize, usize)) -> usize,
+) -> impl Iterator<Item = usize> {
+    left.zip(right).map(f)
+}
+
+pub fn no_alloc_and(
+    left: impl Iterator<Item = usize>,
+    right: impl Iterator<Item = usize>,
+) -> impl Iterator<Item = usize> {
+    no_alloc_combine(left, right, |(lblock, rblock)| lblock & rblock)
+}
+
+pub fn no_alloc_difference(
+    left: impl Iterator<Item = usize>,
+    right: impl Iterator<Item = usize>,
+) -> impl Iterator<Item = usize> {
+    no_alloc_combine(left, right, |(lblock, rblock)| lblock & !rblock)
 }
 
 #[cfg(test)]
