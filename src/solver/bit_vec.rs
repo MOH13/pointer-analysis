@@ -1,9 +1,10 @@
 use bitvec::prelude::*;
+use hashbrown::HashMap;
 use std::collections::VecDeque;
 
 use bitvec::vec::BitVec;
 
-use crate::bit_index_utils::no_alloc_difference;
+use crate::bit_index_utils::{no_alloc_and, no_alloc_difference, BitIndexIter};
 
 use super::{Constraint, Solver, UnivCond};
 
@@ -13,7 +14,9 @@ pub struct BasicBitVecSolver {
     edges: Vec<BitVec<usize>>,
     // offset_edges: Vec<HashMap<usize, usize>>,
     conds: Vec<Vec<UnivCond<usize>>>,
-    temp_mem: Vec<usize>,
+    weighted_edges: Vec<HashMap<usize, usize>>,
+    offset_bitmask: BitVec<usize>,
+    allowed_offsets: HashMap<usize, usize>,
 }
 
 macro_rules! add_token {
@@ -30,8 +33,8 @@ impl BasicBitVecSolver {
         while let Some((term, node)) = self.worklist.pop_front() {
             for cond in &self.conds[node].clone() {
                 match cond {
-                    UnivCond::SubsetLeft(right) => self.add_edge(node, *right, 0),
-                    UnivCond::SubsetRight(left) => self.add_edge(*left, node, 0),
+                    UnivCond::SubsetLeft(right) => self.add_edge(term, *right, 0),
+                    UnivCond::SubsetRight(left) => self.add_edge(*left, term, 0),
                 }
             }
 
@@ -42,12 +45,37 @@ impl BasicBitVecSolver {
     }
 
     fn add_edge(&mut self, left: usize, right: usize, offset: usize) {
-        if !self.edges[left][right] {
-            self.edges[left].set(right, true);
+        if offset == 0 {
+            if !self.edges[left][right] {
+                self.edges[left].set(right, true);
 
-            for i in no_alloc_difference(&self.sols[left], &self.sols[right]).collect::<Vec<_>>() {
-                add_token!(self, i, right);
+                let left_block_iter = self.sols[left].as_raw_slice().iter().copied();
+                let right_block_iter = self.sols[right].as_raw_slice().iter().copied();
+
+                for i in BitIndexIter::new(no_alloc_difference(left_block_iter, right_block_iter))
+                    .collect::<Vec<_>>()
+                {
+                    add_token!(self, i, right);
+                }
             }
+        } else if self.weighted_edges[left].insert(right, offset).is_none() {
+            let left_block_iter = self.sols[left].as_raw_slice().iter().copied();
+            let offset_mask_iter = self.offset_bitmask.as_raw_slice().iter().copied();
+
+            for i in BitIndexIter::new(no_alloc_and(left_block_iter, offset_mask_iter))
+                .collect::<Vec<_>>()
+            {
+                match self.allowed_offsets.get(&i) {
+                    Some(&max_offset) => {
+                        if max_offset <= offset {
+                            add_token!(self, i + max_offset, right)
+                        }
+                    }
+                    None => (),
+                }
+            }
+        } else {
+            panic!("Use of parallel offset edges is unsuported");
         }
     }
 }
@@ -57,12 +85,21 @@ impl Solver for BasicBitVecSolver {
     type TermSet = BitVec;
 
     fn new(terms: Vec<usize>, allowed_offsets: Vec<(usize, usize)>) -> Self {
+        let mut offset_bitmask = bitvec![0; terms.len()];
+        for &(i, max_offset) in &allowed_offsets {
+            if max_offset > 0 {
+                offset_bitmask.set(i, true);
+            }
+        }
+
         Self {
             worklist: VecDeque::new(),
             sols: vec![bitvec![0; terms.len()]; terms.len()],
             edges: vec![bitvec![0; terms.len()]; terms.len()],
             conds: vec![vec![]; terms.len()],
-            temp_mem: vec![],
+            weighted_edges: vec![HashMap::new(); terms.len()],
+            offset_bitmask: offset_bitmask,
+            allowed_offsets: allowed_offsets.into_iter().collect(),
         }
     }
 

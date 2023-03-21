@@ -10,6 +10,7 @@ mod hash;
 pub use bit_vec::BasicBitVecSolver;
 pub use hash::BasicHashSolver;
 
+#[derive(Debug)]
 pub enum Constraint<T> {
     Inclusion { term: T, node: T },
     Subset { left: T, right: T, offset: usize },
@@ -53,7 +54,7 @@ macro_rules! cstr {
     };
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum UnivCond<T: Clone> {
     SubsetLeft(T),
     SubsetRight(T),
@@ -241,28 +242,34 @@ mod tests {
     /// x = &y
     /// z = x
     /// *z = x
-    /// w = null
+    /// z = &w
+    /// a = null
     /// ```
-    fn simple_ref_store_template<T, S>(x: T, y: T, z: T, w: T)
+    fn simple_ref_store_template<T, S>(x: T, y: T, z: T, w: T, a: T)
     where
         T: Eq + Hash + Copy + Debug,
         S: Solver<Term = T>,
         S::TermSet: IterableTermSet<T>,
     {
-        let terms = vec![x, y, z, w];
-        let constraints = [cstr!(y in x), cstr!(x <= z), cstr!(c in z : x <= c)];
-        let expected_output = output![x -> {y}, y -> {y}, z -> {y}, w -> {}];
+        let terms = vec![x, y, z, w, a];
+        let constraints = [
+            cstr!(y in x),
+            cstr!(x <= z),
+            cstr!(c in z : x <= c),
+            cstr!(w in z),
+        ];
+        let expected_output = output![x -> {y}, y -> {y}, z -> {y, w}, w -> {y}, a -> {}];
         solver_test_template::<T, S>(terms, vec![], constraints, expected_output);
     }
 
     #[test]
     fn simple_ref_store_basic_hash_solver() {
-        simple_ref_store_template::<_, BasicHashSolver>(0, 1, 2, 3);
+        simple_ref_store_template::<_, BasicHashSolver>(0, 1, 2, 3, 4);
     }
 
     #[test]
     fn simple_ref_store_basic_bit_vec_solver() {
-        simple_ref_store_template::<_, BasicBitVecSolver>(0, 1, 2, 3);
+        simple_ref_store_template::<_, BasicBitVecSolver>(0, 1, 2, 3, 4);
     }
 
     #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
@@ -271,6 +278,7 @@ mod tests {
         Y,
         Z,
         W,
+        A,
     }
 
     #[test]
@@ -279,7 +287,8 @@ mod tests {
         let y = SimpleRefStoreTerm::Y;
         let z = SimpleRefStoreTerm::Z;
         let w = SimpleRefStoreTerm::W;
-        simple_ref_store_template::<_, GenericSolver<_, BasicHashSolver>>(x, y, z, w);
+        let a = SimpleRefStoreTerm::A;
+        simple_ref_store_template::<_, GenericSolver<_, BasicHashSolver>>(x, y, z, w, a);
     }
 
     /// Pseudo code:
@@ -308,7 +317,7 @@ mod tests {
             cstr!(c in pg : py <= c),
         ];
         let expected_output =
-            output![x -> {yf}, yf -> {}, yg -> {x, yf}, py -> {yf}, pg -> {yg}, z -> {x, yf}];
+            output![x -> {yf}, yf -> {yf}, yg -> {x, yf}, py -> {yf}, pg -> {yg}, z -> {x, yf}];
         solver_test_template::<T, S>(terms, vec![(yf, 1)], constraints, expected_output);
     }
 

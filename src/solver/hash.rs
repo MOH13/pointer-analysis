@@ -7,7 +7,7 @@ use super::{Constraint, Solver, UnivCond};
 pub struct BasicHashSolver {
     worklist: VecDeque<(usize, usize)>,
     sols: Vec<HashSet<usize>>,
-    edges: Vec<HashMap<usize, usize>>,
+    edges: Vec<HashMap<usize, HashSet<usize>>>,
     conds: Vec<Vec<UnivCond<usize>>>,
     allowed_offsets: HashMap<usize, usize>,
 }
@@ -25,31 +25,41 @@ impl BasicHashSolver {
         while let Some((term, node)) = self.worklist.pop_front() {
             for cond in &self.conds[node].clone() {
                 match cond {
-                    UnivCond::SubsetLeft(right) => self.add_edge(node, *right, 0),
-                    UnivCond::SubsetRight(left) => self.add_edge(*left, node, 0),
+                    UnivCond::SubsetLeft(right) => self.add_edge(term, *right, 0),
+                    UnivCond::SubsetRight(left) => self.add_edge(*left, term, 0),
                 }
             }
 
-            for (&n2, &offset) in &self.edges[node] {
-                if offset == 0 {
-                    add_token!(self, term, n2);
-                } else {
-                    match self.allowed_offsets.get(&term) {
-                        Some(max_offset) => {
-                            if *max_offset <= offset {
-                                add_token!(self, term + offset, n2)
+            for (&n2, edges) in &self.edges[node] {
+                for &offset in edges {
+                    if offset == 0 {
+                        add_token!(self, term, n2);
+                    } else {
+                        match self.allowed_offsets.get(&term) {
+                            Some(max_offset) => {
+                                if *max_offset <= offset {
+                                    add_token!(self, term + offset, n2)
+                                }
                             }
+                            None => (),
                         }
-                        None => (),
                     }
                 }
             }
         }
     }
 
+    fn get_edges<'a>(&'a mut self, left: usize, right: usize) -> &'a mut HashSet<usize> {
+        if !self.edges[left].contains_key(&right) {
+            self.edges[left].insert(right, HashSet::new());
+        }
+        self.edges[left].get_mut(&right).unwrap()
+    }
+
     fn add_edge(&mut self, left: usize, right: usize, offset: usize) {
-        if self.edges[left].insert(right, offset).is_none() {
-            let not_in_right: Vec<_> = self.sols[left]
+        let edges = self.get_edges(left, right);
+        if edges.insert(offset) {
+            let to_add: Vec<_> = self.sols[left]
                 .iter()
                 .filter_map(|&t| {
                     if offset == 0 {
@@ -60,13 +70,10 @@ impl BasicHashSolver {
                             .and_then(|&max_offset| (max_offset <= offset).then(|| t + offset))
                     }
                 })
-                .filter(|t| !self.sols[right].contains(t))
                 .collect();
-            for t in not_in_right {
+            for t in to_add {
                 add_token!(self, t, right);
             }
-        } else {
-            panic!("Use of parallel offset edges is unsuported");
         }
     }
 }
@@ -114,7 +121,7 @@ impl Solver for BasicHashSolver {
                 }
             }
         };
-        self.propagate()
+        self.propagate();
     }
 
     fn get_solution(&self, node: &usize) -> HashSet<usize> {
