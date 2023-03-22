@@ -125,8 +125,6 @@ impl<'a> PointsToPreAnalyzer<'a> {
                     );
                 }
 
-                let offset_cell = Cell::Offset(Box::new(stack_cell.clone()), 0);
-                self.allowed_offsets.push((offset_cell, num_sub_cells - 1));
                 num_sub_cells
             }
 
@@ -134,6 +132,18 @@ impl<'a> PointsToPreAnalyzer<'a> {
                 self.cells.push(stack_cell);
                 1
             }
+        }
+    }
+
+    fn add_stack_cells_and_allowed_offsets(
+        &mut self,
+        ident: VarIdent<'a>,
+        struct_type: Option<&StructType<'a>>,
+        context: PointerContext<'a, '_>,
+    ) {
+        let added = self.add_stack_cells(Cell::Stack(ident), struct_type, context);
+        for (i, cell) in self.cells.iter().rev().take(added).enumerate() {
+            self.allowed_offsets.push((cell.clone(), i));
         }
     }
 }
@@ -172,7 +182,7 @@ impl<'a> PointerModuleVisitor<'a> for PointsToPreAnalyzer<'a> {
 
             PointerInstruction::Alloca { dest, struct_type } => {
                 self.cells.push(Cell::Var(dest));
-                self.add_stack_cells(Cell::Stack(dest), struct_type.as_ref(), context);
+                self.add_stack_cells_and_allowed_offsets(dest, struct_type.as_ref(), context);
             }
 
             PointerInstruction::Malloc { dest } => {
