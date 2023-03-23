@@ -1,2 +1,5 @@
 /target
 source.ll
+*.h.gch
+/llvmtemp
+/benchmarks/curl
