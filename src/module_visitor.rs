@@ -11,7 +11,8 @@ use llvm_ir::module::GlobalVariable;
 use llvm_ir::terminator::{Invoke, Ret};
 use llvm_ir::types::NamedStructDef;
 use llvm_ir::{
-    BasicBlock, Constant, Function, Instruction, Module, Name, Operand, Terminator, Type, TypeRef,
+    constant, BasicBlock, Constant, Function, Instruction, Module, Name, Operand, Terminator, Type,
+    TypeRef,
 };
 
 #[derive(Copy, Clone)]
@@ -305,7 +306,7 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
                 let dest = VarIdent::new_local(dest, function);
 
                 let instr = match get_struct_type(ty, context) {
-                    Some(struct_type) => {
+                    Some(struct_type) if indices.len() > degree => {
                         let mut reduced_indices = vec![];
                         let mut sub_struct_type = struct_type.as_ref();
                         let mut remaining_indices = &indices[degree..];
@@ -338,7 +339,7 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
                         }
                     }
 
-                    None => PointerInstruction::Assign {
+                    _ => PointerInstruction::Assign {
                         dest,
                         value: address,
                     },
@@ -464,8 +465,15 @@ fn get_operand_ident_type<'a>(
             }
         }
         Operand::ConstantOperand(constant) => match constant.as_ref() {
-            llvm_ir::Constant::GlobalReference { name, ty } => {
-                Some((VarIdent::Global { name }, ty, 1))
+            Constant::GlobalReference { name, ty } => Some((VarIdent::Global { name }, ty, 1)),
+            Constant::BitCast(constant::BitCast { operand, to_type }) => {
+                match (operand.as_ref(), to_type.as_ref()) {
+                    (
+                        Constant::GlobalReference { name, .. },
+                        Type::PointerType { pointee_type, .. },
+                    ) => Some((VarIdent::Global { name: name }, pointee_type, 1)),
+                    _ => None,
+                }
             }
             _ => None,
         },
