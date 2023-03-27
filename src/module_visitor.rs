@@ -1,5 +1,6 @@
-use std::borrow::Cow;
 use std::fmt::{self, Display, Formatter};
+use std::ops::Deref;
+use std::rc::Rc;
 
 use either::Either;
 use hashbrown::HashMap;
@@ -15,12 +16,14 @@ use llvm_ir::{
     TypeRef,
 };
 
+type StructMap<'a> = HashMap<&'a String, Rc<StructType>>;
+
 #[derive(Copy, Clone)]
 pub struct Context<'a, 'b> {
     pub module: &'a Module,
     pub function: &'a Function,
     pub block: &'a BasicBlock,
-    pub structs: &'b HashMap<&'a String, StructType>,
+    pub structs: &'b StructMap<'a>,
 }
 
 /// This trait allows implementors to define the `handle_instruction` and `handle_terminator` functions,
@@ -32,19 +35,13 @@ pub trait ModuleVisitor<'a> {
     fn handle_terminator(&mut self, term: &'a Terminator, context: Context<'a, '_>);
 
     fn visit_module(&mut self, module: &'a Module) {
-        let un_inlined_structs: HashMap<&String, UnInlinedStruct> = module
+        let mut structs = HashMap::new();
+        for (name, ty) in module
             .types
             .all_struct_names()
-            .filter_map(|name| {
-                get_struct_from_name(name, module)
-                    .and_then(UnInlinedStruct::from_ty)
-                    .map(|t| (name, t))
-            })
-            .collect();
-
-        let mut structs = HashMap::new();
-        for (&name, s) in &un_inlined_structs {
-            StructType::add_to_structs(name, s, &mut structs, &un_inlined_structs);
+            .filter_map(|name| get_struct_from_name(name, module).map(|t| (name, t)))
+        {
+            StructType::add_to_structs(name, ty, &mut structs, module);
         }
 
         for global in &module.global_vars {
@@ -99,92 +96,64 @@ impl<'a> Display for VarIdent<'a> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
+pub struct StructField {
+    st: Rc<StructType>,
+    degree: usize,
+}
+
+impl Deref for StructField {
+    type Target = StructType;
+
+    fn deref(&self) -> &Self::Target {
+        &self.st
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct StructType {
-    pub fields: Vec<Option<(StructType, usize)>>,
+    pub fields: Vec<Option<StructField>>,
 }
 
 impl StructType {
-    fn from_un_inlined<'a>(
-        s: &UnInlinedStruct<'a>,
-        structs: &mut HashMap<&'a String, Self>,
-        un_inlined_structs: &HashMap<&String, UnInlinedStruct<'a>>,
-    ) -> Self {
-        let fields = s
-            .fields
+    fn add_to_structs<'a>(
+        name: &'a String,
+        ty: &'a TypeRef,
+        structs: &mut StructMap<'a>,
+        module: &'a Module,
+    ) {
+        let fields = match ty.as_ref() {
+            Type::StructType { element_types, .. } => element_types,
+            _ => panic!("ty should only be a StructType"),
+        };
+        let fields = fields
             .iter()
-            .map(|&f| {
-                f.map(|(f, d)| match f {
-                    Either::Left(name) => {
-                        let s = &un_inlined_structs[name];
-                        let s = Self::add_to_structs(name, s, structs, un_inlined_structs);
-                        (s.clone(), d)
-                    }
-                    Either::Right(ty) => {
-                        let s = UnInlinedStruct::from_ty(ty).unwrap();
-                        let s = Self::from_un_inlined(&s, structs, un_inlined_structs);
-                        (s, d)
-                    }
-                })
+            .map(|f| {
+                let (ty, degree) = strip_array_types(f);
+                match ty.as_ref() {
+                    Type::NamedStructType { name } => Some(StructField {
+                        st: Self::lookup_or_new(name, structs, module),
+                        degree,
+                    }),
+                    _ => None,
+                }
             })
             .collect();
-        Self { fields }
+        structs.insert(name, Rc::new(Self { fields }));
     }
 
-    fn from_ty(ty: &TypeRef, structs: &HashMap<&String, Self>) -> Option<Self> {
-        let fields: Option<Vec<_>> = UnInlinedStruct::from_ty(ty)
-            .unwrap()
-            .fields
-            .iter()
-            .map(|&f| {
-                f.map(|(f, d)| match f {
-                    Either::Left(name) => structs.get(name).map(|s| (s.clone(), d)),
-                    Either::Right(ty) => Self::from_ty(ty, structs).map(|s| (s, d)),
-                })
-            })
-            .collect();
-        fields.map(|fields| Self { fields })
-    }
-
-    fn add_to_structs<'a, 'b>(
-        name: &'b String,
-        s: &UnInlinedStruct<'b>,
-        structs: &'a mut HashMap<&'b String, Self>,
-        un_inlined_structs: &HashMap<&String, UnInlinedStruct<'b>>,
-    ) -> &'a Self {
-        let new = Self::from_un_inlined(s, structs, un_inlined_structs);
-        structs.entry(name).or_insert(new)
-        // if let Some(s) = structs.get(name) {
-        //     return s;
-        // }
-        // structs.insert(name, new);
-        // &structs[name]
-    }
-}
-
-type UnInlinedField<'a> = Option<(Either<&'a String, &'a TypeRef>, usize)>;
-struct UnInlinedStruct<'a> {
-    fields: Vec<UnInlinedField<'a>>,
-}
-
-impl<'a> UnInlinedStruct<'a> {
-    fn from_ty(ty: &'a TypeRef) -> Option<Self> {
-        match ty.as_ref() {
-            Type::StructType { element_types, .. } => {
-                let fields = element_types
-                    .iter()
-                    .map(|t| {
-                        let (ty, degree) = strip_array_types(t);
-                        match ty.as_ref() {
-                            Type::NamedStructType { name } => Some((Either::Left(name), degree)),
-                            Type::StructType { .. } => Some((Either::Right(ty), degree)),
-                            _ => None,
-                        }
-                    })
-                    .collect();
-                Some(Self { fields })
+    fn lookup_or_new<'a>(
+        name: &'a String,
+        structs: &mut StructMap<'a>,
+        module: &'a Module,
+    ) -> Rc<StructType> {
+        match structs.get(name) {
+            Some(st) => Rc::clone(st),
+            None => {
+                let ty = get_struct_from_name(name, module).expect("struct was not defined");
+                Self::add_to_structs(name, ty, structs, module);
+                Rc::clone(&structs[name])
             }
-            _ => None,
         }
     }
 }
@@ -208,7 +177,7 @@ pub enum PointerInstruction<'a> {
     /// x = alloca ..
     Alloca {
         dest: VarIdent<'a>,
-        struct_type: Option<StructType>,
+        struct_type: Option<Rc<StructType>>,
     },
     /// x = malloc()
     Malloc { dest: VarIdent<'a> },
@@ -217,7 +186,7 @@ pub enum PointerInstruction<'a> {
         dest: VarIdent<'a>,
         address: VarIdent<'a>,
         indices: Vec<usize>,
-        struct_type: StructType,
+        struct_type: Rc<StructType>,
     },
     /// x = \phi(y1, y2, ..)
     Phi {
@@ -235,9 +204,8 @@ pub enum PointerInstruction<'a> {
 }
 
 #[derive(Clone, Copy)]
-pub struct PointerContext<'a, 'b> {
+pub struct PointerContext<'a> {
     pub fun_name: &'a str,
-    pub structs: &'b HashMap<&'a String, StructType>,
 }
 
 pub trait PointerModuleVisitor<'a> {
@@ -246,7 +214,7 @@ pub trait PointerModuleVisitor<'a> {
     fn handle_ptr_instruction(
         &mut self,
         instr: PointerInstruction<'a>,
-        context: PointerContext<'a, '_>,
+        context: PointerContext<'a>,
     );
 
     fn handle_call(
@@ -255,9 +223,7 @@ pub trait PointerModuleVisitor<'a> {
         arguments: &'a [(Operand, Vec<ParameterAttribute>)],
         dest: Option<&'a Name>,
         Context {
-            function: caller,
-            structs,
-            ..
+            function: caller, ..
         }: Context<'a, '_>,
     ) {
         // TODO: Filter out irrelevant function calls
@@ -274,7 +240,6 @@ pub trait PointerModuleVisitor<'a> {
 
         let context = PointerContext {
             fun_name: &caller.name,
-            structs,
         };
 
         let dest = match ty.as_ref() {
@@ -333,13 +298,10 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
     fn handle_instruction(
         &mut self,
         instr: &'a Instruction,
-        context @ Context {
-            function, structs, ..
-        }: Context<'a, '_>,
+        context @ Context { function, .. }: Context<'a, '_>,
     ) {
         let pointer_context = PointerContext {
             fun_name: &function.name,
-            structs,
         };
         match instr {
             // Instruction::ExtractElement(_) => todo!(),
@@ -350,7 +312,7 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
                 ..
             }) => {
                 let dest = VarIdent::new_local(dest, function);
-                let struct_type = get_struct_type(allocated_type, context).map(Cow::into_owned);
+                let struct_type = get_struct_type(allocated_type, context);
                 let instr = PointerInstruction::Alloca { dest, struct_type };
                 self.handle_ptr_instruction(instr, pointer_context);
             }
@@ -381,7 +343,7 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
                         let mut reduced_indices = vec![];
                         let mut sub_struct_type = struct_type.as_ref();
                         let mut remaining_indices = &indices[degree..];
-                        while remaining_indices.len() > 0 {
+                        loop {
                             // All indices into structs must be constant i32
                             let i = match &remaining_indices[0] {
                                 Operand::ConstantOperand(c) => match c.as_ref() {
@@ -394,11 +356,11 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
                             reduced_indices.push(i);
 
                             match &sub_struct_type.fields[i] {
-                                Some((s, d)) => {
-                                    sub_struct_type = s;
-                                    remaining_indices = &remaining_indices[d + 1..];
+                                Some(f) if remaining_indices.len() > f.degree + 1 => {
+                                    sub_struct_type = f;
+                                    remaining_indices = &remaining_indices[f.degree + 1..];
                                 }
-                                None => break,
+                                _ => break,
                             }
                         }
 
@@ -406,7 +368,7 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
                             dest,
                             address,
                             indices: reduced_indices,
-                            struct_type: struct_type.into_owned(),
+                            struct_type: struct_type,
                         }
                     }
 
@@ -481,13 +443,11 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
         term: &'a Terminator,
         context @ Context {
             function: context_fun,
-            structs,
             ..
         }: Context<'a, '_>,
     ) {
         let pointer_context = PointerContext {
             fun_name: &context_fun.name,
-            structs,
         };
         match term {
             Terminator::Invoke(Invoke {
@@ -552,13 +512,9 @@ fn get_operand_ident_type<'a>(
     }
 }
 
-fn get_struct_type<'a, 'b>(
-    ty: &'a TypeRef,
-    context: Context<'a, 'b>,
-) -> Option<Cow<'b, StructType>> {
+fn get_struct_type<'a>(ty: &'a TypeRef, context: Context<'a, '_>) -> Option<Rc<StructType>> {
     match ty.as_ref() {
-        Type::NamedStructType { name } => context.structs.get(name).map(Cow::Borrowed),
-        Type::StructType { .. } => StructType::from_ty(ty, context.structs).map(Cow::Owned),
+        Type::NamedStructType { name } => context.structs.get(name).cloned(),
         _ => None,
     }
 }

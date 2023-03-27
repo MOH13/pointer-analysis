@@ -110,7 +110,7 @@ impl<'a> PointsToPreAnalyzer<'a> {
         &mut self,
         stack_cell: Cell<'a>,
         struct_type: Option<&StructType>,
-        context: PointerContext<'a, '_>,
+        context: PointerContext<'a>,
     ) -> usize {
         match struct_type {
             Some(StructType { fields }) => {
@@ -118,8 +118,7 @@ impl<'a> PointsToPreAnalyzer<'a> {
 
                 for (i, field) in fields.iter().enumerate() {
                     let offset_cell = Cell::Offset(Box::new(stack_cell.clone()), i);
-                    num_sub_cells +=
-                        self.add_stack_cells(offset_cell, field.as_ref().map(|(s, _)| s), context);
+                    num_sub_cells += self.add_stack_cells(offset_cell, field.as_deref(), context);
                 }
 
                 num_sub_cells
@@ -136,7 +135,7 @@ impl<'a> PointsToPreAnalyzer<'a> {
         &mut self,
         ident: VarIdent<'a>,
         struct_type: Option<&StructType>,
-        context: PointerContext<'a, '_>,
+        context: PointerContext<'a>,
     ) {
         let added = self.add_stack_cells(Cell::Stack(ident), struct_type, context);
         for (i, cell) in self.cells.iter().rev().take(added).enumerate() {
@@ -166,7 +165,7 @@ impl<'a> PointerModuleVisitor<'a> for PointsToPreAnalyzer<'a> {
     fn handle_ptr_instruction(
         &mut self,
         instr: PointerInstruction<'a>,
-        context: PointerContext<'a, '_>,
+        context: PointerContext<'a>,
     ) {
         match instr {
             PointerInstruction::Assign { dest, .. }
@@ -179,7 +178,7 @@ impl<'a> PointerModuleVisitor<'a> for PointsToPreAnalyzer<'a> {
 
             PointerInstruction::Alloca { dest, struct_type } => {
                 self.cells.push(Cell::Var(dest));
-                self.add_stack_cells_and_allowed_offsets(dest, struct_type.as_ref(), context);
+                self.add_stack_cells_and_allowed_offsets(dest, struct_type.as_deref(), context);
             }
 
             PointerInstruction::Malloc { dest } => {
@@ -248,10 +247,13 @@ where
             }
 
             PointerInstruction::Alloca { dest, struct_type } => {
-                let stack_cell = match struct_type {
-                    Some(_) => Cell::Offset(Box::new(Cell::Stack(dest)), 0),
-                    None => Cell::Stack(dest),
-                };
+                let mut stack_cell = Cell::Stack(dest);
+                let mut struct_type = struct_type.as_deref();
+                while let Some(st) = struct_type {
+                    stack_cell = Cell::Offset(Box::new(stack_cell), 0);
+                    struct_type = st.fields[0].as_deref();
+                }
+
                 let var_cell = Cell::Var(dest);
                 let c = cstr!(stack_cell in var_cell);
                 self.solver.add_constraint(c);
@@ -271,10 +273,10 @@ where
                 struct_type,
             } => {
                 let mut offset = 0;
-                let mut next_sty = Some(&struct_type);
+                let mut next_sty = Some(&*struct_type);
                 for i in indices {
                     let sty = next_sty.expect("Gep indices should correspond to struct fields");
-                    next_sty = sty.fields[i].as_ref().map(|(s, _)| s);
+                    next_sty = sty.fields[i].as_deref();
 
                     if i == 0 {
                         continue;
@@ -282,7 +284,7 @@ where
 
                     for j in 0..i {
                         offset += match &sty.fields[j] {
-                            Some((s, _)) => count_struct_cells(s, context),
+                            Some(f) => count_struct_cells(f, context),
                             None => 1,
                         }
                     }
@@ -347,7 +349,7 @@ fn count_struct_cells(struct_type: &StructType, context: PointerContext) -> usiz
 
     for field in &struct_type.fields {
         num_sub_cells += match field {
-            Some((s, _)) => count_struct_cells(s, context),
+            Some(f) => count_struct_cells(f, context),
             None => 1,
         };
     }
