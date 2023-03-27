@@ -65,7 +65,7 @@ impl BasicBitVecSolver {
                 .filter_map(|i| {
                     self.allowed_offsets
                         .get(&i)
-                        .filter(|&&o| offset <= o)
+                        .filter(|&&max_offset| offset <= max_offset)
                         .map(|_| i)
                 })
                 .collect::<Vec<_>>()

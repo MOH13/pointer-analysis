@@ -62,7 +62,7 @@ impl BasicHashSolver {
                     } else {
                         self.allowed_offsets
                             .get(&t)
-                            .and_then(|&max_offset| (max_offset <= offset).then(|| t + offset))
+                            .and_then(|&max_offset| (offset <= max_offset).then(|| t + offset))
                     }
                 })
                 .collect();
