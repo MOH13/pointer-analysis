@@ -109,7 +109,7 @@ impl<'a> PointsToPreAnalyzer<'a> {
     fn add_stack_cells(
         &mut self,
         stack_cell: Cell<'a>,
-        struct_type: Option<&StructType<'a>>,
+        struct_type: Option<&StructType>,
         context: PointerContext<'a, '_>,
     ) -> usize {
         match struct_type {
@@ -118,11 +118,8 @@ impl<'a> PointsToPreAnalyzer<'a> {
 
                 for (i, field) in fields.iter().enumerate() {
                     let offset_cell = Cell::Offset(Box::new(stack_cell.clone()), i);
-                    num_sub_cells += self.add_stack_cells(
-                        offset_cell,
-                        field.and_then(|(s, _)| context.structs.get(s)),
-                        context,
-                    );
+                    num_sub_cells +=
+                        self.add_stack_cells(offset_cell, field.as_ref().map(|(s, _)| s), context);
                 }
 
                 num_sub_cells
@@ -138,7 +135,7 @@ impl<'a> PointsToPreAnalyzer<'a> {
     fn add_stack_cells_and_allowed_offsets(
         &mut self,
         ident: VarIdent<'a>,
-        struct_type: Option<&StructType<'a>>,
+        struct_type: Option<&StructType>,
         context: PointerContext<'a, '_>,
     ) {
         let added = self.add_stack_cells(Cell::Stack(ident), struct_type, context);
@@ -277,15 +274,15 @@ where
                 let mut next_sty = Some(&struct_type);
                 for i in indices {
                     let sty = next_sty.expect("Gep indices should correspond to struct fields");
-                    next_sty = sty.fields[i].map(|(s, _)| &context.structs[s]);
+                    next_sty = sty.fields[i].as_ref().map(|(s, _)| s);
 
                     if i == 0 {
                         continue;
                     }
 
                     for j in 0..i {
-                        offset += match sty.fields[j] {
-                            Some((s, _)) => count_struct_cells(&context.structs[s], context),
+                        offset += match &sty.fields[j] {
+                            Some((s, _)) => count_struct_cells(s, context),
                             None => 1,
                         }
                     }
@@ -314,7 +311,10 @@ where
                 function,
                 arguments,
             } => {
-                let summary = &self.summaries[function];
+                let summary = match self.summaries.get(function) {
+                    Some(s) => s,
+                    None => return, // TODO: Handle outside function calls
+                };
                 for (arg, &param) in arguments
                     .iter()
                     .zip(&summary.parameters)
@@ -345,9 +345,9 @@ where
 fn count_struct_cells(struct_type: &StructType, context: PointerContext) -> usize {
     let mut num_sub_cells = 0;
 
-    for &field in &struct_type.fields {
+    for field in &struct_type.fields {
         num_sub_cells += match field {
-            Some((s, _)) => count_struct_cells(&context.structs[s], context),
+            Some((s, _)) => count_struct_cells(s, context),
             None => 1,
         };
     }

@@ -20,7 +20,7 @@ pub struct Context<'a, 'b> {
     pub module: &'a Module,
     pub function: &'a Function,
     pub block: &'a BasicBlock,
-    pub structs: &'b HashMap<&'a String, StructType<'a>>,
+    pub structs: &'b HashMap<&'a String, StructType>,
 }
 
 /// This trait allows implementors to define the `handle_instruction` and `handle_terminator` functions,
@@ -32,11 +32,20 @@ pub trait ModuleVisitor<'a> {
     fn handle_terminator(&mut self, term: &'a Terminator, context: Context<'a, '_>);
 
     fn visit_module(&mut self, module: &'a Module) {
-        let structs = HashMap::from_iter(module.types.all_struct_names().filter_map(|name| {
-            get_struct_from_name(name, module)
-                .and_then(StructType::from_ty)
-                .map(|t| (name, t))
-        }));
+        let un_inlined_structs: HashMap<&String, UnInlinedStruct> = module
+            .types
+            .all_struct_names()
+            .filter_map(|name| {
+                get_struct_from_name(name, module)
+                    .and_then(UnInlinedStruct::from_ty)
+                    .map(|t| (name, t))
+            })
+            .collect();
+
+        let mut structs = HashMap::new();
+        for (&name, s) in &un_inlined_structs {
+            StructType::add_to_structs(name, s, &mut structs, &un_inlined_structs);
+        }
 
         for global in &module.global_vars {
             self.handle_global(global, module);
@@ -90,14 +99,75 @@ impl<'a> Display for VarIdent<'a> {
     }
 }
 
-type Field<'a> = Option<(&'a String, usize)>;
-
 #[derive(Clone)]
-pub struct StructType<'a> {
-    pub fields: Vec<Field<'a>>,
+pub struct StructType {
+    pub fields: Vec<Option<(StructType, usize)>>,
 }
 
-impl<'a> StructType<'a> {
+impl StructType {
+    fn from_un_inlined<'a>(
+        s: &UnInlinedStruct<'a>,
+        structs: &mut HashMap<&'a String, Self>,
+        un_inlined_structs: &HashMap<&String, UnInlinedStruct<'a>>,
+    ) -> Self {
+        let fields = s
+            .fields
+            .iter()
+            .map(|&f| {
+                f.map(|(f, d)| match f {
+                    Either::Left(name) => {
+                        let s = &un_inlined_structs[name];
+                        let s = Self::add_to_structs(name, s, structs, un_inlined_structs);
+                        (s.clone(), d)
+                    }
+                    Either::Right(ty) => {
+                        let s = UnInlinedStruct::from_ty(ty).unwrap();
+                        let s = Self::from_un_inlined(&s, structs, un_inlined_structs);
+                        (s, d)
+                    }
+                })
+            })
+            .collect();
+        Self { fields }
+    }
+
+    fn from_ty(ty: &TypeRef, structs: &HashMap<&String, Self>) -> Option<Self> {
+        let fields: Option<Vec<_>> = UnInlinedStruct::from_ty(ty)
+            .unwrap()
+            .fields
+            .iter()
+            .map(|&f| {
+                f.map(|(f, d)| match f {
+                    Either::Left(name) => structs.get(name).map(|s| (s.clone(), d)),
+                    Either::Right(ty) => Self::from_ty(ty, structs).map(|s| (s, d)),
+                })
+            })
+            .collect();
+        fields.map(|fields| Self { fields })
+    }
+
+    fn add_to_structs<'a, 'b>(
+        name: &'b String,
+        s: &UnInlinedStruct<'b>,
+        structs: &'a mut HashMap<&'b String, Self>,
+        un_inlined_structs: &HashMap<&String, UnInlinedStruct<'b>>,
+    ) -> &'a Self {
+        let new = Self::from_un_inlined(s, structs, un_inlined_structs);
+        structs.entry(name).or_insert(new)
+        // if let Some(s) = structs.get(name) {
+        //     return s;
+        // }
+        // structs.insert(name, new);
+        // &structs[name]
+    }
+}
+
+type UnInlinedField<'a> = Option<(Either<&'a String, &'a TypeRef>, usize)>;
+struct UnInlinedStruct<'a> {
+    fields: Vec<UnInlinedField<'a>>,
+}
+
+impl<'a> UnInlinedStruct<'a> {
     fn from_ty(ty: &'a TypeRef) -> Option<Self> {
         match ty.as_ref() {
             Type::StructType { element_types, .. } => {
@@ -106,7 +176,8 @@ impl<'a> StructType<'a> {
                     .map(|t| {
                         let (ty, degree) = strip_array_types(t);
                         match ty.as_ref() {
-                            Type::NamedStructType { name } => Some((name, degree)),
+                            Type::NamedStructType { name } => Some((Either::Left(name), degree)),
+                            Type::StructType { .. } => Some((Either::Right(ty), degree)),
                             _ => None,
                         }
                     })
@@ -137,7 +208,7 @@ pub enum PointerInstruction<'a> {
     /// x = alloca ..
     Alloca {
         dest: VarIdent<'a>,
-        struct_type: Option<StructType<'a>>,
+        struct_type: Option<StructType>,
     },
     /// x = malloc()
     Malloc { dest: VarIdent<'a> },
@@ -146,7 +217,7 @@ pub enum PointerInstruction<'a> {
         dest: VarIdent<'a>,
         address: VarIdent<'a>,
         indices: Vec<usize>,
-        struct_type: StructType<'a>,
+        struct_type: StructType,
     },
     /// x = \phi(y1, y2, ..)
     Phi {
@@ -166,7 +237,7 @@ pub enum PointerInstruction<'a> {
 #[derive(Clone, Copy)]
 pub struct PointerContext<'a, 'b> {
     pub fun_name: &'a str,
-    pub structs: &'b HashMap<&'a String, StructType<'a>>,
+    pub structs: &'b HashMap<&'a String, StructType>,
 }
 
 pub trait PointerModuleVisitor<'a> {
@@ -310,7 +381,7 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
                         let mut reduced_indices = vec![];
                         let mut sub_struct_type = struct_type.as_ref();
                         let mut remaining_indices = &indices[degree..];
-                        loop {
+                        while remaining_indices.len() > 0 {
                             // All indices into structs must be constant i32
                             let i = match &remaining_indices[0] {
                                 Operand::ConstantOperand(c) => match c.as_ref() {
@@ -322,9 +393,9 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
 
                             reduced_indices.push(i);
 
-                            match sub_struct_type.fields[i] {
+                            match &sub_struct_type.fields[i] {
                                 Some((s, d)) => {
-                                    sub_struct_type = &structs[s];
+                                    sub_struct_type = s;
                                     remaining_indices = &remaining_indices[d + 1..];
                                 }
                                 None => break,
@@ -484,10 +555,10 @@ fn get_operand_ident_type<'a>(
 fn get_struct_type<'a, 'b>(
     ty: &'a TypeRef,
     context: Context<'a, 'b>,
-) -> Option<Cow<'b, StructType<'a>>> {
+) -> Option<Cow<'b, StructType>> {
     match ty.as_ref() {
         Type::NamedStructType { name } => context.structs.get(name).map(Cow::Borrowed),
-        Type::StructType { .. } => StructType::from_ty(ty).map(Cow::Owned),
+        Type::StructType { .. } => StructType::from_ty(ty, context.structs).map(Cow::Owned),
         _ => None,
     }
 }
