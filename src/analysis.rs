@@ -5,7 +5,8 @@ use llvm_ir::Module;
 
 use crate::cstr;
 use crate::module_visitor::{
-    ModuleVisitor, PointerContext, PointerInstruction, PointerModuleVisitor, StructType, VarIdent,
+    count_struct_cells, ModuleVisitor, PointerContext, PointerInstruction, PointerModuleVisitor,
+    StructType, VarIdent,
 };
 use crate::solver::Solver;
 
@@ -266,11 +267,29 @@ where
                 self.solver.add_constraint(c);
             }
 
+            // Flat gep
             PointerInstruction::Gep {
                 dest,
                 address,
                 indices,
-                struct_type,
+                struct_type: None,
+            } => {
+                let dest_cell = Cell::Var(dest);
+                let address_cell = Cell::Var(address);
+
+                if indices.len() != 1 {
+                    panic!("Got flat gep with more than one index");
+                }
+                let offset = indices[0];
+                let c = cstr!(address_cell + offset <= dest_cell);
+                self.solver.add_constraint(c);
+            }
+
+            PointerInstruction::Gep {
+                dest,
+                address,
+                indices,
+                struct_type: Some(struct_type),
             } => {
                 let mut offset = 0;
                 let mut next_sty = Some(&*struct_type);
@@ -342,17 +361,4 @@ where
             _ => {}
         }
     }
-}
-
-fn count_struct_cells(struct_type: &StructType, context: PointerContext) -> usize {
-    let mut num_sub_cells = 0;
-
-    for field in &struct_type.fields {
-        num_sub_cells += match field {
-            Some(f) => count_struct_cells(f, context),
-            None => 1,
-        };
-    }
-
-    num_sub_cells
 }

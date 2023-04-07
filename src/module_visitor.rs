@@ -18,23 +18,49 @@ use llvm_ir::{
 
 type StructMap<'a> = HashMap<&'a String, Rc<StructType>>;
 
-#[derive(Copy, Clone)]
-pub struct Context<'a, 'b> {
+pub struct Context<'a, 'b, S> {
     pub module: &'a Module,
     pub function: &'a Function,
     pub block: &'a BasicBlock,
     pub structs: &'b StructMap<'a>,
+    pub state: &'b mut S,
+}
+
+impl<'a, 'b, S> std::fmt::Debug for Context<'a, 'b, S>
+where
+    S: std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Context")
+            .field("function", &self.function)
+            .field("block", &self.block)
+            .field("structs", &self.structs)
+            .field("state", &self.state)
+            .finish()
+    }
 }
 
 /// This trait allows implementors to define the `handle_instruction` and `handle_terminator` functions,
 /// which the `visit_module` function will call on all instructions and terminators.
 pub trait ModuleVisitor<'a> {
+    type State;
+
+    fn init_state() -> Self::State;
     fn handle_function(&mut self, function: &'a Function, module: &'a Module);
     fn handle_global(&mut self, global: &'a GlobalVariable, module: &'a Module);
-    fn handle_instruction(&mut self, instr: &'a Instruction, context: Context<'a, '_>);
-    fn handle_terminator(&mut self, term: &'a Terminator, context: Context<'a, '_>);
+    fn handle_instruction(
+        &mut self,
+        instr: &'a Instruction,
+        context: &mut Context<'a, '_, Self::State>,
+    );
+    fn handle_terminator(
+        &mut self,
+        term: &'a Terminator,
+        context: &mut Context<'a, '_, Self::State>,
+    );
 
     fn visit_module(&mut self, module: &'a Module) {
+        let mut state = Self::init_state();
         let mut structs = HashMap::new();
         for (name, ty) in module
             .types
@@ -51,17 +77,18 @@ pub trait ModuleVisitor<'a> {
         for function in &module.functions {
             self.handle_function(function, module);
             for block in &function.basic_blocks {
-                let context = Context {
+                let mut context = Context {
                     module,
                     function,
                     block,
                     structs: &structs,
+                    state: &mut state,
                 };
 
                 for instr in &block.instrs {
-                    self.handle_instruction(instr, context);
+                    self.handle_instruction(instr, &mut context);
                 }
-                self.handle_terminator(&block.term, context)
+                self.handle_terminator(&block.term, &mut context)
             }
         }
     }
@@ -75,6 +102,9 @@ pub enum VarIdent<'a> {
     },
     Global {
         name: &'a Name,
+    },
+    Fresh {
+        index: usize,
     },
 }
 
@@ -92,6 +122,7 @@ impl<'a> Display for VarIdent<'a> {
         match self {
             VarIdent::Local { reg_name, fun_name } => write!(f, "{reg_name}@{fun_name}"),
             VarIdent::Global { name } => write!(f, "{name}"),
+            VarIdent::Fresh { index } => write!(f, "fresh_{index}"),
         }
     }
 }
@@ -186,7 +217,7 @@ pub enum PointerInstruction<'a> {
         dest: VarIdent<'a>,
         address: VarIdent<'a>,
         indices: Vec<usize>,
-        struct_type: Rc<StructType>,
+        struct_type: Option<Rc<StructType>>, // If none, perform 'flat' gep
     },
     /// x = \phi(y1, y2, ..)
     Phi {
@@ -208,6 +239,20 @@ pub struct PointerContext<'a> {
     pub fun_name: &'a str,
 }
 
+#[derive(Clone, Debug)]
+pub struct PointerState<'a> {
+    pub original_ptr_types: HashMap<VarIdent<'a>, Rc<StructType>>,
+    pub fresh_counter: usize,
+}
+
+fn add_fresh_ident<'a>(state: &mut PointerState<'a>) -> VarIdent<'a> {
+    let ident = VarIdent::Fresh {
+        index: state.fresh_counter,
+    };
+    state.fresh_counter = state.fresh_counter + 1;
+    ident
+}
+
 pub trait PointerModuleVisitor<'a> {
     fn handle_ptr_function(&mut self, name: &'a str, parameters: Vec<VarIdent<'a>>);
     fn handle_ptr_global(&mut self, ident: VarIdent<'a>, init_ref: Option<VarIdent<'a>>);
@@ -222,10 +267,9 @@ pub trait PointerModuleVisitor<'a> {
         function: &'a Either<InlineAssembly, Operand>,
         arguments: &'a [(Operand, Vec<ParameterAttribute>)],
         dest: Option<&'a Name>,
-        Context {
-            function: caller, ..
-        }: Context<'a, '_>,
+        context: &mut Context<'a, '_, PointerState>,
     ) {
+        let caller = context.function;
         // TODO: Filter out irrelevant function calls
         let (function, ty) = match function {
             Either::Right(Operand::ConstantOperand(name_ref)) => match name_ref.as_ref() {
@@ -273,6 +317,15 @@ pub trait PointerModuleVisitor<'a> {
 }
 
 impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
+    type State = PointerState<'a>;
+
+    fn init_state() -> Self::State {
+        PointerState::<'a> {
+            original_ptr_types: HashMap::new(),
+            fresh_counter: 0,
+        }
+    }
+
     fn handle_function(&mut self, function: &'a Function, _module: &'a Module) {
         let parameters = function
             .parameters
@@ -298,8 +351,9 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
     fn handle_instruction(
         &mut self,
         instr: &'a Instruction,
-        context @ Context { function, .. }: Context<'a, '_>,
+        context: &mut Context<'a, '_, PointerState<'a>>,
     ) {
+        let function = context.function;
         let pointer_context = PointerContext {
             fun_name: &function.name,
         };
@@ -319,10 +373,21 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
 
             Instruction::BitCast(BitCast { operand, dest, .. })
             | Instruction::AddrSpaceCast(AddrSpaceCast { operand, dest, .. }) => {
-                if let Some((value, _, _)) = get_operand_ident_type(operand, function) {
-                    let dest = VarIdent::new_local(dest, function);
+                if let Some((value, src_ty, _)) = get_operand_ident_type(operand, function) {
+                    let dest = VarIdent::<'a>::new_local(dest, function);
                     let instr = PointerInstruction::Assign { dest, value };
                     self.handle_ptr_instruction(instr, pointer_context);
+                    if let Some(typ) = context.state.original_ptr_types.get(&value) {
+                        context.state.original_ptr_types.insert(dest, typ.clone());
+                    } else {
+                        match get_struct_type(src_ty, context) {
+                            Some(struct_ty) => {
+                                context.state.original_ptr_types.insert(dest, struct_ty);
+                                ()
+                            }
+                            None => (),
+                        }
+                    }
                 };
             }
 
@@ -368,7 +433,7 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
                             dest,
                             address,
                             indices: reduced_indices,
-                            struct_type: struct_type,
+                            struct_type: Some(struct_type),
                         }
                     }
 
@@ -431,7 +496,60 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
                 arguments,
                 dest,
                 ..
-            }) => self.handle_call(callee, arguments, dest.as_ref(), context),
+            }) => {
+                // Special behavior for struct assignments (that are compiled to memcpy)
+                if let Either::Right(Operand::ConstantOperand(constant)) = callee {
+                    if let Constant::GlobalReference {
+                        name: Name::Name(name),
+                        ..
+                    } = constant.as_ref()
+                    {
+                        if name.as_ref() == "llvm.memcpy.p0i8.p0i8.i64" {
+                            match (
+                                get_original_type(&arguments[0].0, function, context.state),
+                                get_original_type(&arguments[1].0, function, context.state),
+                            ) {
+                                // Assume src_ty and dst_ty are same
+                                (Some((dst_ident, _)), Some((src_ident, src_ty))) => {
+                                    let num_cells =
+                                        count_struct_cells(src_ty.as_ref(), pointer_context);
+                                    for i in 0..num_cells {
+                                        let src_gep_ident = add_fresh_ident(context.state);
+                                        let dst_gep_ident = add_fresh_ident(context.state);
+                                        let src_load_ident = add_fresh_ident(context.state);
+                                        let src_gep = PointerInstruction::Gep {
+                                            dest: src_gep_ident,
+                                            address: src_ident,
+                                            indices: vec![i],
+                                            struct_type: None,
+                                        };
+                                        let dst_gep = PointerInstruction::Gep {
+                                            dest: dst_gep_ident,
+                                            address: dst_ident,
+                                            indices: vec![i],
+                                            struct_type: None,
+                                        };
+                                        let src_load = PointerInstruction::Load {
+                                            dest: src_load_ident,
+                                            address: src_gep_ident,
+                                        };
+                                        let dst_store = PointerInstruction::Store {
+                                            address: dst_gep_ident,
+                                            value: src_load_ident,
+                                        };
+                                        self.handle_ptr_instruction(src_gep, pointer_context);
+                                        self.handle_ptr_instruction(dst_gep, pointer_context);
+                                        self.handle_ptr_instruction(src_load, pointer_context);
+                                        self.handle_ptr_instruction(dst_store, pointer_context);
+                                    }
+                                }
+                                _ => (),
+                            }
+                        }
+                    }
+                }
+                self.handle_call(callee, arguments, dest.as_ref(), context)
+            }
 
             // Instruction::VAArg(_) => todo!(),
             _ => {}
@@ -441,11 +559,9 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
     fn handle_terminator(
         &mut self,
         term: &'a Terminator,
-        context @ Context {
-            function: context_fun,
-            ..
-        }: Context<'a, '_>,
+        context: &mut Context<'a, '_, PointerState>,
     ) {
+        let context_fun = context.function;
         let pointer_context = PointerContext {
             fun_name: &context_fun.name,
         };
@@ -512,8 +628,12 @@ fn get_operand_ident_type<'a>(
     }
 }
 
-fn get_struct_type<'a>(ty: &'a TypeRef, context: Context<'a, '_>) -> Option<Rc<StructType>> {
-    match ty.as_ref() {
+fn get_struct_type<'a>(
+    ty: &'a TypeRef,
+    context: &mut Context<'a, '_, PointerState>,
+) -> Option<Rc<StructType>> {
+    let (stripped_ty, _) = strip_array_types(ty);
+    match stripped_ty.as_ref() {
         Type::NamedStructType { name } => context.structs.get(name).cloned(),
         _ => None,
     }
@@ -534,4 +654,30 @@ fn get_struct_from_name<'a>(name: &str, Module { types, .. }: &'a Module) -> Opt
         NamedStructDef::Opaque => None,
         NamedStructDef::Defined(ty) => Some(ty),
     })
+}
+
+fn get_original_type<'a>(
+    operand: &'a Operand,
+    function: &'a Function,
+    state: &PointerState<'a>,
+) -> Option<(VarIdent<'a>, Rc<StructType>)> {
+    if let Some((ident, _, _)) = get_operand_ident_type(operand, function) {
+        if let Some(orig_ty) = state.original_ptr_types.get(&ident) {
+            return Some((ident, orig_ty.clone()));
+        }
+    }
+    None
+}
+
+pub fn count_struct_cells(struct_type: &StructType, context: PointerContext) -> usize {
+    let mut num_sub_cells = 0;
+
+    for field in &struct_type.fields {
+        num_sub_cells += match field {
+            Some(f) => count_struct_cells(f, context),
+            None => 1,
+        };
+    }
+
+    num_sub_cells
 }
