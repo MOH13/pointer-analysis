@@ -4,10 +4,11 @@ use hashbrown::HashMap;
 use llvm_ir::Module;
 
 use crate::cstr;
-use crate::module_visitor::{
-    count_flattened_fields, ModuleVisitor, PointerContext, PointerInstruction,
-    PointerModuleVisitor, StructType, VarIdent,
+use crate::module_visitor::pointer::{
+    PointerContext, PointerInstruction, PointerModuleObserver, PointerModuleVisitor,
 };
+use crate::module_visitor::structs::{count_flattened_fields, StructType};
+use crate::module_visitor::{ModuleVisitor, VarIdent};
 use crate::solver::Solver;
 
 pub struct PointsToAnalysis;
@@ -19,15 +20,14 @@ impl PointsToAnalysis {
         S: Solver<Term = Cell<'a>> + 'a,
     {
         let mut pre_analyzer = PointsToPreAnalyzer::new();
-        pre_analyzer.visit_module(module);
+        PointerModuleVisitor::new(&mut pre_analyzer).visit_module(module);
         let cells_copy = pre_analyzer.cells.clone();
 
-        let solver = S::new(pre_analyzer.cells, pre_analyzer.allowed_offsets);
         let mut points_to_solver = PointsToSolver {
-            solver,
+            solver: S::new(pre_analyzer.cells, pre_analyzer.allowed_offsets),
             summaries: pre_analyzer.summaries,
         };
-        points_to_solver.visit_module(module);
+        PointerModuleVisitor::new(&mut points_to_solver).visit_module(module);
 
         let result_map = cells_copy
             .into_iter()
@@ -89,9 +89,6 @@ struct FunctionSummary<'a> {
     return_reg: Option<VarIdent<'a>>,
 }
 
-/// Visits a module and finds all cells in that module.
-/// An allocation site abstraction is used for heap allocations.
-/// TODO: Field sensitivity?
 struct PointsToPreAnalyzer<'a> {
     cells: Vec<Cell<'a>>,
     allowed_offsets: Vec<(Cell<'a>, usize)>,
@@ -139,7 +136,7 @@ impl<'a> PointsToPreAnalyzer<'a> {
     }
 }
 
-impl<'a> PointerModuleVisitor<'a> for PointsToPreAnalyzer<'a> {
+impl<'a> PointerModuleObserver<'a> for PointsToPreAnalyzer<'a> {
     fn handle_ptr_function(&mut self, name: &'a str, parameters: Vec<VarIdent<'a>>) {
         for &param in &parameters {
             self.cells.push(Cell::Var(param));
@@ -206,7 +203,7 @@ struct PointsToSolver<'a, S> {
     summaries: HashMap<&'a str, FunctionSummary<'a>>,
 }
 
-impl<'a, S> PointerModuleVisitor<'a> for PointsToSolver<'a, S>
+impl<'a, S> PointerModuleObserver<'a> for PointsToSolver<'a, S>
 where
     S: Solver<Term = Cell<'a>>,
 {
@@ -231,7 +228,7 @@ where
         }
     }
 
-    fn handle_ptr_instruction(&mut self, instr: PointerInstruction<'a>, context: PointerContext) {
+    fn handle_ptr_instruction(&mut self, instr: PointerInstruction<'a>, _context: PointerContext) {
         match instr {
             PointerInstruction::Assign { dest, value } => {
                 let value_cell = Cell::Var(value);
@@ -310,7 +307,7 @@ where
 
                     for j in 0..i {
                         offset += match &sty.fields[j] {
-                            Some(f) => count_flattened_fields(f, context),
+                            Some(f) => count_flattened_fields(f),
                             None => 1,
                         }
                     }
