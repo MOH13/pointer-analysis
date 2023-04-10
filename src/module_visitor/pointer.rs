@@ -1,5 +1,3 @@
-use std::fmt::{self, Display, Formatter};
-use std::ops::Deref;
 use std::rc::Rc;
 
 use either::Either;
@@ -10,184 +8,12 @@ use llvm_ir::instruction::{
 };
 use llvm_ir::module::GlobalVariable;
 use llvm_ir::terminator::{Invoke, Ret};
-use llvm_ir::types::NamedStructDef;
 use llvm_ir::{
-    constant, BasicBlock, Constant, Function, Instruction, Module, Name, Operand, Terminator, Type,
-    TypeRef,
+    constant, Constant, Function, Instruction, Module, Name, Operand, Terminator, Type, TypeRef,
 };
 
-type StructMap<'a> = HashMap<&'a String, Rc<StructType>>;
-
-pub struct Context<'a, 'b, S> {
-    pub module: &'a Module,
-    pub function: &'a Function,
-    pub block: &'a BasicBlock,
-    pub structs: &'b StructMap<'a>,
-    pub state: &'b mut S,
-}
-
-impl<'a, 'b, S> std::fmt::Debug for Context<'a, 'b, S>
-where
-    S: std::fmt::Debug,
-{
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Context")
-            .field("function", &self.function)
-            .field("block", &self.block)
-            .field("structs", &self.structs)
-            .field("state", &self.state)
-            .finish()
-    }
-}
-
-/// This trait allows implementors to define the `handle_instruction` and `handle_terminator` functions,
-/// which the `visit_module` function will call on all instructions and terminators.
-pub trait ModuleVisitor<'a> {
-    type State;
-
-    fn init_state() -> Self::State;
-    fn handle_function(&mut self, function: &'a Function, module: &'a Module);
-    fn handle_global(&mut self, global: &'a GlobalVariable, structs: &StructMap);
-    fn handle_instruction(
-        &mut self,
-        instr: &'a Instruction,
-        context: &mut Context<'a, '_, Self::State>,
-    );
-    fn handle_terminator(
-        &mut self,
-        term: &'a Terminator,
-        context: &mut Context<'a, '_, Self::State>,
-    );
-
-    fn visit_module(&mut self, module: &'a Module) {
-        let mut state = Self::init_state();
-        let mut structs = HashMap::new();
-        for (name, ty) in module
-            .types
-            .all_struct_names()
-            .filter_map(|name| get_struct_from_name(name, module).map(|t| (name, t)))
-        {
-            StructType::add_to_structs(name, ty, &mut structs, module);
-        }
-
-        for global in &module.global_vars {
-            self.handle_global(global, &structs);
-        }
-
-        for function in &module.functions {
-            self.handle_function(function, module);
-            for block in &function.basic_blocks {
-                let mut context = Context {
-                    module,
-                    function,
-                    block,
-                    structs: &structs,
-                    state: &mut state,
-                };
-
-                for instr in &block.instrs {
-                    self.handle_instruction(instr, &mut context);
-                }
-                self.handle_terminator(&block.term, &mut context)
-            }
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum VarIdent<'a> {
-    Local {
-        reg_name: &'a Name,
-        fun_name: &'a str,
-    },
-    Global {
-        name: &'a Name,
-    },
-    Fresh {
-        index: usize,
-    },
-}
-
-impl<'a> VarIdent<'a> {
-    fn new_local(reg_name: &'a Name, function: &'a Function) -> Self {
-        Self::Local {
-            reg_name,
-            fun_name: &function.name,
-        }
-    }
-}
-
-impl<'a> Display for VarIdent<'a> {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match self {
-            VarIdent::Local { reg_name, fun_name } => write!(f, "{reg_name}@{fun_name}"),
-            VarIdent::Global { name } => write!(f, "{name}"),
-            VarIdent::Fresh { index } => write!(f, "fresh_{index}"),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct StructField {
-    st: Rc<StructType>,
-    degree: usize,
-}
-
-impl Deref for StructField {
-    type Target = StructType;
-
-    fn deref(&self) -> &Self::Target {
-        &self.st
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct StructType {
-    pub fields: Vec<Option<StructField>>,
-}
-
-impl StructType {
-    fn add_to_structs<'a>(
-        name: &'a String,
-        ty: &'a TypeRef,
-        structs: &mut StructMap<'a>,
-        module: &'a Module,
-    ) {
-        let fields = match ty.as_ref() {
-            Type::StructType { element_types, .. } => element_types,
-            _ => panic!("ty should only be a StructType"),
-        };
-        let fields = fields
-            .iter()
-            .map(|f| {
-                let (ty, degree) = strip_array_types(f);
-                match ty.as_ref() {
-                    Type::NamedStructType { name } => Some(StructField {
-                        st: Self::lookup_or_new(name, structs, module),
-                        degree,
-                    }),
-                    _ => None,
-                }
-            })
-            .collect();
-        structs.insert(name, Rc::new(Self { fields }));
-    }
-
-    fn lookup_or_new<'a>(
-        name: &'a String,
-        structs: &mut StructMap<'a>,
-        module: &'a Module,
-    ) -> Rc<StructType> {
-        match structs.get(name) {
-            Some(st) => Rc::clone(st),
-            None => {
-                let ty = get_struct_from_name(name, module).expect("struct was not defined");
-                Self::add_to_structs(name, ty, structs, module);
-                Rc::clone(&structs[name])
-            }
-        }
-    }
-}
+use super::structs::{count_flattened_fields, get_struct_type};
+use super::{strip_array_types, Context, ModuleVisitor, StructMap, StructType, VarIdent};
 
 pub enum PointerInstruction<'a> {
     /// x = y
@@ -239,40 +65,52 @@ pub struct PointerContext<'a> {
     pub fun_name: &'a str,
 }
 
-#[derive(Clone, Debug)]
-pub struct PointerState<'a> {
-    pub original_ptr_types: HashMap<VarIdent<'a>, Rc<StructType>>,
-    pub fresh_counter: usize,
+pub struct PointerModuleVisitor<'a, 'b, O> {
+    original_ptr_types: HashMap<VarIdent<'a>, Rc<StructType>>,
+    fresh_counter: usize,
+    observer: &'b mut O,
 }
 
-fn add_fresh_ident<'a>(state: &mut PointerState<'a>) -> VarIdent<'a> {
-    let ident = VarIdent::Fresh {
-        index: state.fresh_counter,
-    };
-    state.fresh_counter = state.fresh_counter + 1;
-    ident
-}
+impl<'a, 'b, O> PointerModuleVisitor<'a, 'b, O>
+where
+    O: PointerModuleObserver<'a>,
+{
+    pub fn new(observer: &'b mut O) -> Self {
+        Self {
+            original_ptr_types: HashMap::new(),
+            fresh_counter: 0,
+            observer,
+        }
+    }
 
-pub trait PointerModuleVisitor<'a> {
-    fn handle_ptr_function(&mut self, name: &'a str, parameters: Vec<VarIdent<'a>>);
-    fn handle_ptr_global(
-        &mut self,
-        ident: VarIdent<'a>,
-        init_ref: Option<VarIdent<'a>>,
-        struct_type: Option<&StructType>,
-    );
-    fn handle_ptr_instruction(
-        &mut self,
-        instr: PointerInstruction<'a>,
-        context: PointerContext<'a>,
-    );
+    fn add_fresh_ident(&mut self) -> VarIdent<'a> {
+        let ident = VarIdent::Fresh {
+            index: self.fresh_counter,
+        };
+        self.fresh_counter = self.fresh_counter + 1;
+        ident
+    }
+
+    fn get_original_type(
+        &self,
+        operand: &'a Operand,
+        function: &'a Function,
+    ) -> Option<(VarIdent<'a>, Rc<StructType>)> {
+        if let Some((ident, _, _)) = get_operand_ident_type(operand, function) {
+            return self
+                .original_ptr_types
+                .get(&ident)
+                .map(|orig_ty| (ident, orig_ty.clone()));
+        }
+        None
+    }
 
     fn handle_call(
         &mut self,
         function: &'a Either<InlineAssembly, Operand>,
         arguments: &'a [(Operand, Vec<ParameterAttribute>)],
         dest: Option<&'a Name>,
-        context: &mut Context<'a, '_, PointerState>,
+        context: Context<'a, '_>,
     ) {
         let caller = context.function;
         // TODO: Filter out irrelevant function calls
@@ -317,27 +155,22 @@ pub trait PointerModuleVisitor<'a> {
             }
         };
 
-        self.handle_ptr_instruction(instr, context);
+        self.observer.handle_ptr_instruction(instr, context);
     }
 }
 
-impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
-    type State = PointerState<'a>;
-
-    fn init_state() -> Self::State {
-        PointerState::<'a> {
-            original_ptr_types: HashMap::new(),
-            fresh_counter: 0,
-        }
-    }
-
+impl<'a, 'b, O> ModuleVisitor<'a> for PointerModuleVisitor<'a, 'b, O>
+where
+    O: PointerModuleObserver<'a>,
+{
     fn handle_function(&mut self, function: &'a Function, _module: &'a Module) {
         let parameters = function
             .parameters
             .iter()
             .map(|p| VarIdent::new_local(&p.name, function))
             .collect();
-        self.handle_ptr_function(&function.name, parameters)
+        self.observer
+            .handle_ptr_function(&function.name, parameters)
     }
 
     fn handle_global(&mut self, global: &'a GlobalVariable, structs: &StructMap) {
@@ -349,18 +182,14 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
                 _ => None,
             });
         let struct_type = get_struct_type(&global.ty, structs);
-        self.handle_ptr_global(
+        self.observer.handle_ptr_global(
             VarIdent::Global { name: &global.name },
             init_ref,
             struct_type.as_deref(),
         );
     }
 
-    fn handle_instruction(
-        &mut self,
-        instr: &'a Instruction,
-        context: &mut Context<'a, '_, PointerState<'a>>,
-    ) {
+    fn handle_instruction(&mut self, instr: &'a Instruction, context: Context<'a, '_>) {
         let function = context.function;
         let pointer_context = PointerContext {
             fun_name: &function.name,
@@ -376,7 +205,7 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
                 let dest = VarIdent::new_local(dest, function);
                 let struct_type = get_struct_type(allocated_type, context.structs);
                 let instr = PointerInstruction::Alloca { dest, struct_type };
-                self.handle_ptr_instruction(instr, pointer_context);
+                self.observer.handle_ptr_instruction(instr, pointer_context);
             }
 
             Instruction::BitCast(BitCast { operand, dest, .. })
@@ -384,11 +213,11 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
                 if let Some((value, src_ty, _)) = get_operand_ident_type(operand, function) {
                     let dest = VarIdent::new_local(dest, function);
                     let instr = PointerInstruction::Assign { dest, value };
-                    self.handle_ptr_instruction(instr, pointer_context);
-                    if let Some(typ) = context.state.original_ptr_types.get(&value) {
-                        context.state.original_ptr_types.insert(dest, typ.clone());
+                    self.observer.handle_ptr_instruction(instr, pointer_context);
+                    if let Some(typ) = self.original_ptr_types.get(&value) {
+                        self.original_ptr_types.insert(dest, typ.clone());
                     } else if let Some(struct_ty) = get_struct_type(src_ty, context.structs) {
-                        context.state.original_ptr_types.insert(dest, struct_ty);
+                        self.original_ptr_types.insert(dest, struct_ty);
                     }
                 };
             }
@@ -445,7 +274,7 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
                     },
                 };
 
-                self.handle_ptr_instruction(instr, pointer_context);
+                self.observer.handle_ptr_instruction(instr, pointer_context);
             }
 
             // Instruction::IntToPtr(_) => todo!(),
@@ -465,7 +294,7 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
                     dest,
                     incoming_values,
                 };
-                self.handle_ptr_instruction(instr, pointer_context);
+                self.observer.handle_ptr_instruction(instr, pointer_context);
             }
 
             Instruction::Load(Load { address, dest, .. }) => {
@@ -473,7 +302,7 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
                     Some((address, address_ty, _)) if is_ptr_type(address_ty) => {
                         let dest = VarIdent::new_local(dest, function);
                         let instr = PointerInstruction::Load { dest, address };
-                        self.handle_ptr_instruction(instr, pointer_context);
+                        self.observer.handle_ptr_instruction(instr, pointer_context);
                     }
                     _ => {}
                 }
@@ -487,7 +316,7 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
                 };
                 if let Some((address, _, _)) = get_operand_ident_type(address, function) {
                     let instr = PointerInstruction::Store { address, value };
-                    self.handle_ptr_instruction(instr, pointer_context);
+                    self.observer.handle_ptr_instruction(instr, pointer_context);
                 }
             }
 
@@ -508,17 +337,16 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
                     {
                         if name.as_ref() == "llvm.memcpy.p0i8.p0i8.i64" {
                             match (
-                                get_original_type(&arguments[0].0, function, context.state),
-                                get_original_type(&arguments[1].0, function, context.state),
+                                self.get_original_type(&arguments[0].0, function),
+                                self.get_original_type(&arguments[1].0, function),
                             ) {
                                 // Assume src_ty and dst_ty are same
                                 (Some((dst_ident, _)), Some((src_ident, src_ty))) => {
-                                    let num_cells =
-                                        count_flattened_fields(src_ty.as_ref(), pointer_context);
+                                    let num_cells = count_flattened_fields(src_ty.as_ref());
                                     for i in 0..num_cells {
-                                        let src_gep_ident = add_fresh_ident(context.state);
-                                        let dst_gep_ident = add_fresh_ident(context.state);
-                                        let src_load_ident = add_fresh_ident(context.state);
+                                        let src_gep_ident = self.add_fresh_ident();
+                                        let dst_gep_ident = self.add_fresh_ident();
+                                        let src_load_ident = self.add_fresh_ident();
                                         let src_gep = PointerInstruction::Gep {
                                             dest: src_gep_ident,
                                             address: src_ident,
@@ -539,10 +367,14 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
                                             address: dst_gep_ident,
                                             value: src_load_ident,
                                         };
-                                        self.handle_ptr_instruction(src_gep, pointer_context);
-                                        self.handle_ptr_instruction(dst_gep, pointer_context);
-                                        self.handle_ptr_instruction(src_load, pointer_context);
-                                        self.handle_ptr_instruction(dst_store, pointer_context);
+                                        self.observer
+                                            .handle_ptr_instruction(src_gep, pointer_context);
+                                        self.observer
+                                            .handle_ptr_instruction(dst_gep, pointer_context);
+                                        self.observer
+                                            .handle_ptr_instruction(src_load, pointer_context);
+                                        self.observer
+                                            .handle_ptr_instruction(dst_store, pointer_context);
                                     }
                                 }
                                 _ => (),
@@ -558,11 +390,7 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
         }
     }
 
-    fn handle_terminator(
-        &mut self,
-        term: &'a Terminator,
-        context: &mut Context<'a, '_, PointerState>,
-    ) {
+    fn handle_terminator(&mut self, term: &'a Terminator, context: Context<'a, '_>) {
         let context_fun = context.function;
         let pointer_context = PointerContext {
             fun_name: &context_fun.name,
@@ -585,12 +413,27 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
                 };
 
                 let instr = PointerInstruction::Return { return_reg };
-                self.handle_ptr_instruction(instr, pointer_context);
+                self.observer.handle_ptr_instruction(instr, pointer_context);
             }
 
             _ => {}
         }
     }
+}
+
+pub trait PointerModuleObserver<'a> {
+    fn handle_ptr_function(&mut self, name: &'a str, parameters: Vec<VarIdent<'a>>);
+    fn handle_ptr_global(
+        &mut self,
+        ident: VarIdent<'a>,
+        init_ref: Option<VarIdent<'a>>,
+        struct_type: Option<&StructType>,
+    );
+    fn handle_ptr_instruction(
+        &mut self,
+        instr: PointerInstruction<'a>,
+        context: PointerContext<'a>,
+    );
 }
 
 fn is_ptr_type(ty: &TypeRef) -> bool {
@@ -628,56 +471,4 @@ fn get_operand_ident_type<'a>(
         },
         Operand::MetadataOperand => None,
     }
-}
-
-fn get_struct_type<'a>(ty: &'a TypeRef, structs: &StructMap) -> Option<Rc<StructType>> {
-    let (stripped_ty, _) = strip_array_types(ty);
-    match stripped_ty.as_ref() {
-        Type::NamedStructType { name } => structs.get(name).cloned(),
-        _ => None,
-    }
-}
-
-fn strip_array_types(ty: &TypeRef) -> (&TypeRef, usize) {
-    match ty.as_ref() {
-        Type::ArrayType { element_type, .. } | Type::VectorType { element_type, .. } => {
-            let (ty, degree) = strip_array_types(element_type);
-            (ty, degree + 1)
-        }
-        _ => (ty, 0),
-    }
-}
-
-fn get_struct_from_name<'a>(name: &str, Module { types, .. }: &'a Module) -> Option<&'a TypeRef> {
-    types.named_struct_def(name).and_then(|def| match def {
-        NamedStructDef::Opaque => None,
-        NamedStructDef::Defined(ty) => Some(ty),
-    })
-}
-
-fn get_original_type<'a>(
-    operand: &'a Operand,
-    function: &'a Function,
-    state: &PointerState<'a>,
-) -> Option<(VarIdent<'a>, Rc<StructType>)> {
-    if let Some((ident, _, _)) = get_operand_ident_type(operand, function) {
-        return state
-            .original_ptr_types
-            .get(&ident)
-            .map(|orig_ty| (ident, orig_ty.clone()));
-    }
-    None
-}
-
-pub fn count_flattened_fields(struct_type: &StructType, context: PointerContext) -> usize {
-    let mut num_sub_cells = 0;
-
-    for field in &struct_type.fields {
-        num_sub_cells += match field {
-            Some(f) => count_flattened_fields(f, context),
-            None => 1,
-        };
-    }
-
-    num_sub_cells
 }
