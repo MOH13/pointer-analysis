@@ -107,38 +107,32 @@ impl<'a> PointsToPreAnalyzer<'a> {
         }
     }
 
-    fn add_stack_cells(
-        &mut self,
-        stack_cell: Cell<'a>,
-        struct_type: Option<&StructType>,
-        context: PointerContext<'a>,
-    ) -> usize {
+    fn add_struct_cells(&mut self, base_cell: Cell<'a>, struct_type: Option<&StructType>) -> usize {
         match struct_type {
             Some(StructType { fields }) => {
                 let mut num_sub_cells = 0;
 
                 for (i, field) in fields.iter().enumerate() {
-                    let offset_cell = Cell::Offset(Box::new(stack_cell.clone()), i);
-                    num_sub_cells += self.add_stack_cells(offset_cell, field.as_deref(), context);
+                    let offset_cell = Cell::Offset(Box::new(base_cell.clone()), i);
+                    num_sub_cells += self.add_struct_cells(offset_cell, field.as_deref());
                 }
 
                 num_sub_cells
             }
 
             None => {
-                self.cells.push(stack_cell);
+                self.cells.push(base_cell);
                 1
             }
         }
     }
 
-    fn add_stack_cells_and_allowed_offsets(
+    fn add_struct_cells_and_allowed_offsets(
         &mut self,
-        ident: VarIdent<'a>,
+        base_cell: Cell<'a>,
         struct_type: Option<&StructType>,
-        context: PointerContext<'a>,
     ) {
-        let added = self.add_stack_cells(Cell::Stack(ident), struct_type, context);
+        let added = self.add_struct_cells(base_cell, struct_type);
         for (i, cell) in self.cells.iter().rev().take(added).enumerate() {
             self.allowed_offsets.push((cell.clone(), i));
         }
@@ -158,9 +152,14 @@ impl<'a> PointerModuleVisitor<'a> for PointsToPreAnalyzer<'a> {
         self.summaries.insert(name, summary);
     }
 
-    fn handle_ptr_global(&mut self, ident: VarIdent<'a>, _init_ref: Option<VarIdent<'a>>) {
+    fn handle_ptr_global(
+        &mut self,
+        ident: VarIdent<'a>,
+        _init_ref: Option<VarIdent<'a>>,
+        struct_type: Option<&StructType>,
+    ) {
         self.cells.push(Cell::Var(ident));
-        self.cells.push(Cell::Global(ident));
+        self.add_struct_cells_and_allowed_offsets(Cell::Global(ident), struct_type);
     }
 
     fn handle_ptr_instruction(
@@ -179,7 +178,10 @@ impl<'a> PointerModuleVisitor<'a> for PointsToPreAnalyzer<'a> {
 
             PointerInstruction::Alloca { dest, struct_type } => {
                 self.cells.push(Cell::Var(dest));
-                self.add_stack_cells_and_allowed_offsets(dest, struct_type.as_deref(), context);
+                self.add_struct_cells_and_allowed_offsets(
+                    Cell::Stack(dest),
+                    struct_type.as_deref(),
+                );
             }
 
             PointerInstruction::Malloc { dest } => {
@@ -210,7 +212,12 @@ where
 {
     fn handle_ptr_function(&mut self, _name: &str, _parameters: Vec<VarIdent>) {}
 
-    fn handle_ptr_global(&mut self, ident: VarIdent<'a>, init_ref: Option<VarIdent<'a>>) {
+    fn handle_ptr_global(
+        &mut self,
+        ident: VarIdent<'a>,
+        init_ref: Option<VarIdent<'a>>,
+        _struct_type: Option<&StructType>,
+    ) {
         let global_cell = Cell::Global(ident);
         let var_cell = Cell::Var(ident);
         let c = cstr!(global_cell in var_cell);
