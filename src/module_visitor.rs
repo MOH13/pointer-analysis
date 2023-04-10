@@ -374,19 +374,13 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
             Instruction::BitCast(BitCast { operand, dest, .. })
             | Instruction::AddrSpaceCast(AddrSpaceCast { operand, dest, .. }) => {
                 if let Some((value, src_ty, _)) = get_operand_ident_type(operand, function) {
-                    let dest = VarIdent::<'a>::new_local(dest, function);
+                    let dest = VarIdent::new_local(dest, function);
                     let instr = PointerInstruction::Assign { dest, value };
                     self.handle_ptr_instruction(instr, pointer_context);
                     if let Some(typ) = context.state.original_ptr_types.get(&value) {
                         context.state.original_ptr_types.insert(dest, typ.clone());
-                    } else {
-                        match get_struct_type(src_ty, context) {
-                            Some(struct_ty) => {
-                                context.state.original_ptr_types.insert(dest, struct_ty);
-                                ()
-                            }
-                            None => (),
-                        }
+                    } else if let Some(struct_ty) = get_struct_type(src_ty, context) {
+                        context.state.original_ptr_types.insert(dest, struct_ty);
                     }
                 };
             }
@@ -512,7 +506,7 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
                                 // Assume src_ty and dst_ty are same
                                 (Some((dst_ident, _)), Some((src_ident, src_ty))) => {
                                     let num_cells =
-                                        count_struct_cells(src_ty.as_ref(), pointer_context);
+                                        count_flattened_fields(src_ty.as_ref(), pointer_context);
                                     for i in 0..num_cells {
                                         let src_gep_ident = add_fresh_ident(context.state);
                                         let dst_gep_ident = add_fresh_ident(context.state);
@@ -662,19 +656,20 @@ fn get_original_type<'a>(
     state: &PointerState<'a>,
 ) -> Option<(VarIdent<'a>, Rc<StructType>)> {
     if let Some((ident, _, _)) = get_operand_ident_type(operand, function) {
-        if let Some(orig_ty) = state.original_ptr_types.get(&ident) {
-            return Some((ident, orig_ty.clone()));
-        }
+        return state
+            .original_ptr_types
+            .get(&ident)
+            .map(|orig_ty| (ident, orig_ty.clone()));
     }
     None
 }
 
-pub fn count_struct_cells(struct_type: &StructType, context: PointerContext) -> usize {
+pub fn count_flattened_fields(struct_type: &StructType, context: PointerContext) -> usize {
     let mut num_sub_cells = 0;
 
     for field in &struct_type.fields {
         num_sub_cells += match field {
-            Some(f) => count_struct_cells(f, context),
+            Some(f) => count_flattened_fields(f, context),
             None => 1,
         };
     }

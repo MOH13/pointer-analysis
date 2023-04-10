@@ -5,8 +5,8 @@ use llvm_ir::Module;
 
 use crate::cstr;
 use crate::module_visitor::{
-    count_struct_cells, ModuleVisitor, PointerContext, PointerInstruction, PointerModuleVisitor,
-    StructType, VarIdent,
+    count_flattened_fields, ModuleVisitor, PointerContext, PointerInstruction,
+    PointerModuleVisitor, StructType, VarIdent,
 };
 use crate::solver::Solver;
 
@@ -303,7 +303,7 @@ where
 
                     for j in 0..i {
                         offset += match &sty.fields[j] {
-                            Some(f) => count_struct_cells(f, context),
+                            Some(f) => count_flattened_fields(f, context),
                             None => 1,
                         }
                     }
