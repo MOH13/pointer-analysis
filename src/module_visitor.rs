@@ -47,7 +47,7 @@ pub trait ModuleVisitor<'a> {
 
     fn init_state() -> Self::State;
     fn handle_function(&mut self, function: &'a Function, module: &'a Module);
-    fn handle_global(&mut self, global: &'a GlobalVariable, module: &'a Module);
+    fn handle_global(&mut self, global: &'a GlobalVariable, structs: &StructMap);
     fn handle_instruction(
         &mut self,
         instr: &'a Instruction,
@@ -71,7 +71,7 @@ pub trait ModuleVisitor<'a> {
         }
 
         for global in &module.global_vars {
-            self.handle_global(global, module);
+            self.handle_global(global, &structs);
         }
 
         for function in &module.functions {
@@ -255,7 +255,12 @@ fn add_fresh_ident<'a>(state: &mut PointerState<'a>) -> VarIdent<'a> {
 
 pub trait PointerModuleVisitor<'a> {
     fn handle_ptr_function(&mut self, name: &'a str, parameters: Vec<VarIdent<'a>>);
-    fn handle_ptr_global(&mut self, ident: VarIdent<'a>, init_ref: Option<VarIdent<'a>>);
+    fn handle_ptr_global(
+        &mut self,
+        ident: VarIdent<'a>,
+        init_ref: Option<VarIdent<'a>>,
+        struct_type: Option<&StructType>,
+    );
     fn handle_ptr_instruction(
         &mut self,
         instr: PointerInstruction<'a>,
@@ -335,17 +340,20 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
         self.handle_ptr_function(&function.name, parameters)
     }
 
-    fn handle_global(&mut self, global: &'a GlobalVariable, _module: &'a Module) {
-        if !global.is_constant {
-            let init_ref = global
-                .initializer
-                .as_ref()
-                .and_then(|init| match init.as_ref() {
-                    Constant::GlobalReference { name, .. } => Some(VarIdent::Global { name }),
-                    _ => None,
-                });
-            self.handle_ptr_global(VarIdent::Global { name: &global.name }, init_ref);
-        }
+    fn handle_global(&mut self, global: &'a GlobalVariable, structs: &StructMap) {
+        let init_ref = global
+            .initializer
+            .as_ref()
+            .and_then(|init| match init.as_ref() {
+                Constant::GlobalReference { name, .. } => Some(VarIdent::Global { name }),
+                _ => None,
+            });
+        let struct_type = get_struct_type(&global.ty, structs);
+        self.handle_ptr_global(
+            VarIdent::Global { name: &global.name },
+            init_ref,
+            struct_type.as_deref(),
+        );
     }
 
     fn handle_instruction(
@@ -366,7 +374,7 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
                 ..
             }) => {
                 let dest = VarIdent::new_local(dest, function);
-                let struct_type = get_struct_type(allocated_type, context);
+                let struct_type = get_struct_type(allocated_type, context.structs);
                 let instr = PointerInstruction::Alloca { dest, struct_type };
                 self.handle_ptr_instruction(instr, pointer_context);
             }
@@ -379,7 +387,7 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
                     self.handle_ptr_instruction(instr, pointer_context);
                     if let Some(typ) = context.state.original_ptr_types.get(&value) {
                         context.state.original_ptr_types.insert(dest, typ.clone());
-                    } else if let Some(struct_ty) = get_struct_type(src_ty, context) {
+                    } else if let Some(struct_ty) = get_struct_type(src_ty, context.structs) {
                         context.state.original_ptr_types.insert(dest, struct_ty);
                     }
                 };
@@ -397,7 +405,7 @@ impl<'a, T: PointerModuleVisitor<'a>> ModuleVisitor<'a> for T {
                 ));
                 let dest = VarIdent::new_local(dest, function);
 
-                let instr = match get_struct_type(ty, context) {
+                let instr = match get_struct_type(ty, context.structs) {
                     Some(struct_type) if indices.len() > degree => {
                         let mut reduced_indices = vec![];
                         let mut sub_struct_type = struct_type.as_ref();
@@ -622,13 +630,10 @@ fn get_operand_ident_type<'a>(
     }
 }
 
-fn get_struct_type<'a>(
-    ty: &'a TypeRef,
-    context: &mut Context<'a, '_, PointerState>,
-) -> Option<Rc<StructType>> {
+fn get_struct_type<'a>(ty: &'a TypeRef, structs: &StructMap) -> Option<Rc<StructType>> {
     let (stripped_ty, _) = strip_array_types(ty);
     match stripped_ty.as_ref() {
-        Type::NamedStructType { name } => context.structs.get(name).cloned(),
+        Type::NamedStructType { name } => structs.get(name).cloned(),
         _ => None,
     }
 }
