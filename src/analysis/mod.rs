@@ -227,7 +227,10 @@ impl<'a> PointerModuleObserver<'a> for PointsToPreAnalyzer<'a> {
             }
 
             PointerInstruction::Return { return_reg } => {
-                self.summaries.entry_ref(context.fun_name).and_modify(|s| {
+                let fun_name = context
+                    .fun_name
+                    .expect("return instructions should only be generated inside functions");
+                self.summaries.entry_ref(fun_name).and_modify(|s| {
                     s.return_reg = Some(return_reg);
                 });
             }

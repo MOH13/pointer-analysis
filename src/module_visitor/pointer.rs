@@ -10,7 +10,8 @@ use llvm_ir::instruction::{
 use llvm_ir::module::GlobalVariable;
 use llvm_ir::terminator::{Invoke, Ret};
 use llvm_ir::{
-    constant, Constant, Function, Instruction, Module, Name, Operand, Terminator, Type, TypeRef,
+    constant, Constant, ConstantRef, Function, Instruction, Module, Name, Operand, Terminator,
+    Type, TypeRef,
 };
 
 use super::structs::{count_flattened_fields, get_struct_type};
@@ -63,7 +64,7 @@ pub enum PointerInstruction<'a> {
 
 #[derive(Clone, Copy)]
 pub struct PointerContext<'a> {
-    pub fun_name: &'a str,
+    pub fun_name: Option<&'a str>,
 }
 
 pub struct PointerModuleVisitor<'a, 'b, O> {
@@ -106,6 +107,70 @@ where
         None
     }
 
+    fn unroll_constant(
+        &mut self,
+        constant: &'a ConstantRef,
+        context: PointerContext<'a>,
+    ) -> VarIdent<'a> {
+        match constant.as_ref() {
+            Constant::Struct {
+                name,
+                values,
+                is_packed,
+            } => todo!(),
+            Constant::Array {
+                element_type,
+                elements,
+            } => todo!(),
+            Constant::Vector(_) => todo!(),
+            Constant::GlobalReference { name, .. } => VarIdent::Global { name: name },
+            Constant::ExtractElement(constant::ExtractElement { vector, .. }) => {
+                self.unroll_constant(vector, context)
+            }
+            Constant::InsertElement(constant::InsertElement {
+                vector, element, ..
+            }) => {
+                let fresh = self.add_fresh_ident();
+                let vector_ident = self.unroll_constant(vector, context);
+                let element_ident = self.unroll_constant(element, context);
+
+                let vector_instr = PointerInstruction::Assign {
+                    dest: fresh,
+                    value: vector_ident,
+                };
+                let element_instr = PointerInstruction::Assign {
+                    dest: fresh,
+                    value: element_ident,
+                };
+                self.observer.handle_ptr_instruction(vector_instr, context);
+                self.observer.handle_ptr_instruction(element_instr, context);
+
+                fresh
+            }
+            Constant::ShuffleVector(_) => todo!(),
+            Constant::ExtractValue(_) => todo!(),
+            Constant::InsertValue(_) => todo!(),
+            Constant::GetElementPtr(_) => todo!(),
+            Constant::Trunc(_) => todo!(),
+            Constant::ZExt(_) => todo!(),
+            Constant::SExt(_) => todo!(),
+            Constant::FPTrunc(_) => todo!(),
+            Constant::FPExt(_) => todo!(),
+            Constant::FPToUI(_) => todo!(),
+            Constant::FPToSI(_) => todo!(),
+            Constant::UIToFP(_) => todo!(),
+            Constant::SIToFP(_) => todo!(),
+            Constant::PtrToInt(_) => todo!(),
+            Constant::IntToPtr(_) => todo!(),
+            Constant::BitCast(_) => todo!(),
+            Constant::AddrSpaceCast(_) => todo!(),
+            Constant::ICmp(_) => todo!(),
+            Constant::FCmp(_) => todo!(),
+            Constant::Select(_) => todo!(),
+            _ => self.add_fresh_ident(),
+        }
+    }
+
     fn handle_call(
         &mut self,
         function: &'a Either<InlineAssembly, Operand>,
@@ -127,7 +192,7 @@ where
         };
 
         let context = PointerContext {
-            fun_name: &caller.name,
+            fun_name: Some(&caller.name),
         };
 
         let dest = match ty.as_ref() {
