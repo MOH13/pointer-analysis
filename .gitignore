@@ -4,3 +4,4 @@ source.ll
 /llvmtemp
 /benchmarks/curl
 /benchmarks/scbf-compiler
+*.bc

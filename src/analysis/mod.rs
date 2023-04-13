@@ -1,4 +1,5 @@
 use std::fmt::{self, Debug, Display, Formatter};
+use std::str::FromStr;
 
 use hashbrown::HashMap;
 use llvm_ir::Module;
@@ -10,6 +11,9 @@ use crate::module_visitor::pointer::{
 use crate::module_visitor::structs::{count_flattened_fields, StructType};
 use crate::module_visitor::{ModuleVisitor, VarIdent};
 use crate::solver::Solver;
+
+#[cfg(test)]
+mod tests;
 
 pub struct PointsToAnalysis;
 
@@ -31,7 +35,6 @@ impl PointsToAnalysis {
 
         let result_map = cells_copy
             .into_iter()
-            .filter(|c| matches!(c, Cell::Stack(..) | Cell::Global(..) | Cell::Offset(..)))
             .map(|c| {
                 let sol = points_to_solver.solver.get_solution(&c);
                 (c, sol)
@@ -41,6 +44,7 @@ impl PointsToAnalysis {
     }
 }
 
+#[derive(Debug)]
 pub struct PointsToResult<'a, S: Solver>(HashMap<Cell<'a>, S::TermSet>);
 
 impl<'a, S> Display for PointsToResult<'a, S>
@@ -49,7 +53,11 @@ where
     S::TermSet: fmt::Debug,
 {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        for (cell, set) in &self.0 {
+        for (cell, set) in self
+            .0
+            .iter()
+            .filter(|(c, _)| matches!(c, Cell::Stack(..) | Cell::Global(..) | Cell::Offset(..)))
+        {
             writeln!(f, "[[{cell}]] = {set:#?}")?;
         }
         Ok(())
@@ -74,6 +82,38 @@ impl<'a> Display for Cell<'a> {
             Self::Heap(ident) => write!(f, "heap-{ident}"),
             Self::Global(ident) => write!(f, "global-{ident}"),
             Self::Offset(sub_cell, offset) => write!(f, "{sub_cell}.{offset}"),
+        }
+    }
+}
+
+fn parse_offset<'a>(s: &str) -> Option<Result<Cell<'a>, String>> {
+    if let Some((l, r)) = s.rsplit_once('.') {
+        match r.parse() {
+            Ok(offset) => Some(
+                l.parse()
+                    .map(|sub_cell| Cell::Offset(Box::new(sub_cell), offset)),
+            ),
+            Err(_) => None,
+        }
+    } else {
+        None
+    }
+}
+
+impl<'a> FromStr for Cell<'a> {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Some(offset_cell_result) = parse_offset(s) {
+            offset_cell_result
+        } else if s.starts_with("stack-") {
+            s["stack-".len()..].parse().map(Self::Stack)
+        } else if s.starts_with("heap-") {
+            s["heap-".len()..].parse().map(Self::Stack)
+        } else if s.starts_with("global-") {
+            s["global-".len()..].parse().map(Self::Global)
+        } else {
+            s.parse().map(Self::Var)
         }
     }
 }
@@ -138,8 +178,8 @@ impl<'a> PointsToPreAnalyzer<'a> {
 
 impl<'a> PointerModuleObserver<'a> for PointsToPreAnalyzer<'a> {
     fn handle_ptr_function(&mut self, name: &'a str, parameters: Vec<VarIdent<'a>>) {
-        for &param in &parameters {
-            self.cells.push(Cell::Var(param));
+        for param in &parameters {
+            self.cells.push(Cell::Var(param.clone()));
         }
 
         let summary = FunctionSummary {
@@ -155,7 +195,7 @@ impl<'a> PointerModuleObserver<'a> for PointsToPreAnalyzer<'a> {
         _init_ref: Option<VarIdent<'a>>,
         struct_type: Option<&StructType>,
     ) {
-        self.cells.push(Cell::Var(ident));
+        self.cells.push(Cell::Var(ident.clone()));
         self.add_struct_cells_and_allowed_offsets(Cell::Global(ident), struct_type);
     }
 
@@ -174,7 +214,7 @@ impl<'a> PointerModuleObserver<'a> for PointsToPreAnalyzer<'a> {
             } => self.cells.push(Cell::Var(dest)),
 
             PointerInstruction::Alloca { dest, struct_type } => {
-                self.cells.push(Cell::Var(dest));
+                self.cells.push(Cell::Var(dest.clone()));
                 self.add_struct_cells_and_allowed_offsets(
                     Cell::Stack(dest),
                     struct_type.as_deref(),
@@ -182,7 +222,7 @@ impl<'a> PointerModuleObserver<'a> for PointsToPreAnalyzer<'a> {
             }
 
             PointerInstruction::Malloc { dest } => {
-                self.cells.push(Cell::Var(dest));
+                self.cells.push(Cell::Var(dest.clone()));
                 self.cells.push(Cell::Heap(dest));
             }
 
@@ -215,8 +255,8 @@ where
         init_ref: Option<VarIdent<'a>>,
         _struct_type: Option<&StructType>,
     ) {
-        let global_cell = Cell::Global(ident);
-        let var_cell = Cell::Var(ident);
+        let global_cell = Cell::Global(ident.clone());
+        let var_cell = Cell::Var(ident.clone());
         let c = cstr!(global_cell in var_cell);
         self.solver.add_constraint(c);
 
@@ -252,7 +292,7 @@ where
             }
 
             PointerInstruction::Alloca { dest, struct_type } => {
-                let mut stack_cell = Cell::Stack(dest);
+                let mut stack_cell = Cell::Stack(dest.clone());
                 let mut struct_type = struct_type.as_deref();
                 while let Some(st) = struct_type {
                     stack_cell = Cell::Offset(Box::new(stack_cell), 0);
@@ -265,7 +305,7 @@ where
             }
 
             PointerInstruction::Malloc { dest } => {
-                let heap_cell = Cell::Heap(dest);
+                let heap_cell = Cell::Heap(dest.clone());
                 let var_cell = Cell::Var(dest);
                 let c = cstr!(heap_cell in var_cell);
                 self.solver.add_constraint(c);
@@ -325,7 +365,7 @@ where
             } => {
                 for value in incoming_values {
                     let value_cell = Cell::Var(value);
-                    let dest_cell = Cell::Var(dest);
+                    let dest_cell = Cell::Var(dest.clone());
                     let c = cstr!(value_cell <= dest_cell);
                     self.solver.add_constraint(c);
                 }
@@ -340,20 +380,20 @@ where
                     Some(s) => s,
                     None => return, // TODO: Handle outside function calls
                 };
-                for (arg, &param) in arguments
+                for (arg, param) in arguments
                     .iter()
                     .zip(&summary.parameters)
-                    .filter_map(|(a, p)| a.map(|a| (a, p)))
+                    .filter_map(|(a, p)| a.as_ref().map(|a| (a, p)))
                 {
-                    let arg_cell = Cell::Var(arg);
-                    let param_cell = Cell::Var(param);
+                    let arg_cell = Cell::Var(arg.clone());
+                    let param_cell = Cell::Var(param.clone());
                     let c = cstr!(arg_cell <= param_cell);
                     self.solver.add_constraint(c);
                 }
 
-                match (summary.return_reg, dest) {
+                match (&summary.return_reg, dest) {
                     (Some(return_name), Some(dest_name)) => {
-                        let return_cell = Cell::Var(return_name);
+                        let return_cell = Cell::Var(return_name.clone());
                         let dest_cell = Cell::Var(dest_name);
                         let c = cstr!(return_cell <= dest_cell);
                         self.solver.add_constraint(c);

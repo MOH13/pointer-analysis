@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::rc::Rc;
 
 use either::Either;
@@ -178,12 +179,16 @@ where
             .initializer
             .as_ref()
             .and_then(|init| match init.as_ref() {
-                Constant::GlobalReference { name, .. } => Some(VarIdent::Global { name }),
+                Constant::GlobalReference { name, .. } => Some(VarIdent::Global {
+                    name: Cow::Borrowed(name),
+                }),
                 _ => None,
             });
         let struct_type = get_struct_type(&global.ty, structs);
         self.observer.handle_ptr_global(
-            VarIdent::Global { name: &global.name },
+            VarIdent::Global {
+                name: Cow::Borrowed(&global.name),
+            },
             init_ref,
             struct_type.as_deref(),
         );
@@ -212,12 +217,15 @@ where
             | Instruction::AddrSpaceCast(AddrSpaceCast { operand, dest, .. }) => {
                 if let Some((value, src_ty, _)) = get_operand_ident_type(operand, function) {
                     let dest = VarIdent::new_local(dest, function);
-                    let instr = PointerInstruction::Assign { dest, value };
+                    let instr = PointerInstruction::Assign {
+                        dest: dest.clone(),
+                        value: value.clone(),
+                    };
                     self.observer.handle_ptr_instruction(instr, pointer_context);
                     if let Some(typ) = self.original_ptr_types.get(&value) {
-                        self.original_ptr_types.insert(dest, typ.clone());
+                        self.original_ptr_types.insert(dest.clone(), typ.clone());
                     } else if let Some(struct_ty) = get_struct_type(src_ty, context.structs) {
-                        self.original_ptr_types.insert(dest, struct_ty);
+                        self.original_ptr_types.insert(dest.clone(), struct_ty);
                     }
                 };
             }
@@ -348,19 +356,19 @@ where
                                         let dst_gep_ident = self.add_fresh_ident();
                                         let src_load_ident = self.add_fresh_ident();
                                         let src_gep = PointerInstruction::Gep {
-                                            dest: src_gep_ident,
-                                            address: src_ident,
+                                            dest: src_gep_ident.clone(),
+                                            address: src_ident.clone(),
                                             indices: vec![i],
                                             struct_type: None,
                                         };
                                         let dst_gep = PointerInstruction::Gep {
-                                            dest: dst_gep_ident,
-                                            address: dst_ident,
+                                            dest: dst_gep_ident.clone(),
+                                            address: dst_ident.clone(),
                                             indices: vec![i],
                                             struct_type: None,
                                         };
                                         let src_load = PointerInstruction::Load {
-                                            dest: src_load_ident,
+                                            dest: src_load_ident.clone(),
                                             address: src_gep_ident,
                                         };
                                         let dst_store = PointerInstruction::Store {
@@ -457,13 +465,25 @@ fn get_operand_ident_type<'a>(
             }
         }
         Operand::ConstantOperand(constant) => match constant.as_ref() {
-            Constant::GlobalReference { name, ty } => Some((VarIdent::Global { name }, ty, 1)),
+            Constant::GlobalReference { name, ty } => Some((
+                VarIdent::Global {
+                    name: Cow::Borrowed(name),
+                },
+                ty,
+                1,
+            )),
             Constant::BitCast(constant::BitCast { operand, to_type }) => {
                 match (operand.as_ref(), to_type.as_ref()) {
                     (
                         Constant::GlobalReference { name, .. },
                         Type::PointerType { pointee_type, .. },
-                    ) => Some((VarIdent::Global { name: name }, pointee_type, 1)),
+                    ) => Some((
+                        VarIdent::Global {
+                            name: Cow::Borrowed(name),
+                        },
+                        pointee_type,
+                        1,
+                    )),
                     _ => None,
                 }
             }

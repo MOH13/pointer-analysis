@@ -1,3 +1,5 @@
+// Tests multiple functions and flow through function calls
+
 int* id(int* p) {
     int x = 2;
     return p;

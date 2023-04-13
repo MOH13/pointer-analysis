@@ -1,0 +1,19 @@
+{
+    "c_path": "ctest5.c",
+    "points_to": {
+        "global-%a": [],
+        "global-%b": [],
+        "global-%c": [],
+        "global-%gp": [
+            "global-%c"
+        ],
+        "stack-%p@main": [
+            "global-%a",
+            "global-%b",
+            "global-%c"
+        ],
+        "stack-%q@main": [
+            "global-%b"
+        ]
+    }
+}
