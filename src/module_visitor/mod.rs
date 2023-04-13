@@ -1,4 +1,6 @@
+use std::borrow::Cow;
 use std::fmt::{self, Display, Formatter};
+use std::str::FromStr;
 
 use hashbrown::HashMap;
 use llvm_ir::module::GlobalVariable;
@@ -59,14 +61,14 @@ pub trait ModuleVisitor<'a> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum VarIdent<'a> {
     Local {
-        reg_name: &'a Name,
-        fun_name: &'a str,
+        reg_name: Cow<'a, Name>,
+        fun_name: Cow<'a, str>,
     },
     Global {
-        name: &'a Name,
+        name: Cow<'a, Name>,
     },
     Fresh {
         index: usize,
@@ -76,8 +78,8 @@ pub enum VarIdent<'a> {
 impl<'a> VarIdent<'a> {
     fn new_local(reg_name: &'a Name, function: &'a Function) -> Self {
         Self::Local {
-            reg_name,
-            fun_name: &function.name,
+            reg_name: Cow::Borrowed(reg_name),
+            fun_name: Cow::Borrowed(&function.name),
         }
     }
 }
@@ -88,6 +90,32 @@ impl<'a> Display for VarIdent<'a> {
             VarIdent::Local { reg_name, fun_name } => write!(f, "{reg_name}@{fun_name}"),
             VarIdent::Global { name } => write!(f, "{name}"),
             VarIdent::Fresh { index } => write!(f, "fresh_{index}"),
+        }
+    }
+}
+
+impl<'a> FromStr for VarIdent<'a> {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.len() == 0 || !s.starts_with('%') {
+            Err(format!("Could not parse ident '{s}'"))
+        } else {
+            let s: &str = &s[1..];
+            if let Some((reg_name, fun_name)) = s.rsplit_once('@') {
+                let name = match reg_name.parse() {
+                    Ok(index) => Name::Number(index),
+                    Err(_) => Name::Name(Box::new(reg_name.to_owned())),
+                };
+                Ok(VarIdent::Local {
+                    reg_name: Cow::Owned(name),
+                    fun_name: Cow::Owned(fun_name.to_owned()),
+                })
+            } else {
+                Ok(VarIdent::Global {
+                    name: Cow::Owned(Name::Name(Box::new(s.to_owned()))),
+                })
+            }
         }
     }
 }
