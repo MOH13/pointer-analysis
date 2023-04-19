@@ -1,3 +1,5 @@
+// Has a dependency loop between p and q with an offset edge
+
 typedef struct
 {
     int *f1;

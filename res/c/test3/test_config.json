@@ -1,5 +1,5 @@
 {
-    "c_path": "ctest3.c",
+    "c_path": "test3.c",
     "points_to": {
         "stack-%x@main": [],
         "stack-%y@main": [],

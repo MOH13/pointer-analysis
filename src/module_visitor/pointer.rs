@@ -360,12 +360,12 @@ where
 
         let struct_type = get_struct_type(ty, context.structs);
         match struct_type {
-            Some(struct_type) if indices.len() > degree => {
+            Some((struct_type, s_degree)) if indices.len() > degree + s_degree => {
                 let mut reduced_indices = vec![];
                 let mut sub_struct_type = struct_type.as_ref();
                 let mut sub_ty;
                 let mut sub_degree;
-                let mut remaining_indices = &indices[degree..];
+                let mut remaining_indices = &indices[degree + s_degree..];
                 loop {
                     let i = remaining_indices[0]
                         .expect("all indices into structs must be constant i32");
@@ -429,13 +429,19 @@ where
                 }),
                 _ => None,
             });
-        let struct_type = get_struct_type(&global.ty, structs);
+
+        let ty = match global.ty.as_ref() {
+            Type::PointerType { pointee_type, .. } if !global.is_constant => pointee_type,
+            _ => &global.ty,
+        };
+
+        let struct_type = get_struct_type(ty, structs);
         self.observer.handle_ptr_global(
             VarIdent::Global {
                 name: Cow::Borrowed(&global.name),
             },
             init_ref,
-            struct_type.as_deref(),
+            struct_type.map(|(s, _)| s).as_deref(),
         );
     }
 
@@ -501,7 +507,7 @@ where
                 ..
             }) => {
                 let dest = VarIdent::new_local(dest, function);
-                let struct_type = get_struct_type(allocated_type, context.structs);
+                let struct_type = get_struct_type(allocated_type, context.structs).map(|(s, _)| s);
                 let instr = PointerInstruction::Alloca { dest, struct_type };
                 self.observer.handle_ptr_instruction(instr, pointer_context);
             }
@@ -519,7 +525,7 @@ where
                     self.observer.handle_ptr_instruction(instr, pointer_context);
                     if let Some(typ) = self.original_ptr_types.get(&value) {
                         self.original_ptr_types.insert(dest.clone(), typ.clone());
-                    } else if let Some(struct_ty) = get_struct_type(src_ty, context.structs) {
+                    } else if let Some((struct_ty, _)) = get_struct_type(src_ty, context.structs) {
                         self.original_ptr_types.insert(dest.clone(), struct_ty);
                     }
                 };

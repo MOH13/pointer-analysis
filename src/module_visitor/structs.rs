@@ -75,10 +75,13 @@ pub fn count_flattened_fields(struct_type: &StructType) -> usize {
     num_sub_cells
 }
 
-pub fn get_struct_type<'a>(ty: &'a TypeRef, structs: &StructMap<'a>) -> Option<Rc<StructType<'a>>> {
-    let (stripped_ty, _) = strip_array_types(ty);
+pub fn get_struct_type<'a>(
+    ty: &'a TypeRef,
+    structs: &StructMap<'a>,
+) -> Option<(Rc<StructType<'a>>, usize)> {
+    let (stripped_ty, degree) = strip_array_types(ty);
     match stripped_ty.as_ref() {
-        Type::NamedStructType { name } => structs.get(name).cloned(),
+        Type::NamedStructType { name } => structs.get(name).cloned().map(|s| (s, degree)),
         _ => None,
     }
 }

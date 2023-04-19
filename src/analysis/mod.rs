@@ -256,9 +256,12 @@ where
         &mut self,
         ident: VarIdent<'a>,
         init_ref: Option<VarIdent<'a>>,
-        _struct_type: Option<&StructType>,
+        struct_type: Option<&StructType>,
     ) {
-        let global_cell = Cell::Global(ident.clone());
+        let global_cell = match struct_type {
+            Some(_) => Cell::Offset(Box::new(Cell::Global(ident.clone())), 0),
+            None => Cell::Global(ident.clone()),
+        };
         let var_cell = Cell::Var(ident.clone());
         let c = cstr!(global_cell in var_cell);
         self.solver.add_constraint(c);
