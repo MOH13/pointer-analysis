@@ -5,7 +5,8 @@ use either::Either;
 use hashbrown::HashMap;
 use llvm_ir::function::ParameterAttribute;
 use llvm_ir::instruction::{
-    AddrSpaceCast, Alloca, BitCast, Call, GetElementPtr, InlineAssembly, Load, Phi, Store,
+    AddrSpaceCast, Alloca, BitCast, Call, ExtractElement, Freeze, GetElementPtr, InlineAssembly,
+    InsertElement, InsertValue, Load, Phi, Select, ShuffleVector, Store,
 };
 use llvm_ir::module::GlobalVariable;
 use llvm_ir::terminator::{Invoke, Ret};
@@ -36,7 +37,7 @@ pub enum PointerInstruction<'a> {
     /// x = alloca ..
     Alloca {
         dest: VarIdent<'a>,
-        struct_type: Option<Rc<StructType>>,
+        struct_type: Option<Rc<StructType<'a>>>,
     },
     /// x = malloc()
     Malloc { dest: VarIdent<'a> },
@@ -45,7 +46,7 @@ pub enum PointerInstruction<'a> {
         dest: VarIdent<'a>,
         address: VarIdent<'a>,
         indices: Vec<usize>,
-        struct_type: Option<Rc<StructType>>, // If none, perform 'flat' gep
+        struct_type: Option<Rc<StructType<'a>>>, // If none, perform 'flat' gep
     },
     /// x = \phi(y1, y2, ..)
     Phi {
@@ -68,7 +69,7 @@ pub struct PointerContext<'a> {
 }
 
 pub struct PointerModuleVisitor<'a, 'b, O> {
-    original_ptr_types: HashMap<VarIdent<'a>, Rc<StructType>>,
+    original_ptr_types: HashMap<VarIdent<'a>, Rc<StructType<'a>>>,
     fresh_counter: usize,
     observer: &'b mut O,
 }
@@ -94,11 +95,12 @@ where
     }
 
     fn get_original_type(
-        &self,
+        &mut self,
         operand: &'a Operand,
         function: &'a Function,
-    ) -> Option<(VarIdent<'a>, Rc<StructType>)> {
-        if let Some((ident, _, _)) = get_operand_ident_type(operand, function) {
+        context: Context<'a, '_>,
+    ) -> Option<(VarIdent<'a>, Rc<StructType<'a>>)> {
+        if let Some((ident, ..)) = self.get_operand_ident_type(operand, function, context) {
             return self
                 .original_ptr_types
                 .get(&ident)
@@ -110,64 +112,164 @@ where
     fn unroll_constant(
         &mut self,
         constant: &'a ConstantRef,
-        context: PointerContext<'a>,
-    ) -> VarIdent<'a> {
+        context: Context<'a, '_>,
+    ) -> Option<(VarIdent<'a>, &'a TypeRef, usize)> {
+        let pointer_context = PointerContext {
+            fun_name: Some(&context.function.name),
+        };
+
         match constant.as_ref() {
-            Constant::Struct {
-                name,
-                values,
-                is_packed,
-            } => todo!(),
-            Constant::Array {
-                element_type,
-                elements,
-            } => todo!(),
-            Constant::Vector(_) => todo!(),
-            Constant::GlobalReference { name, .. } => VarIdent::Global { name: name },
-            Constant::ExtractElement(constant::ExtractElement { vector, .. }) => {
-                self.unroll_constant(vector, context)
+            Constant::Struct { .. } => {
+                println!("Warning: Unhandled struct initializer");
+                None
             }
+
+            Constant::Array { elements, .. } | Constant::Vector(elements) => {
+                let mut fresh = None;
+                let mut degree = 0;
+                let mut ty = None;
+
+                for element in elements {
+                    let (e, t, d) = match self.unroll_constant(element, context) {
+                        Some(res) => res,
+                        None => continue,
+                    };
+                    (ty, degree) = (Some(t), d);
+
+                    let dest = fresh.get_or_insert_with(|| self.add_fresh_ident()).clone();
+                    let instr = PointerInstruction::Assign { dest, value: e };
+                    self.observer.handle_ptr_instruction(instr, pointer_context);
+                }
+
+                fresh.and_then(|f| ty.map(|t| (f, t, degree + 1)))
+            }
+
+            Constant::GlobalReference { name, ty } => Some((
+                VarIdent::Global {
+                    name: Cow::Borrowed(name),
+                },
+                ty,
+                1,
+            )),
+
+            Constant::ExtractElement(constant::ExtractElement {
+                vector: operand, ..
+            })
+            | Constant::AddrSpaceCast(constant::AddrSpaceCast { operand, .. }) => {
+                self.unroll_constant(operand, context)
+            }
+
+            Constant::BitCast(constant::BitCast { operand, to_type }) => self
+                .unroll_constant(operand, context)
+                .map(|(ident, _, d)| (ident, to_type, d)),
+
             Constant::InsertElement(constant::InsertElement {
-                vector, element, ..
+                vector: x,
+                element: y,
+                ..
+            })
+            | Constant::Select(constant::Select {
+                true_value: x,
+                false_value: y,
+                ..
+            })
+            | Constant::ShuffleVector(constant::ShuffleVector {
+                operand0: x,
+                operand1: y,
+                ..
+            }) => {
+                if let Some((x, tx, dx)) = self.unroll_constant(x, context) {
+                    if let Some((y, _, dy)) = self.unroll_constant(y, context) {
+                        let fresh = self.add_fresh_ident();
+                        self.handle_join(fresh.clone(), x, y, pointer_context);
+                        return Some((fresh, tx, dx.max(dy)));
+                    }
+                }
+
+                None
+            }
+
+            Constant::ExtractValue(constant::ExtractValue { aggregate, indices }) => {
+                if indices.len() != 1 {
+                    println!("Warning: Unhandled ExtractValue");
+                    return None;
+                }
+
+                println!("Warning: Potentially unhandled ExtractValue");
+                self.unroll_constant(aggregate, context)
+            }
+
+            Constant::InsertValue(constant::InsertValue {
+                aggregate,
+                element,
+                indices,
+            }) => {
+                if indices.len() != 1 {
+                    println!("Warning: Unhandled InsertValue");
+                    return None;
+                }
+
+                println!("Warning: Potentially unhandled InsertValue");
+                if let Some((aggregate, ty, d)) = self.unroll_constant(aggregate, context) {
+                    let fresh = self.add_fresh_ident();
+                    if let Some((element, ..)) = self.unroll_constant(element, context) {
+                        self.handle_join(fresh.clone(), aggregate, element, pointer_context);
+                        return Some((fresh, ty, d));
+                    }
+                }
+
+                None
+            }
+
+            Constant::GetElementPtr(constant::GetElementPtr {
+                address, indices, ..
             }) => {
                 let fresh = self.add_fresh_ident();
-                let vector_ident = self.unroll_constant(vector, context);
-                let element_ident = self.unroll_constant(element, context);
+                if let Some((address, ty, degree)) = self.unroll_constant(address, context) {
+                    let indices: Vec<_> = indices
+                        .iter()
+                        .map(|constant| match constant.as_ref() {
+                            Constant::Int { value, .. } => Some(*value as usize),
+                            _ => None,
+                        })
+                        .collect();
 
-                let vector_instr = PointerInstruction::Assign {
-                    dest: fresh,
-                    value: vector_ident,
-                };
-                let element_instr = PointerInstruction::Assign {
-                    dest: fresh,
-                    value: element_ident,
-                };
-                self.observer.handle_ptr_instruction(vector_instr, context);
-                self.observer.handle_ptr_instruction(element_instr, context);
-
-                fresh
+                    let (sub_ty, sub_degree) =
+                        self.handle_gep(fresh.clone(), address, &indices, degree, ty, context);
+                    return Some((fresh, sub_ty, sub_degree + 1));
+                }
+                None
             }
-            Constant::ShuffleVector(_) => todo!(),
-            Constant::ExtractValue(_) => todo!(),
-            Constant::InsertValue(_) => todo!(),
-            Constant::GetElementPtr(_) => todo!(),
-            Constant::Trunc(_) => todo!(),
-            Constant::ZExt(_) => todo!(),
-            Constant::SExt(_) => todo!(),
-            Constant::FPTrunc(_) => todo!(),
-            Constant::FPExt(_) => todo!(),
-            Constant::FPToUI(_) => todo!(),
-            Constant::FPToSI(_) => todo!(),
-            Constant::UIToFP(_) => todo!(),
-            Constant::SIToFP(_) => todo!(),
-            Constant::PtrToInt(_) => todo!(),
-            Constant::IntToPtr(_) => todo!(),
-            Constant::BitCast(_) => todo!(),
-            Constant::AddrSpaceCast(_) => todo!(),
-            Constant::ICmp(_) => todo!(),
-            Constant::FCmp(_) => todo!(),
-            Constant::Select(_) => todo!(),
-            _ => self.add_fresh_ident(),
+
+            Constant::IntToPtr(_) => {
+                println!("Warning: IntToPtr detected");
+                None
+            }
+
+            _ => None,
+        }
+    }
+
+    fn get_operand_ident_type(
+        &mut self,
+        operand: &'a Operand,
+        function: &'a Function,
+        context: Context<'a, '_>,
+    ) -> Option<(VarIdent<'a>, &'a TypeRef, usize)> {
+        match operand {
+            Operand::LocalOperand { name, ty } => {
+                let (ty, degree) = strip_array_types(ty);
+                match ty.as_ref() {
+                    Type::PointerType { pointee_type, .. } => Some((
+                        VarIdent::new_local(name, function),
+                        pointee_type,
+                        degree + 1,
+                    )),
+                    _ => None,
+                }
+            }
+            Operand::ConstantOperand(constant) => self.unroll_constant(constant, context),
+            Operand::MetadataOperand => None,
         }
     }
 
@@ -191,7 +293,7 @@ where
             _ => return,
         };
 
-        let context = PointerContext {
+        let pointer_context = PointerContext {
             fun_name: Some(&caller.name),
         };
 
@@ -211,7 +313,10 @@ where
         } else {
             let arguments = arguments
                 .iter()
-                .map(|(arg, _)| get_operand_ident_type(arg, caller).map(|(ident, _, _)| ident))
+                .map(|(arg, _)| {
+                    self.get_operand_ident_type(arg, caller, context)
+                        .map(|(ident, _, _)| ident)
+                })
                 .collect();
 
             PointerInstruction::Call {
@@ -221,7 +326,82 @@ where
             }
         };
 
-        self.observer.handle_ptr_instruction(instr, context);
+        self.observer.handle_ptr_instruction(instr, pointer_context);
+    }
+
+    fn handle_join(
+        &mut self,
+        dest: VarIdent<'a>,
+        x: VarIdent<'a>,
+        y: VarIdent<'a>,
+        context: PointerContext<'a>,
+    ) {
+        let x_instr = PointerInstruction::Assign {
+            dest: dest.clone(),
+            value: x,
+        };
+        let y_instr = PointerInstruction::Assign { dest, value: y };
+        self.observer.handle_ptr_instruction(x_instr, context);
+        self.observer.handle_ptr_instruction(y_instr, context);
+    }
+
+    fn handle_gep(
+        &mut self,
+        dest: VarIdent<'a>,
+        address: VarIdent<'a>,
+        indices: &[Option<usize>],
+        degree: usize,
+        ty: &'a TypeRef,
+        context: Context<'a, '_>,
+    ) -> (&'a TypeRef, usize) {
+        let pointer_context = PointerContext {
+            fun_name: Some(&context.function.name),
+        };
+
+        let struct_type = get_struct_type(ty, context.structs);
+        match struct_type {
+            Some(struct_type) if indices.len() > degree => {
+                let mut reduced_indices = vec![];
+                let mut sub_struct_type = struct_type.as_ref();
+                let mut sub_ty;
+                let mut sub_degree;
+                let mut remaining_indices = &indices[degree..];
+                loop {
+                    let i = remaining_indices[0]
+                        .expect("all indices into structs must be constant i32");
+                    reduced_indices.push(i);
+
+                    let field = &sub_struct_type.fields[i];
+                    sub_ty = field.ty;
+                    sub_degree = field.degree;
+                    match &field.st {
+                        Some(st) if remaining_indices.len() > field.degree + 1 => {
+                            sub_struct_type = st.as_ref();
+                            remaining_indices = &remaining_indices[field.degree + 1..];
+                        }
+                        _ => break,
+                    }
+                }
+
+                let instr = PointerInstruction::Gep {
+                    dest,
+                    address,
+                    indices: reduced_indices,
+                    struct_type: Some(struct_type),
+                };
+                self.observer.handle_ptr_instruction(instr, pointer_context);
+                (sub_ty, sub_degree)
+            }
+
+            _ => {
+                let instr = PointerInstruction::Assign {
+                    dest,
+                    value: address,
+                };
+                self.observer.handle_ptr_instruction(instr, pointer_context);
+                (ty, degree)
+            }
+        }
     }
 }
 
@@ -262,11 +442,59 @@ where
     fn handle_instruction(&mut self, instr: &'a Instruction, context: Context<'a, '_>) {
         let function = context.function;
         let pointer_context = PointerContext {
-            fun_name: &function.name,
+            fun_name: Some(&function.name),
         };
         match instr {
-            // Instruction::ExtractElement(_) => todo!(),
-            // Instruction::ExtractValue(_) => todo!(),
+            Instruction::ExtractElement(ExtractElement {
+                vector: operand,
+                dest,
+                ..
+            })
+            | Instruction::Freeze(Freeze { operand, dest, .. }) => {
+                if let Some((value, ..)) = self.get_operand_ident_type(operand, function, context) {
+                    let dest = VarIdent::new_local(dest, function);
+                    let instr = PointerInstruction::Assign { dest, value };
+                    self.observer.handle_ptr_instruction(instr, pointer_context);
+                }
+            }
+
+            Instruction::ExtractValue(_) => todo!(),
+
+            Instruction::InsertElement(InsertElement {
+                vector: x,
+                element: y,
+                dest,
+                ..
+            })
+            | Instruction::Select(Select {
+                true_value: x,
+                false_value: y,
+                dest,
+                ..
+            })
+            | Instruction::ShuffleVector(ShuffleVector {
+                operand0: x,
+                operand1: y,
+                dest,
+                ..
+            }) => {
+                if let (Some((x, ..)), Some((y, ..))) = (
+                    self.get_operand_ident_type(x, function, context),
+                    self.get_operand_ident_type(y, function, context),
+                ) {
+                    let dest = VarIdent::new_local(dest, function);
+                    self.handle_join(dest, x, y, pointer_context);
+                }
+            }
+
+            Instruction::InsertValue(InsertValue {
+                aggregate,
+                element,
+                indices,
+                dest,
+                ..
+            }) => todo!(),
+
             Instruction::Alloca(Alloca {
                 dest,
                 allocated_type,
@@ -280,7 +508,9 @@ where
 
             Instruction::BitCast(BitCast { operand, dest, .. })
             | Instruction::AddrSpaceCast(AddrSpaceCast { operand, dest, .. }) => {
-                if let Some((value, src_ty, _)) = get_operand_ident_type(operand, function) {
+                if let Some((value, src_ty, _)) =
+                    self.get_operand_ident_type(operand, function, context)
+                {
                     let dest = VarIdent::new_local(dest, function);
                     let instr = PointerInstruction::Assign {
                         dest: dest.clone(),
@@ -301,56 +531,27 @@ where
                 dest,
                 ..
             }) => {
-                let (address, ty, degree) =
-                    get_operand_ident_type(address, function).expect(&format!(
+                let (address, ty, degree) = self
+                    .get_operand_ident_type(address, function, context)
+                    .expect(&format!(
                     "GEP address should always be a pointer or array of pointers, got {address}"
                 ));
                 let dest = VarIdent::new_local(dest, function);
 
-                let instr = match get_struct_type(ty, context.structs) {
-                    Some(struct_type) if indices.len() > degree => {
-                        let mut reduced_indices = vec![];
-                        let mut sub_struct_type = struct_type.as_ref();
-                        let mut remaining_indices = &indices[degree..];
-                        loop {
-                            // All indices into structs must be constant i32
-                            let i = match &remaining_indices[0] {
-                                Operand::ConstantOperand(c) => match c.as_ref() {
-                                    Constant::Int { value, .. } => *value as usize,
-                                    _ => panic!("All indices into structs should be constant i32"),
-                                },
-                                _ => continue,
-                            };
+                let indices: Vec<_> = indices
+                    .iter()
+                    .map(|op| match op {
+                        Operand::ConstantOperand(constant) => match constant.as_ref() {
+                            Constant::Int { value, .. } => Some(*value as usize),
+                            _ => None,
+                        },
+                        _ => None,
+                    })
+                    .collect();
 
-                            reduced_indices.push(i);
-
-                            match &sub_struct_type.fields[i] {
-                                Some(f) if remaining_indices.len() > f.degree + 1 => {
-                                    sub_struct_type = f;
-                                    remaining_indices = &remaining_indices[f.degree + 1..];
-                                }
-                                _ => break,
-                            }
-                        }
-
-                        PointerInstruction::Gep {
-                            dest,
-                            address,
-                            indices: reduced_indices,
-                            struct_type: Some(struct_type),
-                        }
-                    }
-
-                    _ => PointerInstruction::Assign {
-                        dest,
-                        value: address,
-                    },
-                };
-
-                self.observer.handle_ptr_instruction(instr, pointer_context);
+                self.handle_gep(dest, address, &indices, degree, ty, context);
             }
 
-            // Instruction::IntToPtr(_) => todo!(),
             Instruction::Phi(Phi {
                 incoming_values,
                 dest,
@@ -358,7 +559,7 @@ where
             }) => {
                 let incoming_values = incoming_values
                     .iter()
-                    .filter_map(|(value, _)| get_operand_ident_type(value, function))
+                    .filter_map(|(value, _)| self.get_operand_ident_type(value, function, context))
                     .map(|(name, _, _)| name)
                     .collect();
 
@@ -371,7 +572,7 @@ where
             }
 
             Instruction::Load(Load { address, dest, .. }) => {
-                match get_operand_ident_type(address, function) {
+                match self.get_operand_ident_type(address, function, context) {
                     Some((address, address_ty, _)) if is_ptr_type(address_ty) => {
                         let dest = VarIdent::new_local(dest, function);
                         let instr = PointerInstruction::Load { dest, address };
@@ -383,18 +584,17 @@ where
 
             // *x = y
             Instruction::Store(Store { address, value, .. }) => {
-                let value = match get_operand_ident_type(value, function) {
-                    Some((ident, _, _)) => ident,
+                let value = match self.get_operand_ident_type(value, function, context) {
+                    Some((ident, ..)) => ident,
                     _ => return,
                 };
-                if let Some((address, _, _)) = get_operand_ident_type(address, function) {
+                if let Some((address, ..)) = self.get_operand_ident_type(address, function, context)
+                {
                     let instr = PointerInstruction::Store { address, value };
                     self.observer.handle_ptr_instruction(instr, pointer_context);
                 }
             }
 
-            // Instruction::Select(_) => todo!(),
-            // Instruction::Freeze(_) => todo!(),
             Instruction::Call(Call {
                 function: callee,
                 arguments,
@@ -409,10 +609,9 @@ where
                     } = constant.as_ref()
                     {
                         if name.as_ref() == "llvm.memcpy.p0i8.p0i8.i64" {
-                            match (
-                                self.get_original_type(&arguments[0].0, function),
-                                self.get_original_type(&arguments[1].0, function),
-                            ) {
+                            let arg0 = self.get_original_type(&arguments[0].0, function, context);
+                            let arg1 = self.get_original_type(&arguments[1].0, function, context);
+                            match (arg0, arg1) {
                                 // Assume src_ty and dst_ty are same
                                 (Some((dst_ident, _)), Some((src_ident, src_ty))) => {
                                     let num_cells = count_flattened_fields(src_ty.as_ref());
@@ -458,7 +657,8 @@ where
                 self.handle_call(callee, arguments, dest.as_ref(), context)
             }
 
-            // Instruction::VAArg(_) => todo!(),
+            Instruction::VAArg(_) => println!("Warning: Unhandled VAArg"),
+
             _ => {}
         }
     }
@@ -466,7 +666,7 @@ where
     fn handle_terminator(&mut self, term: &'a Terminator, context: Context<'a, '_>) {
         let context_fun = context.function;
         let pointer_context = PointerContext {
-            fun_name: &context_fun.name,
+            fun_name: Some(&context_fun.name),
         };
         match term {
             Terminator::Invoke(Invoke {
@@ -479,7 +679,7 @@ where
             Terminator::Ret(Ret { return_operand, .. }) => {
                 let return_reg = match return_operand
                     .as_ref()
-                    .and_then(|op| get_operand_ident_type(op, context_fun))
+                    .and_then(|op| self.get_operand_ident_type(op, context_fun, context))
                 {
                     Some((name, _, _)) => name,
                     _ => return,
@@ -511,49 +711,4 @@ pub trait PointerModuleObserver<'a> {
 
 fn is_ptr_type(ty: &TypeRef) -> bool {
     matches!(ty.as_ref(), Type::PointerType { .. })
-}
-
-fn get_operand_ident_type<'a>(
-    operand: &'a Operand,
-    function: &'a Function,
-) -> Option<(VarIdent<'a>, &'a TypeRef, usize)> {
-    match operand {
-        Operand::LocalOperand { name, ty } => {
-            let (ty, degree) = strip_array_types(ty);
-            match ty.as_ref() {
-                Type::PointerType { pointee_type, .. } => Some((
-                    VarIdent::new_local(name, function),
-                    pointee_type,
-                    degree + 1,
-                )),
-                _ => None,
-            }
-        }
-        Operand::ConstantOperand(constant) => match constant.as_ref() {
-            Constant::GlobalReference { name, ty } => Some((
-                VarIdent::Global {
-                    name: Cow::Borrowed(name),
-                },
-                ty,
-                1,
-            )),
-            Constant::BitCast(constant::BitCast { operand, to_type }) => {
-                match (operand.as_ref(), to_type.as_ref()) {
-                    (
-                        Constant::GlobalReference { name, .. },
-                        Type::PointerType { pointee_type, .. },
-                    ) => Some((
-                        VarIdent::Global {
-                            name: Cow::Borrowed(name),
-                        },
-                        pointee_type,
-                        1,
-                    )),
-                    _ => None,
-                }
-            }
-            _ => None,
-        },
-        Operand::MetadataOperand => None,
-    }
 }
