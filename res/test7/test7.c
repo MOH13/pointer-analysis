@@ -1,3 +1,5 @@
+// Test heap cells
+
 #include <stdlib.h>
 
 typedef struct

@@ -1,3 +1,6 @@
+// Cast between one-field struct and int pointer
+// + struct assignment
+
 typedef struct
 {
     int *ptr;

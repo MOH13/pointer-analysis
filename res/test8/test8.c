@@ -1,3 +1,5 @@
+// Test global struct initializers
+
 typedef struct
 {
     int *f1;

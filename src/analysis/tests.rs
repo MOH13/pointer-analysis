@@ -81,6 +81,8 @@ fn run_test_from_source(resource: &str) {
 
     let expected_points_to = parse_points_to(config.points_to);
 
+    dbg!(&expected_points_to);
+
     let PointsToResult(actual_points_to) =
         PointsToAnalysis::run::<GenericSolver<_, BasicHashSolver>>(&module);
 

@@ -1,3 +1,5 @@
+// Simple test with struct assignment
+
 typedef struct my_struct
 {
     int *f1;
@@ -9,6 +11,6 @@ my_struct_t struct_instance;
 void main() {
     my_struct_t a, b;
     int c = 0;
-    a.f1 = &c;
+    a.f2 = &c;
     b = a;
 }
