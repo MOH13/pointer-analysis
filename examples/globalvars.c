@@ -1,10 +1,10 @@
-int** a;
+int **a;
 
-void main()
+int main()
 {
     int b = 2;
-    int* c = &b;
+    int *c = &b;
     a = &c;
 
-    int* d = *a;
+    int *d = *a;
 }

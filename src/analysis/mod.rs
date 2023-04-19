@@ -151,7 +151,7 @@ impl<'a> PointsToPreAnalyzer<'a> {
 
                 for (i, field) in fields.iter().enumerate() {
                     let offset_cell = Cell::Offset(Box::new(base_cell.clone()), i);
-                    num_sub_cells += self.add_struct_cells(offset_cell, field.as_deref());
+                    num_sub_cells += self.add_struct_cells(offset_cell, field.st.as_deref());
                 }
 
                 num_sub_cells
@@ -299,7 +299,7 @@ where
                 let mut struct_type = struct_type.as_deref();
                 while let Some(st) = struct_type {
                     stack_cell = Cell::Offset(Box::new(stack_cell), 0);
-                    struct_type = st.fields[0].as_deref();
+                    struct_type = st.fields[0].st.as_deref();
                 }
 
                 let var_cell = Cell::Var(dest);
@@ -342,14 +342,14 @@ where
                 let mut next_sty = Some(&*struct_type);
                 for i in indices {
                     let sty = next_sty.expect("Gep indices should correspond to struct fields");
-                    next_sty = sty.fields[i].as_deref();
+                    next_sty = sty.fields[i].st.as_deref();
 
                     if i == 0 {
                         continue;
                     }
 
                     for j in 0..i {
-                        offset += match &sty.fields[j] {
+                        offset += match &sty.fields[j].st {
                             Some(f) => count_flattened_fields(f),
                             None => 1,
                         }
