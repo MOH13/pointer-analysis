@@ -435,13 +435,13 @@ where
             _ => &global.ty,
         };
 
-        let struct_type = get_struct_type(ty, structs);
+        let struct_type = get_struct_type(ty, structs).map(|(s, _)| s);
         self.observer.handle_ptr_global(
             VarIdent::Global {
                 name: Cow::Borrowed(&global.name),
             },
             init_ref,
-            struct_type.map(|(s, _)| s).as_deref(),
+            struct_type.as_deref(),
         );
     }
 
