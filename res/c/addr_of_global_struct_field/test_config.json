@@ -1,0 +1,9 @@
+{
+    "c_path": "addr_of_global_struct_field.c",
+    "points_to": {
+        "stack-%c@main": [
+            "global-%b.1"
+        ],
+        "global-%b.0": []
+    }
+}

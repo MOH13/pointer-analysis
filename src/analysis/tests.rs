@@ -58,7 +58,7 @@ fn parse_points_to<'a>(
         .collect()
 }
 
-#[test_resources("res/*/test_config.json")]
+#[test_resources("res/**/test_config.json")]
 fn run_test_from_source(resource: &str) {
     dbg!(resource);
     let config_file = File::open(resource).expect("Could not open file");

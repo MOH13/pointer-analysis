@@ -1,3 +1,5 @@
+// Tests array insensitivity and nested structs
+
 typedef struct
 {
     int *field;

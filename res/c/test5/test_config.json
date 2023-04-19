@@ -1,5 +1,5 @@
 {
-    "c_path": "ctest5.c",
+    "c_path": "test5.c",
     "points_to": {
         "global-%a": [],
         "global-%b": [],
