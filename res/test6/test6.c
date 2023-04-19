@@ -1,3 +1,5 @@
+// Simple test of field sensitivity
+
 #include <stdio.h>
 
 typedef struct my_struct

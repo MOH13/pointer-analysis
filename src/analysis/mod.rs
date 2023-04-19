@@ -109,7 +109,7 @@ impl<'a> FromStr for Cell<'a> {
         } else if s.starts_with("stack-") {
             s["stack-".len()..].parse().map(Self::Stack)
         } else if s.starts_with("heap-") {
-            s["heap-".len()..].parse().map(Self::Stack)
+            s["heap-".len()..].parse().map(Self::Heap)
         } else if s.starts_with("global-") {
             s["global-".len()..].parse().map(Self::Global)
         } else {

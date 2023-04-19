@@ -6,13 +6,15 @@ typedef struct
     int b;
 } st;
 
-void foo(st c) {}
+st foo(st c) { return c; }
 
 int main()
 {
     st d;
+    int e;
+    d.a = &e;
 
-    foo(d);
+    st f = foo(d);
 
     return 0;
 }
