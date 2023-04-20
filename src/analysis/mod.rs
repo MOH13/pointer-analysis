@@ -8,7 +8,7 @@ use crate::cstr;
 use crate::module_visitor::pointer::{
     PointerContext, PointerInstruction, PointerModuleObserver, PointerModuleVisitor,
 };
-use crate::module_visitor::structs::{count_flattened_fields, StructType};
+use crate::module_visitor::structs::{StructMap, StructType};
 use crate::module_visitor::{ModuleVisitor, VarIdent};
 use crate::solver::Solver;
 
@@ -133,7 +133,7 @@ impl<'a> PointsToPreAnalyzer<'a> {
         ident_to_cell: fn(VarIdent<'a>) -> Cell<'a>,
     ) -> usize {
         match struct_type {
-            Some(StructType { fields }) => {
+            Some(StructType { fields, .. }) => {
                 let mut num_sub_cells = 0;
 
                 for (i, field) in fields.iter().enumerate() {
@@ -169,6 +169,10 @@ impl<'a> PointsToPreAnalyzer<'a> {
 }
 
 impl<'a> PointerModuleObserver<'a> for PointsToPreAnalyzer<'a> {
+    fn init(&mut self, structs: &StructMap<'a>) {
+        // TODO
+    }
+
     fn handle_ptr_function(&mut self, name: &'a str, parameters: Vec<VarIdent<'a>>) {
         for param in &parameters {
             self.cells.push(Cell::Var(param.clone()));
@@ -255,6 +259,8 @@ impl<'a, S> PointerModuleObserver<'a> for PointsToSolver<'a, S>
 where
     S: Solver<Term = Cell<'a>>,
 {
+    fn init(&mut self, _structs: &StructMap<'a>) {}
+
     fn handle_ptr_function(&mut self, _name: &str, _parameters: Vec<VarIdent>) {}
 
     fn handle_ptr_global(
@@ -349,7 +355,7 @@ where
 
                     for j in 0..i {
                         offset += match &sty.fields[j].st {
-                            Some(f) => count_flattened_fields(f),
+                            Some(f) => f.size,
                             None => 1,
                         }
                     }
