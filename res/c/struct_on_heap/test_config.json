@@ -1,0 +1,17 @@
+{
+    "c_path": "struct_on_heap.c",
+    "points_to": {
+        "stack-%a@main[0]": [
+            "stack-%x@main"
+        ],
+        "stack-%a@main[1]": [
+            "stack-%y@main"
+        ],
+        "stack-%b@main[0]": [
+            "stack-%x@main"
+        ],
+        "stack-%b@main[1]": [
+            "stack-%y@main"
+        ]
+    }
+}
