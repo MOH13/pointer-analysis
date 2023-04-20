@@ -419,7 +419,7 @@ where
             .handle_ptr_function(&function.name, parameters)
     }
 
-    fn handle_global(&mut self, global: &'a GlobalVariable, structs: &StructMap) {
+    fn handle_global(&mut self, global: &'a GlobalVariable, structs: &StructMap<'a>) {
         let init_ref = global
             .initializer
             .as_ref()
@@ -706,7 +706,7 @@ pub trait PointerModuleObserver<'a> {
         &mut self,
         ident: VarIdent<'a>,
         init_ref: Option<VarIdent<'a>>,
-        struct_type: Option<&StructType>,
+        struct_type: Option<&StructType<'a>>,
     );
     fn handle_ptr_instruction(
         &mut self,

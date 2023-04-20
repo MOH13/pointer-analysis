@@ -1,12 +1,12 @@
 {
     "c_path": "struct_assign.c",
     "points_to": {
-        "stack-%a@main.0": [],
-        "stack-%a@main.1": [
+        "stack-%a@main[0]": [],
+        "stack-%a@main[1]": [
             "stack-%c@main"
         ],
-        "stack-%b@main.0": [],
-        "stack-%b@main.1": [
+        "stack-%b@main[0]": [],
+        "stack-%b@main[1]": [
             "stack-%c@main"
         ],
         "stack-%c@main": []

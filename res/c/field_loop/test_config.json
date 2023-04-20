@@ -2,14 +2,14 @@
     "c_path": "field_loop.c",
     "points_to": {
         "stack-%q@main": [
-            "stack-%a@main.0",
-            "stack-%a@main.1"
+            "stack-%a@main[0]",
+            "stack-%a@main[1]"
         ],
         "stack-%p@main": [
-            "stack-%a@main.0",
-            "stack-%a@main.1"
+            "stack-%a@main[0]",
+            "stack-%a@main[1]"
         ],
-        "stack-%a@main.0": [],
-        "stack-%a@main.1": []
+        "stack-%a@main[0]": [],
+        "stack-%a@main[1]": []
     }
 }
