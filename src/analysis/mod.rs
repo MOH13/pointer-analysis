@@ -115,6 +115,7 @@ struct PointsToPreAnalyzer<'a> {
     cells: Vec<Cell<'a>>,
     allowed_offsets: Vec<(Cell<'a>, usize)>,
     summaries: HashMap<&'a str, FunctionSummary<'a>>,
+    num_cells_per_malloc: usize,
 }
 
 impl<'a> PointsToPreAnalyzer<'a> {
@@ -123,6 +124,7 @@ impl<'a> PointsToPreAnalyzer<'a> {
             cells: vec![],
             allowed_offsets: vec![],
             summaries: HashMap::new(),
+            num_cells_per_malloc: 0,
         }
     }
 
@@ -170,7 +172,8 @@ impl<'a> PointsToPreAnalyzer<'a> {
 
 impl<'a> PointerModuleObserver<'a> for PointsToPreAnalyzer<'a> {
     fn init(&mut self, structs: &StructMap<'a>) {
-        // TODO
+        println!("sdf");
+        self.num_cells_per_malloc = structs.values().map(|st| st.size).max().unwrap_or(0);
     }
 
     fn handle_ptr_function(&mut self, name: &'a str, parameters: Vec<VarIdent<'a>>) {
@@ -220,7 +223,13 @@ impl<'a> PointerModuleObserver<'a> for PointsToPreAnalyzer<'a> {
 
             PointerInstruction::Malloc { dest } => {
                 self.cells.push(Cell::Var(dest.clone()));
-                self.cells.push(Cell::Heap(dest));
+                dbg!(&self.num_cells_per_malloc);
+                for i in 0..self.num_cells_per_malloc {
+                    self.cells.push(Cell::Heap(VarIdent::Offset {
+                        base: Box::new(dest.clone()),
+                        offset: i,
+                    }));
+                }
             }
 
             PointerInstruction::Return { return_reg } => {
@@ -313,7 +322,10 @@ where
             }
 
             PointerInstruction::Malloc { dest } => {
-                let heap_cell = Cell::Heap(dest.clone());
+                let heap_cell = Cell::Heap(VarIdent::Offset {
+                    base: Box::new(dest.clone()),
+                    offset: 0,
+                });
                 let var_cell = Cell::Var(dest);
                 let c = cstr!(heap_cell in var_cell);
                 self.solver.add_constraint(c);

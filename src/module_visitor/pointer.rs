@@ -97,10 +97,9 @@ where
     fn get_original_type(
         &mut self,
         operand: &'a Operand,
-        function: &'a Function,
         context: Context<'a, '_>,
     ) -> Option<(VarIdent<'a>, Rc<StructType<'a>>)> {
-        if let Some((ident, ..)) = self.get_operand_ident_type(operand, function, context) {
+        if let Some((ident, ..)) = self.get_operand_ident_type(operand, context) {
             return self
                 .original_ptr_types
                 .get(&ident)
@@ -253,7 +252,6 @@ where
     fn get_operand_ident_type(
         &mut self,
         operand: &'a Operand,
-        function: &'a Function,
         context: Context<'a, '_>,
     ) -> Option<(VarIdent<'a>, &'a TypeRef, usize)> {
         match operand {
@@ -261,7 +259,7 @@ where
                 let (ty, degree) = strip_array_types(ty);
                 match ty.as_ref() {
                     Type::PointerType { pointee_type, .. } => Some((
-                        VarIdent::new_local(name, function),
+                        VarIdent::new_local(name, context.function),
                         pointee_type,
                         degree + 1,
                     )),
@@ -288,14 +286,63 @@ where
                     name: Name::Name(name),
                     ty,
                 } => (&**name, ty),
-                _ => return,
+                _ => {
+                    println!("Warning: Indirect function call not handled");
+                    return;
+                }
             },
-            _ => return,
+            _ => {
+                println!("Warning: Inline assembly not handled");
+                return;
+            }
         };
 
         let pointer_context = PointerContext {
             fun_name: Some(&caller.name),
         };
+
+        // Special behavior for struct assignments (that are compiled to memcpy)
+        if function == "llvm.memcpy.p0i8.p0i8.i64" {
+            let arg0 = self.get_original_type(&arguments[0].0, context);
+            let arg1 = self.get_original_type(&arguments[1].0, context);
+            // Assume src_ty and dst_ty are same
+            if let (Some((dst_ident, _)), Some((src_ident, src_ty))) = (arg0, arg1) {
+                for i in 0..src_ty.as_ref().size {
+                    let src_gep_ident = self.add_fresh_ident();
+                    let dst_gep_ident = self.add_fresh_ident();
+                    let src_load_ident = self.add_fresh_ident();
+                    let src_gep = PointerInstruction::Gep {
+                        dest: src_gep_ident.clone(),
+                        address: src_ident.clone(),
+                        indices: vec![i],
+                        struct_type: None,
+                    };
+                    let dst_gep = PointerInstruction::Gep {
+                        dest: dst_gep_ident.clone(),
+                        address: dst_ident.clone(),
+                        indices: vec![i],
+                        struct_type: None,
+                    };
+                    let src_load = PointerInstruction::Load {
+                        dest: src_load_ident.clone(),
+                        address: src_gep_ident,
+                    };
+                    let dst_store = PointerInstruction::Store {
+                        address: dst_gep_ident,
+                        value: src_load_ident,
+                    };
+                    self.observer
+                        .handle_ptr_instruction(src_gep, pointer_context);
+                    self.observer
+                        .handle_ptr_instruction(dst_gep, pointer_context);
+                    self.observer
+                        .handle_ptr_instruction(src_load, pointer_context);
+                    self.observer
+                        .handle_ptr_instruction(dst_store, pointer_context);
+                }
+            }
+            return;
+        }
 
         let dest = match ty.as_ref() {
             Type::FuncType { result_type, .. } if is_ptr_type(result_type) => {
@@ -314,7 +361,7 @@ where
             let arguments = arguments
                 .iter()
                 .map(|(arg, _)| {
-                    self.get_operand_ident_type(arg, caller, context)
+                    self.get_operand_ident_type(arg, context)
                         .map(|(ident, _, _)| ident)
                 })
                 .collect();
@@ -461,7 +508,7 @@ where
                 ..
             })
             | Instruction::Freeze(Freeze { operand, dest, .. }) => {
-                if let Some((value, ..)) = self.get_operand_ident_type(operand, function, context) {
+                if let Some((value, ..)) = self.get_operand_ident_type(operand, context) {
                     let dest = VarIdent::new_local(dest, function);
                     let instr = PointerInstruction::Assign { dest, value };
                     self.observer.handle_ptr_instruction(instr, pointer_context);
@@ -489,8 +536,8 @@ where
                 ..
             }) => {
                 if let (Some((x, ..)), Some((y, ..))) = (
-                    self.get_operand_ident_type(x, function, context),
-                    self.get_operand_ident_type(y, function, context),
+                    self.get_operand_ident_type(x, context),
+                    self.get_operand_ident_type(y, context),
                 ) {
                     let dest = VarIdent::new_local(dest, function);
                     self.handle_join(dest, x, y, pointer_context);
@@ -518,9 +565,7 @@ where
 
             Instruction::BitCast(BitCast { operand, dest, .. })
             | Instruction::AddrSpaceCast(AddrSpaceCast { operand, dest, .. }) => {
-                if let Some((value, src_ty, _)) =
-                    self.get_operand_ident_type(operand, function, context)
-                {
+                if let Some((value, src_ty, _)) = self.get_operand_ident_type(operand, context) {
                     let dest = VarIdent::new_local(dest, function);
                     let instr = PointerInstruction::Assign {
                         dest: dest.clone(),
@@ -541,9 +586,9 @@ where
                 dest,
                 ..
             }) => {
-                let (address, ty, degree) = self
-                    .get_operand_ident_type(address, function, context)
-                    .expect(&format!(
+                let (address, ty, degree) =
+                    self.get_operand_ident_type(address, context)
+                        .expect(&format!(
                     "GEP address should always be a pointer or array of pointers, got {address}"
                 ));
                 let dest = VarIdent::new_local(dest, function);
@@ -569,7 +614,7 @@ where
             }) => {
                 let incoming_values = incoming_values
                     .iter()
-                    .filter_map(|(value, _)| self.get_operand_ident_type(value, function, context))
+                    .filter_map(|(value, _)| self.get_operand_ident_type(value, context))
                     .map(|(name, _, _)| name)
                     .collect();
 
@@ -582,7 +627,7 @@ where
             }
 
             Instruction::Load(Load { address, dest, .. }) => {
-                match self.get_operand_ident_type(address, function, context) {
+                match self.get_operand_ident_type(address, context) {
                     Some((address, address_ty, _)) if is_ptr_type(address_ty) => {
                         let dest = VarIdent::new_local(dest, function);
                         let instr = PointerInstruction::Load { dest, address };
@@ -594,12 +639,11 @@ where
 
             // *x = y
             Instruction::Store(Store { address, value, .. }) => {
-                let value = match self.get_operand_ident_type(value, function, context) {
+                let value = match self.get_operand_ident_type(value, context) {
                     Some((ident, ..)) => ident,
                     _ => return,
                 };
-                if let Some((address, ..)) = self.get_operand_ident_type(address, function, context)
-                {
+                if let Some((address, ..)) = self.get_operand_ident_type(address, context) {
                     let instr = PointerInstruction::Store { address, value };
                     self.observer.handle_ptr_instruction(instr, pointer_context);
                 }
@@ -611,70 +655,16 @@ where
                 dest,
                 ..
             }) => {
-                // Special behavior for struct assignments (that are compiled to memcpy)
-                // TODO: refactor
-                if let Either::Right(Operand::ConstantOperand(constant)) = callee {
-                    if let Constant::GlobalReference {
-                        name: Name::Name(name),
-                        ..
-                    } = constant.as_ref()
-                    {
-                        if name.as_ref() == "llvm.memcpy.p0i8.p0i8.i64" {
-                            let arg0 = self.get_original_type(&arguments[0].0, function, context);
-                            let arg1 = self.get_original_type(&arguments[1].0, function, context);
-                            // Assume src_ty and dst_ty are same
-                            if let (Some((dst_ident, _)), Some((src_ident, src_ty))) = (arg0, arg1)
-                            {
-                                for i in 0..src_ty.as_ref().size {
-                                    let src_gep_ident = self.add_fresh_ident();
-                                    let dst_gep_ident = self.add_fresh_ident();
-                                    let src_load_ident = self.add_fresh_ident();
-                                    let src_gep = PointerInstruction::Gep {
-                                        dest: src_gep_ident.clone(),
-                                        address: src_ident.clone(),
-                                        indices: vec![i],
-                                        struct_type: None,
-                                    };
-                                    let dst_gep = PointerInstruction::Gep {
-                                        dest: dst_gep_ident.clone(),
-                                        address: dst_ident.clone(),
-                                        indices: vec![i],
-                                        struct_type: None,
-                                    };
-                                    let src_load = PointerInstruction::Load {
-                                        dest: src_load_ident.clone(),
-                                        address: src_gep_ident,
-                                    };
-                                    let dst_store = PointerInstruction::Store {
-                                        address: dst_gep_ident,
-                                        value: src_load_ident,
-                                    };
-                                    self.observer
-                                        .handle_ptr_instruction(src_gep, pointer_context);
-                                    self.observer
-                                        .handle_ptr_instruction(dst_gep, pointer_context);
-                                    self.observer
-                                        .handle_ptr_instruction(src_load, pointer_context);
-                                    self.observer
-                                        .handle_ptr_instruction(dst_store, pointer_context);
-                                }
-                            }
-                        }
-                    }
-                }
-                self.handle_call(callee, arguments, dest.as_ref(), context)
+                self.handle_call(callee, arguments, dest.as_ref(), context);
             }
-
-            Instruction::VAArg(_) => println!("Warning: Unhandled VAArg"),
 
             _ => {}
         }
     }
 
     fn handle_terminator(&mut self, term: &'a Terminator, context: Context<'a, '_>) {
-        let context_fun = context.function;
         let pointer_context = PointerContext {
-            fun_name: Some(&context_fun.name),
+            fun_name: Some(&context.function.name),
         };
         match term {
             Terminator::Invoke(Invoke {
@@ -687,7 +677,7 @@ where
             Terminator::Ret(Ret { return_operand, .. }) => {
                 let return_reg = match return_operand
                     .as_ref()
-                    .and_then(|op| self.get_operand_ident_type(op, context_fun, context))
+                    .and_then(|op| self.get_operand_ident_type(op, context))
                 {
                     Some((name, _, _)) => name,
                     _ => return,
