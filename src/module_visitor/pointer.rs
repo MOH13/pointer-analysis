@@ -15,7 +15,7 @@ use llvm_ir::{
     Type, TypeRef,
 };
 
-use super::structs::{count_flattened_fields, get_struct_type};
+use super::structs::get_struct_type;
 use super::{strip_array_types, Context, ModuleVisitor, StructMap, StructType, VarIdent};
 
 pub enum PointerInstruction<'a> {
@@ -409,6 +409,10 @@ impl<'a, 'b, O> ModuleVisitor<'a> for PointerModuleVisitor<'a, 'b, O>
 where
     O: PointerModuleObserver<'a>,
 {
+    fn init(&mut self, structs: &StructMap<'a>) {
+        self.observer.init(structs)
+    }
+
     fn handle_function(&mut self, function: &'a Function, _module: &'a Module) {
         let parameters = function
             .parameters
@@ -608,6 +612,7 @@ where
                 ..
             }) => {
                 // Special behavior for struct assignments (that are compiled to memcpy)
+                // TODO: refactor
                 if let Either::Right(Operand::ConstantOperand(constant)) = callee {
                     if let Constant::GlobalReference {
                         name: Name::Name(name),
@@ -617,45 +622,42 @@ where
                         if name.as_ref() == "llvm.memcpy.p0i8.p0i8.i64" {
                             let arg0 = self.get_original_type(&arguments[0].0, function, context);
                             let arg1 = self.get_original_type(&arguments[1].0, function, context);
-                            match (arg0, arg1) {
-                                // Assume src_ty and dst_ty are same
-                                (Some((dst_ident, _)), Some((src_ident, src_ty))) => {
-                                    let num_cells = count_flattened_fields(src_ty.as_ref());
-                                    for i in 0..num_cells {
-                                        let src_gep_ident = self.add_fresh_ident();
-                                        let dst_gep_ident = self.add_fresh_ident();
-                                        let src_load_ident = self.add_fresh_ident();
-                                        let src_gep = PointerInstruction::Gep {
-                                            dest: src_gep_ident.clone(),
-                                            address: src_ident.clone(),
-                                            indices: vec![i],
-                                            struct_type: None,
-                                        };
-                                        let dst_gep = PointerInstruction::Gep {
-                                            dest: dst_gep_ident.clone(),
-                                            address: dst_ident.clone(),
-                                            indices: vec![i],
-                                            struct_type: None,
-                                        };
-                                        let src_load = PointerInstruction::Load {
-                                            dest: src_load_ident.clone(),
-                                            address: src_gep_ident,
-                                        };
-                                        let dst_store = PointerInstruction::Store {
-                                            address: dst_gep_ident,
-                                            value: src_load_ident,
-                                        };
-                                        self.observer
-                                            .handle_ptr_instruction(src_gep, pointer_context);
-                                        self.observer
-                                            .handle_ptr_instruction(dst_gep, pointer_context);
-                                        self.observer
-                                            .handle_ptr_instruction(src_load, pointer_context);
-                                        self.observer
-                                            .handle_ptr_instruction(dst_store, pointer_context);
-                                    }
+                            // Assume src_ty and dst_ty are same
+                            if let (Some((dst_ident, _)), Some((src_ident, src_ty))) = (arg0, arg1)
+                            {
+                                for i in 0..src_ty.as_ref().size {
+                                    let src_gep_ident = self.add_fresh_ident();
+                                    let dst_gep_ident = self.add_fresh_ident();
+                                    let src_load_ident = self.add_fresh_ident();
+                                    let src_gep = PointerInstruction::Gep {
+                                        dest: src_gep_ident.clone(),
+                                        address: src_ident.clone(),
+                                        indices: vec![i],
+                                        struct_type: None,
+                                    };
+                                    let dst_gep = PointerInstruction::Gep {
+                                        dest: dst_gep_ident.clone(),
+                                        address: dst_ident.clone(),
+                                        indices: vec![i],
+                                        struct_type: None,
+                                    };
+                                    let src_load = PointerInstruction::Load {
+                                        dest: src_load_ident.clone(),
+                                        address: src_gep_ident,
+                                    };
+                                    let dst_store = PointerInstruction::Store {
+                                        address: dst_gep_ident,
+                                        value: src_load_ident,
+                                    };
+                                    self.observer
+                                        .handle_ptr_instruction(src_gep, pointer_context);
+                                    self.observer
+                                        .handle_ptr_instruction(dst_gep, pointer_context);
+                                    self.observer
+                                        .handle_ptr_instruction(src_load, pointer_context);
+                                    self.observer
+                                        .handle_ptr_instruction(dst_store, pointer_context);
                                 }
-                                _ => (),
                             }
                         }
                     }
@@ -701,6 +703,7 @@ where
 }
 
 pub trait PointerModuleObserver<'a> {
+    fn init(&mut self, structs: &StructMap<'a>);
     fn handle_ptr_function(&mut self, name: &'a str, parameters: Vec<VarIdent<'a>>);
     fn handle_ptr_global(
         &mut self,

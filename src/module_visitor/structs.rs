@@ -17,6 +17,7 @@ pub struct StructField<'a> {
 #[derive(Clone, Debug)]
 pub struct StructType<'a> {
     pub fields: Vec<StructField<'a>>,
+    pub size: usize,
 }
 
 impl<'a> StructType<'a> {
@@ -30,20 +31,26 @@ impl<'a> StructType<'a> {
             Type::StructType { element_types, .. } => element_types,
             _ => panic!("ty should only be a StructType"),
         };
+        let mut size = 0;
         let fields = fields
             .iter()
             .map(|f| {
                 let (ty, degree) = strip_array_types(f);
                 let st = match ty.as_ref() {
                     Type::NamedStructType { name } => {
-                        Some(Self::lookup_or_new(name, structs, module))
+                        let st = Self::lookup_or_new(name, structs, module);
+                        size += st.size;
+                        Some(st)
                     }
-                    _ => None,
+                    _ => {
+                        size += 1;
+                        None
+                    }
                 };
                 StructField { st, ty, degree }
             })
             .collect();
-        structs.insert(name, Rc::new(Self { fields }));
+        structs.insert(name, Rc::new(Self { fields, size }));
     }
 
     fn lookup_or_new(
@@ -60,19 +67,6 @@ impl<'a> StructType<'a> {
             }
         }
     }
-}
-
-pub fn count_flattened_fields(struct_type: &StructType) -> usize {
-    let mut num_sub_cells = 0;
-
-    for field in &struct_type.fields {
-        num_sub_cells += match &field.st {
-            Some(st) => count_flattened_fields(st),
-            None => 1,
-        };
-    }
-
-    num_sub_cells
 }
 
 pub fn get_struct_type<'a>(

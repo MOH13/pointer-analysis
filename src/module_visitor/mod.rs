@@ -23,6 +23,7 @@ pub struct Context<'a, 'b> {
 /// This trait allows implementors to define handler functions for llvm constructs,
 /// which the `visit_module` function will call.
 pub trait ModuleVisitor<'a> {
+    fn init(&mut self, structs: &StructMap<'a>);
     fn handle_function(&mut self, function: &'a Function, module: &'a Module);
     fn handle_global(&mut self, global: &'a GlobalVariable, structs: &StructMap<'a>);
     fn handle_instruction(&mut self, instr: &'a Instruction, context: Context<'a, '_>);
