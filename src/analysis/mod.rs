@@ -223,12 +223,14 @@ impl<'a> PointerModuleObserver<'a> for PointsToPreAnalyzer<'a> {
 
             PointerInstruction::Malloc { dest } => {
                 self.cells.push(Cell::Var(dest.clone()));
-                dbg!(&self.num_cells_per_malloc);
-                for i in 0..self.num_cells_per_malloc {
-                    self.cells.push(Cell::Heap(VarIdent::Offset {
+                let num_cells = self.num_cells_per_malloc;
+                for i in 0..num_cells {
+                    let cell = Cell::Heap(VarIdent::Offset {
                         base: Box::new(dest.clone()),
                         offset: i,
-                    }));
+                    });
+                    self.cells.push(cell.clone());
+                    self.allowed_offsets.push((cell, num_cells - i - 1));
                 }
             }
 
