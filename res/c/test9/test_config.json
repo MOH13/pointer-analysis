@@ -5,10 +5,10 @@
         "stack-%p@main": [
             "stack-%x@main"
         ],
-        "stack-%a@main.0": [
+        "stack-%a@main[0]": [
             "stack-%x@main"
         ],
-        "stack-%b@main.0": [
+        "stack-%b@main[0]": [
             "stack-%x@main"
         ],
         "stack-%stp@main": [

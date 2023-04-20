@@ -1,14 +1,14 @@
 {
     "c_path": "test6.c",
     "points_to": {
-        "stack-%a@main.0": [
+        "stack-%a@main[0]": [
             "stack-%x@main"
         ],
         "stack-%p@main": [
-            "stack-%a@main.0"
+            "stack-%a@main[0]"
         ],
         "stack-%q@main": [
-            "stack-%a@main.1"
+            "stack-%a@main[1]"
         ]
     }
 }

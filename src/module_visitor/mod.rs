@@ -24,7 +24,7 @@ pub struct Context<'a, 'b> {
 /// which the `visit_module` function will call.
 pub trait ModuleVisitor<'a> {
     fn handle_function(&mut self, function: &'a Function, module: &'a Module);
-    fn handle_global(&mut self, global: &'a GlobalVariable, structs: &StructMap);
+    fn handle_global(&mut self, global: &'a GlobalVariable, structs: &StructMap<'a>);
     fn handle_instruction(&mut self, instr: &'a Instruction, context: Context<'a, '_>);
     fn handle_terminator(&mut self, term: &'a Terminator, context: Context<'a, '_>);
 
@@ -73,6 +73,10 @@ pub enum VarIdent<'a> {
     Fresh {
         index: usize,
     },
+    Offset {
+        base: Box<Self>,
+        offset: usize,
+    },
 }
 
 impl<'a> VarIdent<'a> {
@@ -90,6 +94,7 @@ impl<'a> Display for VarIdent<'a> {
             VarIdent::Local { reg_name, fun_name } => write!(f, "{reg_name}@{fun_name}"),
             VarIdent::Global { name } => write!(f, "{name}"),
             VarIdent::Fresh { index } => write!(f, "fresh_{index}"),
+            VarIdent::Offset { base, offset } => write!(f, "{base}[{offset}]"),
         }
     }
 }
@@ -101,20 +106,35 @@ impl<'a> FromStr for VarIdent<'a> {
         if s.len() == 0 || !s.starts_with('%') {
             Err(format!("Could not parse ident '{s}'"))
         } else {
-            let s: &str = &s[1..];
-            if let Some((reg_name, fun_name)) = s.rsplit_once('@') {
-                let name = match reg_name.parse() {
-                    Ok(index) => Name::Number(index),
-                    Err(_) => Name::Name(Box::new(reg_name.to_owned())),
-                };
-                Ok(VarIdent::Local {
-                    reg_name: Cow::Owned(name),
-                    fun_name: Cow::Owned(fun_name.to_owned()),
-                })
+            // offset case
+            if let Some((l, r)) = s.rsplit_once('[') {
+                if r.chars().last() == Some(']') {
+                    let offset = r[..r.len() - 1]
+                        .parse()
+                        .map_err(|_| String::from("Offset was not a number"))?;
+                    Ok(VarIdent::Offset {
+                        base: Box::new(l.parse()?),
+                        offset,
+                    })
+                } else {
+                    Err(format!("Missing closing bracket in '{s}'"))
+                }
             } else {
-                Ok(VarIdent::Global {
-                    name: Cow::Owned(Name::Name(Box::new(s.to_owned()))),
-                })
+                let s: &str = &s[1..];
+                if let Some((reg_name, fun_name)) = s.rsplit_once('@') {
+                    let name = match reg_name.parse() {
+                        Ok(index) => Name::Number(index),
+                        Err(_) => Name::Name(Box::new(reg_name.to_owned())),
+                    };
+                    Ok(VarIdent::Local {
+                        reg_name: Cow::Owned(name),
+                        fun_name: Cow::Owned(fun_name.to_owned()),
+                    })
+                } else {
+                    Ok(VarIdent::Global {
+                        name: Cow::Owned(Name::Name(Box::new(s.to_owned()))),
+                    })
+                }
             }
         }
     }
