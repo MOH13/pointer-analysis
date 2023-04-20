@@ -39,6 +39,8 @@ pub trait ModuleVisitor<'a> {
             StructType::add_to_structs(name, ty, &mut structs, module);
         }
 
+        self.init(&structs);
+
         for global in &module.global_vars {
             self.handle_global(global, &structs);
         }
