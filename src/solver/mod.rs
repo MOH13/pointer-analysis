@@ -12,10 +12,25 @@ pub use hash::BasicHashSolver;
 
 #[derive(Debug)]
 pub enum Constraint<T> {
-    Inclusion { term: T, node: T },
-    Subset { left: T, right: T, offset: usize },
-    UnivCondSubsetLeft { cond_node: T, right: T },
-    UnivCondSubsetRight { cond_node: T, left: T },
+    Inclusion {
+        term: T,
+        node: T,
+    },
+    Subset {
+        left: T,
+        right: T,
+        offset: usize,
+    },
+    UnivCondSubsetLeft {
+        cond_node: T,
+        right: T,
+        offset: usize,
+    },
+    UnivCondSubsetRight {
+        cond_node: T,
+        left: T,
+        offset: usize,
+    },
 }
 
 #[macro_export]
@@ -44,20 +59,36 @@ macro_rules! cstr {
         $crate::solver::Constraint::UnivCondSubsetLeft {
             cond_node: $cond_node,
             right: $right,
+            offset: 0,
         }
     };
     (c in $cond_node:tt : $left:tt <= c) => {
         $crate::solver::Constraint::UnivCondSubsetRight {
             cond_node: $cond_node,
             left: $left,
+            offset: 0,
+        }
+    };
+    (c in $cond_node:tt + $offset:tt : c <= $right:tt) => {
+        $crate::solver::Constraint::UnivCondSubsetLeft {
+            cond_node: $cond_node,
+            right: $right,
+            offset: $offset,
+        }
+    };
+    (c in $cond_node:tt + $offset:tt : $left:tt <= c) => {
+        $crate::solver::Constraint::UnivCondSubsetRight {
+            cond_node: $cond_node,
+            left: $left,
+            offset: $offset,
         }
     };
 }
 
 #[derive(Clone, Debug)]
 enum UnivCond<T: Clone> {
-    SubsetLeft(T),
-    SubsetRight(T),
+    SubsetLeft { right: T, offset: usize },
+    SubsetRight { left: T, offset: usize },
 }
 
 pub trait Solver {
@@ -70,7 +101,7 @@ pub trait Solver {
     fn get_solution(&self, node: &Self::Term) -> Self::TermSet;
 }
 
-trait IterableTermSet<T> {
+pub trait IterableTermSet<T> {
     type Iter<'a>: Iterator<Item = T>
     where
         Self: 'a;
@@ -111,6 +142,34 @@ where
     ))
 }
 
+fn offset_term(
+    term: usize,
+    allowed_offsets: &HashMap<usize, usize>,
+    offset: usize,
+) -> Option<usize> {
+    if offset == 0 {
+        Some(term)
+    } else {
+        allowed_offsets
+            .get(&term)
+            .and_then(|&max_offset| (offset <= max_offset).then(|| term + offset))
+    }
+}
+
+fn offset_terms<'a>(
+    terms: impl Iterator<Item = usize>,
+    allowed_offsets: &HashMap<usize, usize>,
+    offset: usize,
+) -> Vec<usize> {
+    if offset == 0 {
+        terms.collect()
+    } else {
+        terms
+            .filter_map(|t| offset_term(t, allowed_offsets, offset))
+            .collect()
+    }
+}
+
 impl<T, S> GenericSolver<T, S>
 where
     T: Hash + Eq + Clone + Debug,
@@ -139,15 +198,23 @@ where
                 let right = self.term_to_usize(&right);
                 cstr!(left + offset <= right)
             }
-            Constraint::UnivCondSubsetLeft { cond_node, right } => {
+            Constraint::UnivCondSubsetLeft {
+                cond_node,
+                right,
+                offset,
+            } => {
                 let cond_node = self.term_to_usize(&cond_node);
                 let right = self.term_to_usize(&right);
-                cstr!(c in cond_node : c <= right)
+                cstr!(c in cond_node + offset : c <= right)
             }
-            Constraint::UnivCondSubsetRight { cond_node, left } => {
+            Constraint::UnivCondSubsetRight {
+                cond_node,
+                left,
+                offset,
+            } => {
                 let cond_node = self.term_to_usize(&cond_node);
                 let left = self.term_to_usize(&left);
-                cstr!(c in cond_node : left <= c)
+                cstr!(c in cond_node + offset : left <= c)
             }
         }
     }

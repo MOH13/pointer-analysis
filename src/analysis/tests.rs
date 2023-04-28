@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use test_generator::test_resources;
 
 use crate::analysis::{PointsToAnalysis, PointsToResult};
-use crate::solver::{BasicHashSolver, GenericSolver};
+use crate::solver::{BasicBitVecSolver, BasicHashSolver, GenericSolver, IterableTermSet, Solver};
 
 use super::Cell;
 
@@ -58,8 +58,11 @@ fn parse_points_to<'a>(
         .collect()
 }
 
-#[test_resources("res/**/test_config.json")]
-fn run_test_from_source(resource: &str) {
+fn run_test_template<S>(resource: &str)
+where
+    S: Solver<Term = usize>,
+    S::TermSet: IterableTermSet<usize>,
+{
     dbg!(resource);
     let config_file = File::open(resource).expect("Could not open file");
     let config: TestConfig =
@@ -83,8 +86,7 @@ fn run_test_from_source(resource: &str) {
 
     dbg!(&expected_points_to);
 
-    let PointsToResult(actual_points_to) =
-        PointsToAnalysis::run::<GenericSolver<_, BasicHashSolver>>(&module);
+    let PointsToResult(actual_points_to) = PointsToAnalysis::run::<GenericSolver<_, S>>(&module);
 
     dbg!(&actual_points_to);
 
@@ -97,4 +99,14 @@ fn run_test_from_source(resource: &str) {
             None => panic!("The cell {cell} is not in the solution"),
         }
     }
+}
+
+#[test_resources("res/**/test_config.json")]
+fn run_hash_solver_test(resource: &str) {
+    run_test_template::<BasicHashSolver>(resource)
+}
+
+#[test_resources("res/**/test_config.json")]
+fn run_bit_vec_test(resource: &str) {
+    run_test_template::<BasicBitVecSolver>(resource)
 }

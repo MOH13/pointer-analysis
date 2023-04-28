@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::fmt::{self, Display, Formatter};
+use std::rc::Rc;
 use std::str::FromStr;
 
 use hashbrown::HashMap;
@@ -17,15 +18,15 @@ pub struct Context<'a, 'b> {
     pub module: &'a Module,
     pub function: &'a Function,
     pub block: &'a BasicBlock,
-    pub structs: &'b StructMap<'a>,
+    pub structs: &'b StructMap,
 }
 
 /// This trait allows implementors to define handler functions for llvm constructs,
 /// which the `visit_module` function will call.
 pub trait ModuleVisitor<'a> {
-    fn init(&mut self, structs: &StructMap<'a>);
+    fn init(&mut self, structs: &StructMap);
     fn handle_function(&mut self, function: &'a Function, module: &'a Module);
-    fn handle_global(&mut self, global: &'a GlobalVariable, structs: &StructMap<'a>);
+    fn handle_global(&mut self, global: &'a GlobalVariable, structs: &StructMap);
     fn handle_instruction(&mut self, instr: &'a Instruction, context: Context<'a, '_>);
     fn handle_terminator(&mut self, term: &'a Terminator, context: Context<'a, '_>);
 
@@ -77,7 +78,7 @@ pub enum VarIdent<'a> {
         index: usize,
     },
     Offset {
-        base: Box<Self>,
+        base: Rc<Self>,
         offset: usize,
     },
 }
@@ -116,7 +117,7 @@ impl<'a> FromStr for VarIdent<'a> {
                         .parse()
                         .map_err(|_| String::from("Offset was not a number"))?;
                     Ok(VarIdent::Offset {
-                        base: Box::new(l.parse()?),
+                        base: Rc::new(l.parse()?),
                         offset,
                     })
                 } else {
@@ -143,19 +144,26 @@ impl<'a> FromStr for VarIdent<'a> {
     }
 }
 
-fn strip_array_types(ty: &TypeRef) -> (&TypeRef, usize) {
+fn strip_array_types(ty: TypeRef) -> (TypeRef, usize) {
     match ty.as_ref() {
         Type::ArrayType { element_type, .. } | Type::VectorType { element_type, .. } => {
-            let (ty, degree) = strip_array_types(element_type);
+            let (ty, degree) = strip_array_types(element_type.clone());
             (ty, degree + 1)
         }
         _ => (ty, 0),
     }
 }
 
-fn get_struct_from_name<'a>(name: &str, Module { types, .. }: &'a Module) -> Option<&'a TypeRef> {
+fn strip_pointer_type(ty: TypeRef) -> Option<TypeRef> {
+    match ty.as_ref() {
+        Type::PointerType { pointee_type, .. } => Some(pointee_type.clone()),
+        _ => None,
+    }
+}
+
+fn get_struct_from_name(name: &str, Module { types, .. }: &Module) -> Option<TypeRef> {
     types.named_struct_def(name).and_then(|def| match def {
         NamedStructDef::Opaque => None,
-        NamedStructDef::Defined(ty) => Some(ty),
+        NamedStructDef::Defined(ty) => Some(ty.clone()),
     })
 }
