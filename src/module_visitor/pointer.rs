@@ -5,8 +5,8 @@ use either::Either;
 use hashbrown::HashMap;
 use llvm_ir::function::ParameterAttribute;
 use llvm_ir::instruction::{
-    AddrSpaceCast, Alloca, BitCast, Call, ExtractElement, Freeze, GetElementPtr, InlineAssembly,
-    InsertElement, InsertValue, Load, Phi, Select, ShuffleVector, Store,
+    AddrSpaceCast, Alloca, BitCast, Call, ExtractElement, ExtractValue, Freeze, GetElementPtr,
+    InlineAssembly, InsertElement, InsertValue, Load, Phi, Select, ShuffleVector, Store,
 };
 use llvm_ir::module::GlobalVariable;
 use llvm_ir::terminator::{Invoke, Ret};
@@ -15,29 +15,34 @@ use llvm_ir::{
     Type, TypeRef,
 };
 
-use super::structs::get_struct_type;
-use super::{strip_array_types, Context, ModuleVisitor, StructMap, StructType, VarIdent};
+use super::{
+    strip_array_types, strip_pointer_type, Context, ModuleVisitor, StructMap, StructType, VarIdent,
+};
 
+#[derive(Debug)]
 pub enum PointerInstruction<'a> {
     /// x = y
     Assign {
         dest: VarIdent<'a>,
         value: VarIdent<'a>,
+        struct_type: Option<Rc<StructType>>,
     },
     /// *x = y
     Store {
         address: VarIdent<'a>,
         value: VarIdent<'a>,
+        struct_type: Option<Rc<StructType>>,
     },
     /// x = *y
     Load {
         dest: VarIdent<'a>,
         address: VarIdent<'a>,
+        struct_type: Option<Rc<StructType>>,
     },
     /// x = alloca ..
     Alloca {
         dest: VarIdent<'a>,
-        struct_type: Option<Rc<StructType<'a>>>,
+        struct_type: Option<Rc<StructType>>,
     },
     /// x = malloc()
     Malloc { dest: VarIdent<'a> },
@@ -46,18 +51,20 @@ pub enum PointerInstruction<'a> {
         dest: VarIdent<'a>,
         address: VarIdent<'a>,
         indices: Vec<usize>,
-        struct_type: Option<Rc<StructType<'a>>>, // If none, perform 'flat' gep
+        struct_type: Option<Rc<StructType>>, // If none, perform 'flat' gep
     },
     /// x = \phi(y1, y2, ..)
     Phi {
         dest: VarIdent<'a>,
         incoming_values: Vec<VarIdent<'a>>,
+        struct_type: Option<Rc<StructType>>,
     },
     /// [x =] f(y1, y2, ..)
     Call {
         dest: Option<VarIdent<'a>>,
         function: &'a str,
         arguments: Vec<Option<VarIdent<'a>>>,
+        return_struct_type: Option<Rc<StructType>>,
     },
     /// return x
     Return { return_reg: VarIdent<'a> },
@@ -69,7 +76,7 @@ pub struct PointerContext<'a> {
 }
 
 pub struct PointerModuleVisitor<'a, 'b, O> {
-    original_ptr_types: HashMap<VarIdent<'a>, Rc<StructType<'a>>>,
+    original_ptr_types: HashMap<VarIdent<'a>, Rc<StructType>>,
     fresh_counter: usize,
     observer: &'b mut O,
 }
@@ -98,7 +105,7 @@ where
         &mut self,
         operand: &'a Operand,
         context: Context<'a, '_>,
-    ) -> Option<(VarIdent<'a>, Rc<StructType<'a>>)> {
+    ) -> Option<(VarIdent<'a>, Rc<StructType>)> {
         if let Some((ident, ..)) = self.get_operand_ident_type(operand, context) {
             return self
                 .original_ptr_types
@@ -112,44 +119,50 @@ where
         &mut self,
         constant: &'a ConstantRef,
         context: Context<'a, '_>,
-    ) -> Option<(VarIdent<'a>, &'a TypeRef, usize)> {
+    ) -> (Option<VarIdent<'a>>, TypeRef, usize) {
         let pointer_context = PointerContext {
             fun_name: Some(&context.function.name),
         };
 
         match constant.as_ref() {
-            Constant::Struct { .. } => {
-                println!("Warning: Unhandled struct initializer");
-                None
-            }
-
-            Constant::Array { elements, .. } | Constant::Vector(elements) => {
-                let mut fresh = None;
-                let mut degree = 0;
-                let mut ty = None;
-
-                for element in elements {
-                    let (e, t, d) = match self.unroll_constant(element, context) {
-                        Some(res) => res,
-                        None => continue,
-                    };
-                    (ty, degree) = (Some(t), d);
-
-                    let dest = fresh.get_or_insert_with(|| self.add_fresh_ident()).clone();
-                    let instr = PointerInstruction::Assign { dest, value: e };
-                    self.observer.handle_ptr_instruction(instr, pointer_context);
+            Constant::Struct { name, values, .. } => {
+                let fresh = self.add_fresh_ident();
+                let fresh_rc = Rc::new(fresh.clone());
+                let mut value_types = Vec::with_capacity(values.len());
+                for (i, val) in values.iter().enumerate() {
+                    let (val, ty, _) = self.unroll_constant(val, context);
+                    value_types.push(ty.clone());
+                    if let Some(val) = val {
+                        let fresh_field = VarIdent::Offset {
+                            base: fresh_rc.clone(),
+                            offset: i,
+                        };
+                        let struct_type = StructType::try_from_type(ty, context.structs);
+                        self.handle_assign(fresh_field, val, struct_type, pointer_context);
+                    }
                 }
 
-                fresh.and_then(|f| ty.map(|t| (f, t, degree + 1)))
+                let ty = match name {
+                    Some(name) => context.module.types.named_struct(name),
+                    None => context.module.types.struct_of(value_types, false),
+                };
+                (Some(fresh), ty, 0)
             }
 
-            Constant::GlobalReference { name, ty } => Some((
-                VarIdent::Global {
+            Constant::Array {
+                elements,
+                element_type,
+            } => self.unroll_array(elements, Some(element_type.clone()), context),
+
+            Constant::Vector(elements) => self.unroll_array(elements, None, context),
+
+            Constant::GlobalReference { name, ty } => (
+                Some(VarIdent::Global {
                     name: Cow::Borrowed(name),
-                },
-                ty,
-                1,
-            )),
+                }),
+                context.module.types.pointer_to(ty.clone()),
+                0,
+            ),
 
             Constant::ExtractElement(constant::ExtractElement {
                 vector: operand, ..
@@ -158,9 +171,10 @@ where
                 self.unroll_constant(operand, context)
             }
 
-            Constant::BitCast(constant::BitCast { operand, to_type }) => self
-                .unroll_constant(operand, context)
-                .map(|(ident, _, d)| (ident, to_type, d)),
+            Constant::BitCast(constant::BitCast { operand, to_type }) => {
+                let (ident, _, degree) = self.unroll_constant(operand, context);
+                (ident, to_type.clone(), degree)
+            }
 
             Constant::InsertElement(constant::InsertElement {
                 vector: x,
@@ -177,25 +191,38 @@ where
                 operand1: y,
                 ..
             }) => {
-                if let Some((x, tx, dx)) = self.unroll_constant(x, context) {
-                    if let Some((y, _, dy)) = self.unroll_constant(y, context) {
-                        let fresh = self.add_fresh_ident();
-                        self.handle_join(fresh.clone(), x, y, pointer_context);
-                        return Some((fresh, tx, dx.max(dy)));
-                    }
-                }
+                let (x, tx, dx) = self.unroll_constant(x, context);
+                let (y, ..) = self.unroll_constant(y, context);
 
-                None
+                let struct_type = StructType::try_from_type(tx.clone(), context.structs);
+
+                match (x, y) {
+                    (Some(x), Some(y)) => {
+                        let fresh = self.add_fresh_ident();
+                        self.handle_join(fresh.clone(), x, y, struct_type, pointer_context);
+                        (Some(fresh), tx, dx)
+                    }
+                    _ => (None, tx, dx),
+                }
             }
 
             Constant::ExtractValue(constant::ExtractValue { aggregate, indices }) => {
-                if indices.len() != 1 {
-                    println!("Warning: Unhandled ExtractValue");
-                    return None;
+                let (base, ty, degree) = self.unroll_constant(aggregate, context);
+                match base {
+                    Some(base) => {
+                        let fresh = self.add_fresh_ident();
+                        let (sub_ty, sub_degree) = self.handle_extract_value(
+                            fresh.clone(),
+                            base,
+                            indices,
+                            degree,
+                            ty,
+                            context,
+                        );
+                        (Some(fresh), sub_ty, sub_degree)
+                    }
+                    None => (None, ty, degree),
                 }
-
-                println!("Warning: Potentially unhandled ExtractValue");
-                self.unroll_constant(aggregate, context)
             }
 
             Constant::InsertValue(constant::InsertValue {
@@ -203,70 +230,117 @@ where
                 element,
                 indices,
             }) => {
+                // TODO
+
                 if indices.len() != 1 {
                     println!("Warning: Unhandled InsertValue");
-                    return None;
+                    return (None, context.module.types.i8(), 0);
                 }
 
                 println!("Warning: Potentially unhandled InsertValue");
-                if let Some((aggregate, ty, d)) = self.unroll_constant(aggregate, context) {
-                    let fresh = self.add_fresh_ident();
-                    if let Some((element, ..)) = self.unroll_constant(element, context) {
-                        self.handle_join(fresh.clone(), aggregate, element, pointer_context);
-                        return Some((fresh, ty, d));
-                    }
-                }
-
-                None
+                let fresh = self.add_fresh_ident();
+                let (aggregate, ty, d) = self.unroll_constant(aggregate, context);
+                let (element, ..) = self.unroll_constant(element, context);
+                let struct_type = StructType::try_from_type(ty.clone(), context.structs);
+                self.handle_join(
+                    fresh.clone(),
+                    aggregate.unwrap(),
+                    element.unwrap(),
+                    struct_type,
+                    pointer_context,
+                );
+                (Some(fresh), ty, d)
             }
 
             Constant::GetElementPtr(constant::GetElementPtr {
                 address, indices, ..
             }) => {
-                let fresh = self.add_fresh_ident();
-                if let Some((address, ty, degree)) = self.unroll_constant(address, context) {
-                    let indices: Vec<_> = indices
-                        .iter()
-                        .map(|constant| match constant.as_ref() {
-                            Constant::Int { value, .. } => Some(*value as usize),
-                            _ => None,
-                        })
-                        .collect();
+                let (address, ty, degree) = self.unroll_constant(address, context);
+                match address {
+                    Some(address) => {
+                        let fresh = self.add_fresh_ident();
 
-                    let (sub_ty, sub_degree) =
-                        self.handle_gep(fresh.clone(), address, &indices, degree, ty, context);
-                    return Some((fresh, sub_ty, sub_degree + 1));
+                        let indices: Vec<_> = indices
+                            .iter()
+                            .map(|constant| match constant.as_ref() {
+                                Constant::Int { value, .. } => Some(*value as usize),
+                                _ => None,
+                            })
+                            .collect();
+
+                        let (sub_ty, sub_degree) =
+                            self.handle_gep(fresh.clone(), address, &indices, degree, ty, context);
+                        (Some(fresh), sub_ty, sub_degree)
+                    }
+                    None => {
+                        println!("Warning: GEP on a None value");
+                        (None, ty, degree)
+                    }
                 }
-                None
             }
 
-            Constant::IntToPtr(_) => {
+            Constant::IntToPtr(constant::IntToPtr { to_type, .. }) => {
                 println!("Warning: IntToPtr detected");
-                None
+                (None, to_type.clone(), 1)
             }
 
-            _ => None,
+            _ => (None, context.module.types.i8(), 0),
         }
+    }
+
+    fn unroll_array(
+        &mut self,
+        elements: &'a [ConstantRef],
+        element_type: Option<TypeRef>,
+        context: Context<'a, '_>,
+    ) -> (Option<VarIdent<'a>>, TypeRef, usize) {
+        let pointer_context = PointerContext {
+            fun_name: Some(&context.function.name),
+        };
+
+        let mut fresh = None;
+        let mut degree = 0;
+        let mut ty = element_type.unwrap_or_else(|| context.module.types.void());
+
+        for element in elements {
+            if let (Some(e), t, d) = self.unroll_constant(element, context) {
+                (ty, degree) = (t.clone(), d);
+
+                let struct_type = StructType::try_from_type(t, context.structs);
+                let dest = fresh.get_or_insert_with(|| self.add_fresh_ident());
+                let instr = PointerInstruction::Assign {
+                    dest: dest.clone(),
+                    value: e,
+                    struct_type,
+                };
+                self.observer.handle_ptr_instruction(instr, pointer_context);
+            }
+        }
+
+        (fresh, ty, degree + 1)
     }
 
     fn get_operand_ident_type(
         &mut self,
         operand: &'a Operand,
         context: Context<'a, '_>,
-    ) -> Option<(VarIdent<'a>, &'a TypeRef, usize)> {
+    ) -> Option<(VarIdent<'a>, TypeRef, usize)> {
         match operand {
             Operand::LocalOperand { name, ty } => {
-                let (ty, degree) = strip_array_types(ty);
+                let (ty, degree) = strip_array_types(ty.clone());
                 match ty.as_ref() {
-                    Type::PointerType { pointee_type, .. } => Some((
-                        VarIdent::new_local(name, context.function),
-                        pointee_type,
-                        degree + 1,
-                    )),
+                    Type::PointerType { .. }
+                    | Type::NamedStructType { .. }
+                    | Type::StructType { .. } => {
+                        Some((VarIdent::new_local(name, context.function), ty, degree))
+                    }
                     _ => None,
                 }
             }
-            Operand::ConstantOperand(constant) => self.unroll_constant(constant, context),
+            Operand::ConstantOperand(constant) => {
+                let (ident, ty, degree) = self.unroll_constant(constant, context);
+                ident.map(|id| (id, ty, degree))
+            }
             Operand::MetadataOperand => None,
         }
     }
@@ -303,52 +377,40 @@ where
 
         // Special behavior for struct assignments (that are compiled to memcpy)
         if function == "llvm.memcpy.p0i8.p0i8.i64" {
-            let arg0 = self.get_original_type(&arguments[0].0, context);
-            let arg1 = self.get_original_type(&arguments[1].0, context);
-            // Assume src_ty and dst_ty are same
-            if let (Some((dst_ident, _)), Some((src_ident, src_ty))) = (arg0, arg1) {
-                for i in 0..src_ty.as_ref().size {
-                    let src_gep_ident = self.add_fresh_ident();
-                    let dst_gep_ident = self.add_fresh_ident();
-                    let src_load_ident = self.add_fresh_ident();
-                    let src_gep = PointerInstruction::Gep {
-                        dest: src_gep_ident.clone(),
-                        address: src_ident.clone(),
-                        indices: vec![i],
-                        struct_type: None,
-                    };
-                    let dst_gep = PointerInstruction::Gep {
-                        dest: dst_gep_ident.clone(),
-                        address: dst_ident.clone(),
-                        indices: vec![i],
-                        struct_type: None,
-                    };
-                    let src_load = PointerInstruction::Load {
-                        dest: src_load_ident.clone(),
-                        address: src_gep_ident,
-                    };
-                    let dst_store = PointerInstruction::Store {
-                        address: dst_gep_ident,
-                        value: src_load_ident,
-                    };
-                    self.observer
-                        .handle_ptr_instruction(src_gep, pointer_context);
-                    self.observer
-                        .handle_ptr_instruction(dst_gep, pointer_context);
-                    self.observer
-                        .handle_ptr_instruction(src_load, pointer_context);
-                    self.observer
-                        .handle_ptr_instruction(dst_store, pointer_context);
-                }
+            let dest = self.get_original_type(&arguments[0].0, context);
+            let src = self.get_original_type(&arguments[1].0, context);
+            // Assume src_ty and dest_ty are same
+            if let (Some((dest_ident, _)), Some((src_ident, src_ty))) = (dest, src) {
+                let intermediate_ident = self.add_fresh_ident();
+                let src_load = PointerInstruction::Load {
+                    dest: intermediate_ident.clone(),
+                    address: src_ident,
+                    struct_type: Some(src_ty.clone()),
+                };
+                let dest_store = PointerInstruction::Store {
+                    address: dest_ident,
+                    value: intermediate_ident,
+                    struct_type: Some(src_ty),
+                };
+                self.observer
+                    .handle_ptr_instruction(src_load, pointer_context);
+                self.observer
+                    .handle_ptr_instruction(dest_store, pointer_context);
             }
             return;
         }
 
-        let dest = match ty.as_ref() {
-            Type::FuncType { result_type, .. } if is_ptr_type(result_type) => {
-                dest.map(|d| VarIdent::new_local(d, caller))
-            }
-            _ => None,
+        let result_ty = match ty.as_ref() {
+            Type::FuncType { result_type, .. } => strip_array_types(result_type.clone()).0,
+            _ => panic!("Unexpected type {ty} of function {function}"),
+        };
+
+        let return_struct_type = StructType::try_from_type(result_ty.clone(), context.structs);
+
+        let dest = if is_ptr_type(result_ty) {
+            dest.map(|d| VarIdent::new_local(d, caller))
+        } else {
+            None
         };
 
         // TODO: What if someone defines their own function called malloc?
@@ -370,6 +432,7 @@ where
                 dest,
                 function,
                 arguments,
+                return_struct_type,
             }
         };
 
@@ -381,15 +444,74 @@ where
         dest: VarIdent<'a>,
         x: VarIdent<'a>,
         y: VarIdent<'a>,
+        struct_type: Option<Rc<StructType>>,
         context: PointerContext<'a>,
     ) {
         let x_instr = PointerInstruction::Assign {
             dest: dest.clone(),
             value: x,
+            struct_type: struct_type.clone(),
         };
-        let y_instr = PointerInstruction::Assign { dest, value: y };
+        let y_instr = PointerInstruction::Assign {
+            dest,
+            value: y,
+            struct_type,
+        };
         self.observer.handle_ptr_instruction(x_instr, context);
         self.observer.handle_ptr_instruction(y_instr, context);
+    }
+
+    fn handle_assign(
+        &mut self,
+        dest: VarIdent<'a>,
+        value: VarIdent<'a>,
+        struct_type: Option<Rc<StructType>>,
+        context: PointerContext<'a>,
+    ) {
+        let instr = PointerInstruction::Assign {
+            dest,
+            value,
+            struct_type,
+        };
+        self.observer.handle_ptr_instruction(instr, context)
+    }
+
+    fn handle_extract_value(
+        &mut self,
+        dest: VarIdent<'a>,
+        base: VarIdent<'a>,
+        indices: &[u32],
+        degree: usize,
+        ty: TypeRef,
+        context: Context<'a, '_>,
+    ) -> (TypeRef, usize) {
+        let pointer_context = PointerContext {
+            fun_name: Some(&context.function.name),
+        };
+
+        match StructType::try_from_type_with_degree(ty.clone(), context.structs) {
+            Some((st, 0)) if degree < indices.len() => {
+                let indices: Vec<_> = indices.iter().map(|&i| Some(i as usize)).collect();
+                let (reduced_indices, field_ty, field_degree) =
+                    get_reduced_indices(st, &indices, degree);
+                let field_ident =
+                    reduced_indices
+                        .into_iter()
+                        .fold(base, |acc, i| VarIdent::Offset {
+                            base: Rc::new(acc),
+                            offset: i,
+                        });
+
+                let field_st = StructType::try_from_type(field_ty.clone(), context.structs);
+                self.handle_assign(dest, field_ident, field_st, pointer_context);
+                (field_ty, field_degree)
+            }
+            Some(_) => panic!("Type was an array type ({ty})"),
+            _ => {
+                self.handle_assign(dest, base, None, pointer_context);
+                (ty, degree - indices.len())
+            }
+        }
     }
 
     fn handle_gep(
@@ -398,37 +520,21 @@ where
         address: VarIdent<'a>,
         indices: &[Option<usize>],
         degree: usize,
-        ty: &'a TypeRef,
+        ty: TypeRef,
         context: Context<'a, '_>,
-    ) -> (&'a TypeRef, usize) {
+    ) -> (TypeRef, usize) {
         let pointer_context = PointerContext {
             fun_name: Some(&context.function.name),
         };
 
-        let struct_type = get_struct_type(ty, context.structs);
+        let ty = strip_pointer_type(ty).expect("GEP should only be used on pointer types");
+        let indices = &indices[1..];
+
+        let struct_type = StructType::try_from_type_with_degree(ty.clone(), context.structs);
         match struct_type {
             Some((struct_type, s_degree)) if indices.len() > degree + s_degree => {
-                let mut reduced_indices = vec![];
-                let mut sub_struct_type = struct_type.as_ref();
-                let mut sub_ty;
-                let mut sub_degree;
-                let mut remaining_indices = &indices[degree + s_degree..];
-                loop {
-                    let i = remaining_indices[0]
-                        .expect("all indices into structs must be constant i32");
-                    reduced_indices.push(i);
-
-                    let field = &sub_struct_type.fields[i];
-                    sub_ty = field.ty;
-                    sub_degree = field.degree;
-                    match &field.st {
-                        Some(st) if remaining_indices.len() > field.degree + 1 => {
-                            sub_struct_type = st.as_ref();
-                            remaining_indices = &remaining_indices[field.degree + 1..];
-                        }
-                        _ => break,
-                    }
-                }
+                let (reduced_indices, field_ty, field_degree) =
+                    get_reduced_indices(struct_type.clone(), indices, degree + s_degree);
 
                 let instr = PointerInstruction::Gep {
                     dest,
@@ -437,13 +543,14 @@ where
                     struct_type: Some(struct_type),
                 };
                 self.observer.handle_ptr_instruction(instr, pointer_context);
-                (sub_ty, sub_degree)
+                (context.module.types.pointer_to(field_ty), field_degree)
             }
 
             _ => {
                 let instr = PointerInstruction::Assign {
                     dest,
                     value: address,
+                    struct_type: None,
                 };
                 self.observer.handle_ptr_instruction(instr, pointer_context);
                 (ty, degree)
@@ -456,7 +563,7 @@ impl<'a, 'b, O> ModuleVisitor<'a> for PointerModuleVisitor<'a, 'b, O>
 where
     O: PointerModuleObserver<'a>,
 {
-    fn init(&mut self, structs: &StructMap<'a>) {
+    fn init(&mut self, structs: &StructMap) {
         self.observer.init(structs)
     }
 
@@ -470,7 +577,7 @@ where
             .handle_ptr_function(&function.name, parameters)
     }
 
-    fn handle_global(&mut self, global: &'a GlobalVariable, structs: &StructMap<'a>) {
+    fn handle_global(&mut self, global: &'a GlobalVariable, structs: &StructMap) {
         let init_ref = global
             .initializer
             .as_ref()
@@ -486,7 +593,7 @@ where
             _ => &global.ty,
         };
 
-        let struct_type = get_struct_type(ty, structs).map(|(s, _)| s);
+        let struct_type = StructType::try_from_type(ty.clone(), structs);
         self.observer.handle_ptr_global(
             VarIdent::Global {
                 name: Cow::Borrowed(&global.name),
@@ -508,14 +615,12 @@ where
                 ..
             })
             | Instruction::Freeze(Freeze { operand, dest, .. }) => {
-                if let Some((value, ..)) = self.get_operand_ident_type(operand, context) {
+                if let Some((value, ty, ..)) = self.get_operand_ident_type(operand, context) {
                     let dest = VarIdent::new_local(dest, function);
-                    let instr = PointerInstruction::Assign { dest, value };
-                    self.observer.handle_ptr_instruction(instr, pointer_context);
+                    let struct_type = StructType::try_from_type(ty, context.structs);
+                    self.handle_assign(dest, value, struct_type, pointer_context);
                 }
             }
-
-            Instruction::ExtractValue(_) => todo!(),
 
             Instruction::InsertElement(InsertElement {
                 vector: x,
@@ -535,12 +640,25 @@ where
                 dest,
                 ..
             }) => {
-                if let (Some((x, ..)), Some((y, ..))) = (
+                if let (Some((x, ty, ..)), Some((y, ..))) = (
                     self.get_operand_ident_type(x, context),
                     self.get_operand_ident_type(y, context),
                 ) {
                     let dest = VarIdent::new_local(dest, function);
-                    self.handle_join(dest, x, y, pointer_context);
+                    let struct_type = StructType::try_from_type(ty, context.structs);
+                    self.handle_join(dest, x, y, struct_type, pointer_context);
+                }
+            }
+
+            Instruction::ExtractValue(ExtractValue {
+                aggregate,
+                indices,
+                dest,
+                ..
+            }) => {
+                if let Some((base, ty, degree)) = self.get_operand_ident_type(aggregate, context) {
+                    let dest = VarIdent::new_local(dest, function);
+                    self.handle_extract_value(dest, base, indices, degree, ty, context);
                 }
             }
 
@@ -558,7 +676,8 @@ where
                 ..
             }) => {
                 let dest = VarIdent::new_local(dest, function);
-                let struct_type = get_struct_type(allocated_type, context.structs).map(|(s, _)| s);
+                let struct_type =
+                    StructType::try_from_type(allocated_type.clone(), context.structs);
                 let instr = PointerInstruction::Alloca { dest, struct_type };
                 self.observer.handle_ptr_instruction(instr, pointer_context);
             }
@@ -566,16 +685,20 @@ where
             Instruction::BitCast(BitCast { operand, dest, .. })
             | Instruction::AddrSpaceCast(AddrSpaceCast { operand, dest, .. }) => {
                 if let Some((value, src_ty, _)) = self.get_operand_ident_type(operand, context) {
+                    let src_ty = strip_pointer_type(src_ty)
+                        .expect("bitcast and addrspacecast should only take pointer args");
                     let dest = VarIdent::new_local(dest, function);
+                    let struct_type = StructType::try_from_type(src_ty.clone(), context.structs);
                     let instr = PointerInstruction::Assign {
                         dest: dest.clone(),
                         value: value.clone(),
+                        struct_type: struct_type.clone(),
                     };
                     self.observer.handle_ptr_instruction(instr, pointer_context);
-                    if let Some(typ) = self.original_ptr_types.get(&value) {
-                        self.original_ptr_types.insert(dest.clone(), typ.clone());
-                    } else if let Some((struct_ty, _)) = get_struct_type(src_ty, context.structs) {
-                        self.original_ptr_types.insert(dest.clone(), struct_ty);
+                    if let Some(st) = self.original_ptr_types.get(&value) {
+                        self.original_ptr_types.insert(dest.clone(), st.clone());
+                    } else if let Some(st) = struct_type {
+                        self.original_ptr_types.insert(dest.clone(), st);
                     }
                 };
             }
@@ -603,7 +726,6 @@ where
                         _ => None,
                     })
                     .collect();
-
                 self.handle_gep(dest, address, &indices, degree, ty, context);
             }
 
@@ -612,25 +734,39 @@ where
                 dest,
                 ..
             }) => {
-                let incoming_values = incoming_values
+                let (incoming_values, incoming_types): (Vec<_>, Vec<_>) = incoming_values
                     .iter()
                     .filter_map(|(value, _)| self.get_operand_ident_type(value, context))
-                    .map(|(name, _, _)| name)
-                    .collect();
+                    .map(|(ident, ty, _)| (ident, ty))
+                    .unzip();
 
                 let dest = VarIdent::new_local(dest, function);
+                let struct_type = incoming_types
+                    .first()
+                    .and_then(|ty| StructType::try_from_type(ty.clone(), context.structs));
                 let instr = PointerInstruction::Phi {
                     dest,
                     incoming_values,
+                    struct_type,
                 };
                 self.observer.handle_ptr_instruction(instr, pointer_context);
             }
 
             Instruction::Load(Load { address, dest, .. }) => {
                 match self.get_operand_ident_type(address, context) {
-                    Some((address, address_ty, _)) if is_ptr_type(address_ty) => {
+                    Some((address, address_ty, _)) if is_ptr_type(address_ty.clone()) => {
                         let dest = VarIdent::new_local(dest, function);
-                        let instr = PointerInstruction::Load { dest, address };
+                        let struct_type = match address_ty.as_ref() {
+                            Type::PointerType { pointee_type, .. } => {
+                                StructType::try_from_type(pointee_type.clone(), context.structs)
+                            }
+                            _ => unreachable!(),
+                        };
+                        let instr = PointerInstruction::Load {
+                            dest,
+                            address,
+                            struct_type,
+                        };
                         self.observer.handle_ptr_instruction(instr, pointer_context);
                     }
                     _ => {}
@@ -639,12 +775,16 @@ where
 
             // *x = y
             Instruction::Store(Store { address, value, .. }) => {
-                let value = match self.get_operand_ident_type(value, context) {
-                    Some((ident, ..)) => ident,
-                    _ => return,
-                };
-                if let Some((address, ..)) = self.get_operand_ident_type(address, context) {
-                    let instr = PointerInstruction::Store { address, value };
+                if let (Some((value, value_type, _)), Some((address, _, _))) = (
+                    self.get_operand_ident_type(value, context),
+                    self.get_operand_ident_type(address, context),
+                ) {
+                    let struct_type = StructType::try_from_type(value_type, context.structs);
+                    let instr = PointerInstruction::Store {
+                        address,
+                        value,
+                        struct_type,
+                    };
                     self.observer.handle_ptr_instruction(instr, pointer_context);
                 }
             }
@@ -679,7 +819,7 @@ where
                     .as_ref()
                     .and_then(|op| self.get_operand_ident_type(op, context))
                 {
-                    Some((name, _, _)) => name,
+                    Some((name, ..)) => name,
                     _ => return,
                 };
 
@@ -693,13 +833,13 @@ where
 }
 
 pub trait PointerModuleObserver<'a> {
-    fn init(&mut self, structs: &StructMap<'a>);
+    fn init(&mut self, structs: &StructMap);
     fn handle_ptr_function(&mut self, name: &'a str, parameters: Vec<VarIdent<'a>>);
     fn handle_ptr_global(
         &mut self,
         ident: VarIdent<'a>,
         init_ref: Option<VarIdent<'a>>,
-        struct_type: Option<&StructType<'a>>,
+        struct_type: Option<&StructType>,
     );
     fn handle_ptr_instruction(
         &mut self,
@@ -708,6 +848,31 @@ pub trait PointerModuleObserver<'a> {
     );
 }
 
-fn is_ptr_type(ty: &TypeRef) -> bool {
+fn get_reduced_indices(
+    struct_type: Rc<StructType>,
+    indices: &[Option<usize>],
+    degree: usize,
+) -> (Vec<usize>, TypeRef, usize) {
+    let mut reduced_indices = vec![];
+    let mut sub_struct_type = struct_type.as_ref();
+    let mut remaining_indices = &indices[degree..];
+    loop {
+        let i = remaining_indices[0].expect("all indices into structs must be constant i32");
+        reduced_indices.push(i);
+
+        let field = &sub_struct_type.fields[i];
+        match &field.st {
+            Some(st) if remaining_indices.len() > field.degree + 1 => {
+                sub_struct_type = st.as_ref();
+                remaining_indices = &remaining_indices[field.degree + 1..];
+            }
+            _ => {
+                return (reduced_indices, field.ty.clone(), field.degree);
+            }
+        }
+    }
+}
+
+fn is_ptr_type(ty: TypeRef) -> bool {
     matches!(ty.as_ref(), Type::PointerType { .. })
 }

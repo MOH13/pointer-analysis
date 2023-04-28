@@ -6,7 +6,7 @@ use bitvec::vec::BitVec;
 
 use crate::bit_index_utils::{no_alloc_and, no_alloc_difference, BitIndexIter};
 
-use super::{Constraint, Solver, UnivCond};
+use super::{offset_term, offset_terms, Constraint, Solver, UnivCond};
 
 pub struct BasicBitVecSolver {
     worklist: VecDeque<(usize, usize)>,
@@ -32,13 +32,27 @@ impl BasicBitVecSolver {
         while let Some((term, node)) = self.worklist.pop_front() {
             for cond in &self.conds[node].clone() {
                 match cond {
-                    UnivCond::SubsetLeft(right) => self.add_edge(term, *right, 0),
-                    UnivCond::SubsetRight(left) => self.add_edge(*left, term, 0),
+                    UnivCond::SubsetLeft { right, offset } => {
+                        if let Some(t) = offset_term(term, &self.allowed_offsets, *offset) {
+                            self.add_edge(t, *right, 0)
+                        }
+                    }
+                    UnivCond::SubsetRight { left, offset } => {
+                        if let Some(t) = offset_term(term, &self.allowed_offsets, *offset) {
+                            self.add_edge(*left, t, 0)
+                        }
+                    }
                 }
             }
 
             for n2 in self.edges[node].iter_ones() {
                 add_token!(self, term, n2);
+            }
+
+            for (&n2, offset) in &self.weighted_edges[node] {
+                if let Some(t) = offset_term(term, &self.allowed_offsets, *offset) {
+                    add_token!(self, t, n2);
+                }
             }
         }
     }
@@ -61,17 +75,15 @@ impl BasicBitVecSolver {
             let left_block_iter = self.sols[left].as_raw_slice().iter().copied();
             let offset_mask_iter = self.offset_bitmask.as_raw_slice().iter().copied();
 
-            for i in BitIndexIter::new(no_alloc_and(left_block_iter, offset_mask_iter))
-                .filter_map(|i| {
-                    self.allowed_offsets
-                        .get(&i)
-                        .filter(|&&max_offset| offset <= max_offset)
-                        .map(|_| i)
-                })
-                .collect::<Vec<_>>()
-            {
-                add_token!(self, i + offset, right)
+            let offsetable_indices =
+                BitIndexIter::new(no_alloc_and(left_block_iter, offset_mask_iter));
+            let terms = offset_terms(offsetable_indices, &self.allowed_offsets, offset);
+
+            for i in terms {
+                add_token!(self, i, right)
             }
+        } else {
+            unreachable!()
         }
     }
 }
@@ -111,17 +123,33 @@ impl Solver for BasicBitVecSolver {
             } => {
                 self.add_edge(left, right, offset);
             }
-            Constraint::UnivCondSubsetLeft { cond_node, right } => {
-                self.conds[cond_node].push(UnivCond::SubsetLeft(right));
-                let terms: Vec<_> = self.sols[cond_node].iter_ones().collect();
+            Constraint::UnivCondSubsetLeft {
+                cond_node,
+                right,
+                offset,
+            } => {
+                self.conds[cond_node].push(UnivCond::SubsetLeft { right, offset });
+                let terms = offset_terms(
+                    self.sols[cond_node].iter_ones(),
+                    &self.allowed_offsets,
+                    offset,
+                );
 
                 for t in terms {
                     self.add_edge(t, right, 0);
                 }
             }
-            Constraint::UnivCondSubsetRight { cond_node, left } => {
-                self.conds[cond_node].push(UnivCond::SubsetRight(left));
-                let terms: Vec<_> = self.sols[cond_node].iter_ones().collect();
+            Constraint::UnivCondSubsetRight {
+                cond_node,
+                left,
+                offset,
+            } => {
+                self.conds[cond_node].push(UnivCond::SubsetRight { left, offset });
+                let terms = offset_terms(
+                    self.sols[cond_node].iter_ones(),
+                    &self.allowed_offsets,
+                    offset,
+                );
 
                 for t in terms {
                     self.add_edge(left, t, 0);

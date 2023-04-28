@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use hashbrown::{HashMap, HashSet};
 
-use super::{Constraint, Solver, UnivCond};
+use super::{offset_term, offset_terms, Constraint, Solver, UnivCond};
 
 pub struct BasicHashSolver {
     worklist: VecDeque<(usize, usize)>,
@@ -25,19 +25,23 @@ impl BasicHashSolver {
         while let Some((term, node)) = self.worklist.pop_front() {
             for cond in &self.conds[node].clone() {
                 match cond {
-                    UnivCond::SubsetLeft(right) => self.add_edge(term, *right, 0),
-                    UnivCond::SubsetRight(left) => self.add_edge(*left, term, 0),
+                    UnivCond::SubsetLeft { right, offset } => {
+                        if let Some(t) = offset_term(term, &self.allowed_offsets, *offset) {
+                            self.add_edge(t, *right, 0)
+                        }
+                    }
+                    UnivCond::SubsetRight { left, offset } => {
+                        if let Some(t) = offset_term(term, &self.allowed_offsets, *offset) {
+                            self.add_edge(*left, t, 0)
+                        }
+                    }
                 }
             }
 
             for (&n2, edges) in &self.edges[node] {
                 for &offset in edges {
-                    if offset == 0 {
-                        add_token!(self, term, n2);
-                    } else if let Some(&max_offset) = self.allowed_offsets.get(&term) {
-                        if offset <= max_offset {
-                            add_token!(self, term + offset, n2)
-                        }
+                    if let Some(t) = offset_term(term, &self.allowed_offsets, offset) {
+                        add_token!(self, t, n2);
                     }
                 }
             }
@@ -54,19 +58,11 @@ impl BasicHashSolver {
     fn add_edge(&mut self, left: usize, right: usize, offset: usize) {
         let edges = self.get_edges(left, right);
         if edges.insert(offset) {
-            let to_add: Vec<_> = self.sols[left]
-                .iter()
-                .filter_map(|&t| {
-                    if offset == 0 {
-                        Some(t)
-                    } else {
-                        self.allowed_offsets
-                            .get(&t)
-                            .and_then(|&max_offset| (offset <= max_offset).then(|| t + offset))
-                    }
-                })
-                .collect();
-            for t in to_add {
+            for t in offset_terms(
+                self.sols[left].iter().copied(),
+                &self.allowed_offsets,
+                offset,
+            ) {
                 add_token!(self, t, right);
             }
         }
@@ -99,17 +95,33 @@ impl Solver for BasicHashSolver {
             } => {
                 self.add_edge(left, right, offset);
             }
-            Constraint::UnivCondSubsetLeft { cond_node, right } => {
-                self.conds[cond_node].push(UnivCond::SubsetLeft(right));
-                let terms: Vec<_> = self.sols[cond_node].iter().copied().collect();
+            Constraint::UnivCondSubsetLeft {
+                cond_node,
+                right,
+                offset,
+            } => {
+                self.conds[cond_node].push(UnivCond::SubsetLeft { right, offset });
+                let terms = offset_terms(
+                    self.sols[cond_node].iter().copied(),
+                    &self.allowed_offsets,
+                    offset,
+                );
 
                 for t in terms {
                     self.add_edge(t, right, 0);
                 }
             }
-            Constraint::UnivCondSubsetRight { cond_node, left } => {
-                self.conds[cond_node].push(UnivCond::SubsetRight(left));
-                let terms: Vec<_> = self.sols[cond_node].iter().copied().collect();
+            Constraint::UnivCondSubsetRight {
+                cond_node,
+                left,
+                offset,
+            } => {
+                self.conds[cond_node].push(UnivCond::SubsetRight { left, offset });
+                let terms = offset_terms(
+                    self.sols[cond_node].iter().copied(),
+                    &self.allowed_offsets,
+                    offset,
+                );
 
                 for t in terms {
                     self.add_edge(left, t, 0);
