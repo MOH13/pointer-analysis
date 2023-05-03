@@ -106,11 +106,14 @@ where
         operand: &'a Operand,
         context: Context<'a, '_>,
     ) -> Option<(VarIdent<'a>, Rc<StructType>)> {
-        if let Some((ident, ..)) = self.get_operand_ident_type(operand, context) {
-            return self
-                .original_ptr_types
-                .get(&ident)
-                .map(|orig_ty| (ident, orig_ty.clone()));
+        if let Some((ident, ty, ..)) = self.get_operand_ident_type(operand, context) {
+            let struct_type = self.original_ptr_types.get(&ident).cloned().or_else(|| {
+                StructType::try_from_type(
+                    strip_pointer_type(ty).expect("Expected operand to be a pointer"),
+                    context.structs,
+                )
+            });
+            return struct_type.map(|st| (ident, st));
         }
         None
     }
@@ -121,7 +124,7 @@ where
         context: Context<'a, '_>,
     ) -> (Option<VarIdent<'a>>, TypeRef, usize) {
         let pointer_context = PointerContext {
-            fun_name: Some(&context.function.name),
+            fun_name: context.function.map(|func| func.name.as_str()),
         };
 
         match constant.as_ref() {
@@ -171,9 +174,9 @@ where
                 self.unroll_constant(operand, context)
             }
 
-            Constant::BitCast(constant::BitCast { operand, to_type }) => {
-                let (ident, _, degree) = self.unroll_constant(operand, context);
-                (ident, to_type.clone(), degree)
+            Constant::BitCast(constant::BitCast { operand, .. }) => {
+                let (ident, from_type, degree) = self.unroll_constant(operand, context);
+                (ident, from_type, degree) // Notice that we return from_type!
             }
 
             Constant::InsertElement(constant::InsertElement {
@@ -295,7 +298,7 @@ where
         context: Context<'a, '_>,
     ) -> (Option<VarIdent<'a>>, TypeRef, usize) {
         let pointer_context = PointerContext {
-            fun_name: Some(&context.function.name),
+            fun_name: context.function.map(|func| func.name.as_str()),
         };
 
         let mut fresh = None;
@@ -325,6 +328,9 @@ where
         operand: &'a Operand,
         context: Context<'a, '_>,
     ) -> Option<(VarIdent<'a>, TypeRef, usize)> {
+        let function = context
+            .function
+            .expect("Expected to be called in a function");
         match operand {
             Operand::LocalOperand { name, ty } => {
                 let (ty, degree) = strip_array_types(ty.clone());
@@ -332,7 +338,7 @@ where
                     Type::PointerType { .. }
                     | Type::NamedStructType { .. }
                     | Type::StructType { .. } => {
-                        Some((VarIdent::new_local(name, context.function), ty, degree))
+                        Some((VarIdent::new_local(name, function), ty, degree))
                     }
                     _ => None,
                 }
@@ -352,7 +358,9 @@ where
         dest: Option<&'a Name>,
         context: Context<'a, '_>,
     ) {
-        let caller = context.function;
+        let caller = context
+            .function
+            .expect("Expected calls to happen in other calls");
         // TODO: Filter out irrelevant function calls
         let (function, ty) = match function {
             Either::Right(Operand::ConstantOperand(name_ref)) => match name_ref.as_ref() {
@@ -486,7 +494,7 @@ where
         context: Context<'a, '_>,
     ) -> (TypeRef, usize) {
         let pointer_context = PointerContext {
-            fun_name: Some(&context.function.name),
+            fun_name: context.function.map(|func| func.name.as_str()),
         };
 
         match StructType::try_from_type_with_degree(ty.clone(), context.structs) {
@@ -524,7 +532,7 @@ where
         context: Context<'a, '_>,
     ) -> (TypeRef, usize) {
         let pointer_context = PointerContext {
-            fun_name: Some(&context.function.name),
+            fun_name: context.function.map(|func| func.name.as_str()),
         };
 
         let ty = strip_pointer_type(ty).expect("GEP should only be used on pointer types");
@@ -577,19 +585,24 @@ where
             .handle_ptr_function(&function.name, parameters)
     }
 
-    fn handle_global(&mut self, global: &'a GlobalVariable, structs: &StructMap) {
+    fn handle_global(
+        &mut self,
+        global: &'a GlobalVariable,
+        structs: &StructMap,
+        module: &'a Module,
+    ) {
+        let context = Context {
+            module,
+            function: None,
+            structs,
+        };
         let init_ref = global
             .initializer
             .as_ref()
-            .and_then(|init| match init.as_ref() {
-                Constant::GlobalReference { name, .. } => Some(VarIdent::Global {
-                    name: Cow::Borrowed(name),
-                }),
-                _ => None,
-            });
+            .and_then(|init| self.unroll_constant(init, context).0);
 
         let ty = match global.ty.as_ref() {
-            Type::PointerType { pointee_type, .. } if !global.is_constant => pointee_type,
+            Type::PointerType { pointee_type, .. } => pointee_type,
             _ => &global.ty,
         };
 
@@ -604,7 +617,9 @@ where
     }
 
     fn handle_instruction(&mut self, instr: &'a Instruction, context: Context<'a, '_>) {
-        let function = context.function;
+        let function = context
+            .function
+            .expect("Expected to be called in a function");
         let pointer_context = PointerContext {
             fun_name: Some(&function.name),
         };
@@ -804,7 +819,7 @@ where
 
     fn handle_terminator(&mut self, term: &'a Terminator, context: Context<'a, '_>) {
         let pointer_context = PointerContext {
-            fun_name: Some(&context.function.name),
+            fun_name: context.function.map(|func| func.name.as_str()),
         };
         match term {
             Terminator::Invoke(Invoke {

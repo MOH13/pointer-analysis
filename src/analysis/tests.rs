@@ -102,11 +102,11 @@ where
 }
 
 #[test_resources("res/**/test_config.json")]
-fn run_hash_solver_test(resource: &str) {
+fn hash(resource: &str) {
     run_test_template::<BasicHashSolver>(resource)
 }
 
 #[test_resources("res/**/test_config.json")]
-fn run_bit_vec_test(resource: &str) {
+fn bit_vec(resource: &str) {
     run_test_template::<BasicBitVecSolver>(resource)
 }

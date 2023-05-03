@@ -6,7 +6,7 @@ use std::str::FromStr;
 use hashbrown::HashMap;
 use llvm_ir::module::GlobalVariable;
 use llvm_ir::types::NamedStructDef;
-use llvm_ir::{BasicBlock, Function, Instruction, Module, Name, Terminator, Type, TypeRef};
+use llvm_ir::{Function, Instruction, Module, Name, Terminator, Type, TypeRef};
 
 use self::structs::{StructMap, StructType};
 
@@ -16,8 +16,7 @@ pub mod structs;
 #[derive(Clone, Copy)]
 pub struct Context<'a, 'b> {
     pub module: &'a Module,
-    pub function: &'a Function,
-    pub block: &'a BasicBlock,
+    pub function: Option<&'a Function>,
     pub structs: &'b StructMap,
 }
 
@@ -26,7 +25,12 @@ pub struct Context<'a, 'b> {
 pub trait ModuleVisitor<'a> {
     fn init(&mut self, structs: &StructMap);
     fn handle_function(&mut self, function: &'a Function, module: &'a Module);
-    fn handle_global(&mut self, global: &'a GlobalVariable, structs: &StructMap);
+    fn handle_global(
+        &mut self,
+        global: &'a GlobalVariable,
+        structs: &StructMap,
+        module: &'a Module,
+    );
     fn handle_instruction(&mut self, instr: &'a Instruction, context: Context<'a, '_>);
     fn handle_terminator(&mut self, term: &'a Terminator, context: Context<'a, '_>);
 
@@ -43,7 +47,7 @@ pub trait ModuleVisitor<'a> {
         self.init(&structs);
 
         for global in &module.global_vars {
-            self.handle_global(global, &structs);
+            self.handle_global(global, &structs, module);
         }
 
         for function in &module.functions {
@@ -51,8 +55,7 @@ pub trait ModuleVisitor<'a> {
             for block in &function.basic_blocks {
                 let context = Context {
                     module,
-                    function,
-                    block,
+                    function: Some(function),
                     structs: &structs,
                 };
 
