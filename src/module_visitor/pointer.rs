@@ -535,10 +535,11 @@ where
             fun_name: context.function.map(|func| func.name.as_str()),
         };
 
-        let ty = strip_pointer_type(ty).expect("GEP should only be used on pointer types");
+        let stripped_ty =
+            strip_pointer_type(ty.clone()).expect("GEP should only be used on pointer types");
         let indices = &indices[1..];
 
-        let struct_type = StructType::try_from_type_with_degree(ty.clone(), context.structs);
+        let struct_type = StructType::try_from_type_with_degree(stripped_ty, context.structs);
         match struct_type {
             Some((struct_type, s_degree)) if indices.len() > degree + s_degree => {
                 let (reduced_indices, field_ty, field_degree) =
