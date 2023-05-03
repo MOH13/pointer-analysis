@@ -407,7 +407,7 @@ where
 
         let return_struct_type = StructType::try_from_type(result_ty.clone(), context.structs);
 
-        let dest = if is_ptr_type(result_ty) {
+        let dest = if is_ptr_type(result_ty.clone()) || is_struct_type(result_ty) {
             dest.map(|d| VarIdent::new_local(d, caller))
         } else {
             None
@@ -692,7 +692,7 @@ where
                     let instr = PointerInstruction::Assign {
                         dest: dest.clone(),
                         value: value.clone(),
-                        struct_type: struct_type.clone(),
+                        struct_type: None, //Always a pointer type
                     };
                     self.observer.handle_ptr_instruction(instr, pointer_context);
                     if let Some(st) = self.original_ptr_types.get(&value) {
@@ -875,4 +875,11 @@ fn get_reduced_indices(
 
 fn is_ptr_type(ty: TypeRef) -> bool {
     matches!(ty.as_ref(), Type::PointerType { .. })
+}
+
+fn is_struct_type(ty: TypeRef) -> bool {
+    matches!(
+        ty.as_ref(),
+        Type::StructType { .. } | Type::NamedStructType { .. }
+    )
 }
