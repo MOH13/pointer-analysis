@@ -8,6 +8,7 @@ build = "build.rs"
 
 [dependencies]
 bitvec = "1.0.1"
+clap = { version = "4.2.7", features = ["cargo", "derive", "color"] }
 either = "1.8.1"
 hashbrown = { version = "0.13.2", features = ["serde"] }
 llvm-ir = { version = "0.8.2", features = ["llvm-14"] }

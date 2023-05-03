@@ -8,14 +8,20 @@ typedef struct my_struct
     int *f2;
 } my_struct_t;
 
+typedef struct my_struct2
+{
+    my_struct_t f1;
+    int *f2;
+} my_struct_t2;
+
 int main()
 {
-    my_struct_t a, b;
+    my_struct_t2 a, b;
     int x = 0;
     int y = 0;
-    a.f1 = &x;
+    a.f1.f1 = &x;
     a.f2 = &y;
-    my_struct_t *p = malloc(sizeof(my_struct_t));
+    my_struct_t2 *p = malloc(sizeof(my_struct_t2));
     *p = a;
     b = *p;
 }

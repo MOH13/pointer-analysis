@@ -46,7 +46,7 @@ impl PointsToAnalysis {
 }
 
 #[derive(Debug)]
-pub struct PointsToResult<'a, S: Solver>(HashMap<Cell<'a>, S::TermSet>);
+pub struct PointsToResult<'a, S: Solver>(pub HashMap<Cell<'a>, S::TermSet>);
 
 impl<'a, S> Display for PointsToResult<'a, S>
 where
@@ -186,7 +186,7 @@ impl<'a> PointsToPreAnalyzer<'a> {
 
 impl<'a> PointerModuleObserver<'a> for PointsToPreAnalyzer<'a> {
     fn init(&mut self, structs: &StructMap) {
-        self.num_cells_per_malloc = structs.values().map(|st| st.size).max().unwrap_or(0);
+        self.num_cells_per_malloc = structs.values().map(|st| st.size).max().unwrap_or(0).max(1);
     }
 
     fn handle_ptr_function(&mut self, name: &'a str, parameters: Vec<VarIdent<'a>>) {
@@ -293,23 +293,30 @@ where
     fn do_assignment(
         &mut self,
         dest: VarIdent<'a>,
+        dest_cell_type: fn(VarIdent<'a>) -> Cell<'a>,
         value: VarIdent<'a>,
+        value_cell_type: fn(VarIdent<'a>) -> Cell<'a>,
         struct_type: Option<&StructType>,
     ) {
         match struct_type {
             Some(_) => {
-                let mut value_vec = vec![];
                 let mut dest_vec = vec![];
-                get_and_push_cells(value, struct_type.as_deref(), Cell::Var, &mut value_vec);
-                get_and_push_cells(dest, struct_type.as_deref(), Cell::Var, &mut dest_vec);
+                let mut value_vec = vec![];
+                get_and_push_cells(dest, struct_type.as_deref(), dest_cell_type, &mut dest_vec);
+                get_and_push_cells(
+                    value,
+                    struct_type.as_deref(),
+                    value_cell_type,
+                    &mut value_vec,
+                );
                 for (value_cell, dest_cell) in value_vec.into_iter().zip(dest_vec) {
                     let c = cstr!(value_cell <= dest_cell);
                     self.solver.add_constraint(c);
                 }
             }
             None => {
-                let value_cell = Cell::Var(value);
-                let dest_cell = Cell::Var(dest);
+                let value_cell = value_cell_type(value);
+                let dest_cell = dest_cell_type(dest);
                 let c = cstr!(value_cell <= dest_cell);
                 self.solver.add_constraint(c);
             }
@@ -337,10 +344,7 @@ where
         self.solver.add_constraint(c);
 
         if let Some(init_ident) = init_ref {
-            let global_cell = Cell::Global(ident);
-            let init_global_cell = Cell::Global(init_ident);
-            let c = cstr!(init_global_cell in global_cell);
-            self.solver.add_constraint(c);
+            self.do_assignment(ident, Cell::Global, init_ident, Cell::Var, struct_type);
         }
     }
 
@@ -351,7 +355,7 @@ where
                 value,
                 struct_type,
             } => {
-                self.do_assignment(dest, value, struct_type.as_deref());
+                self.do_assignment(dest, Cell::Var, value, Cell::Var, struct_type.as_deref());
             }
 
             PointerInstruction::Store {
@@ -476,7 +480,13 @@ where
                 struct_type,
             } => {
                 for value in incoming_values {
-                    self.do_assignment(dest.clone(), value, struct_type.as_deref());
+                    self.do_assignment(
+                        dest.clone(),
+                        Cell::Var,
+                        value,
+                        Cell::Var,
+                        struct_type.as_deref(),
+                    );
                 }
             }
 
@@ -504,7 +514,9 @@ where
                 match (&summary.return_reg, dest) {
                     (Some(return_ident), Some(dest_ident)) => self.do_assignment(
                         dest_ident,
+                        Cell::Var,
                         return_ident.clone(),
+                        Cell::Var,
                         return_struct_type.as_deref(),
                     ),
                     _ => {}
