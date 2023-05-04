@@ -5,6 +5,7 @@ use llvm_ir::Module;
 use solver::{BasicHashSolver, GenericSolver};
 use std::io;
 
+use crate::analysis::Cell;
 use crate::analysis::PointsToResult;
 use crate::solver::BasicBitVecSolver;
 
@@ -13,15 +14,23 @@ mod bit_index_utils;
 mod module_visitor;
 mod solver;
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     file_path: String,
     #[arg(short, long)]
     solver: Option<SolverMode>,
+    #[arg(short, long)]
+    include_keywords: Vec<String>,
+    #[arg(short, long)]
+    exclude_keywords: Vec<String>,
+    #[arg(short = 'E', long, default_value_t = false)]
+    include_empty: bool,
+    #[arg(short = 'S', long, default_value_t = false)]
+    exclude_strings: bool,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
 enum SolverMode {
     /// Bitvec based solver
     Bitvec,
@@ -29,8 +38,12 @@ enum SolverMode {
     Hash,
 }
 
+const STRING_FILTER: &'static str = ".str.";
+
 fn main() -> io::Result<()> {
     let args = Args::parse();
+
+    //dbg!(&args);
 
     let file_path = args.file_path;
     let module = Module::from_bc_path(&file_path).expect("Error parsing bc file");
@@ -45,7 +58,18 @@ fn main() -> io::Result<()> {
             }
             None => PointsToAnalysis::run::<GenericSolver<_, BasicHashSolver>>(&module).0,
         });
-    println!("{result}");
+
+    let filtered_result = result.get_filtered_entries(
+        |c, set| {
+            matches!(c, Cell::Stack(..) | Cell::Global(..))
+                && (args.include_empty || !set.is_empty())
+                && (!args.exclude_strings || !c.to_string().contains(STRING_FILTER))
+        },
+        |pointee| (!args.exclude_strings || !pointee.to_string().contains(STRING_FILTER)),
+        args.include_keywords.iter().map(|s| s.as_str()).collect(),
+        args.exclude_keywords.iter().map(|s| s.as_str()).collect(),
+    );
+    println!("{filtered_result}");
 
     Ok(())
 }
