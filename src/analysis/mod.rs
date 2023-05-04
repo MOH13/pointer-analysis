@@ -45,8 +45,36 @@ impl PointsToAnalysis {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PointsToResult<'a, S: Solver>(pub HashMap<Cell<'a>, S::TermSet>);
+
+impl<'a, S: Solver> PointsToResult<'a, S>
+where
+    S::TermSet: IntoIterator<Item = Cell<'a>>,
+    S::TermSet: FromIterator<Cell<'a>>,
+{
+    pub fn get_filtered_entries(
+        self,
+        mut key_filter: impl FnMut(&Cell<'a>, &S::TermSet) -> bool,
+        mut value_filter: impl FnMut(&Cell<'a>) -> bool,
+        include_strs: Vec<&str>,
+        exclude_strs: Vec<&str>,
+    ) -> Self {
+        Self(
+            self.0
+                .into_iter()
+                .map(|(cell, set)| (cell, set.into_iter().filter(&mut value_filter).collect()))
+                .filter(|(cell, set)| {
+                    let cell_str = cell.to_string();
+                    key_filter(cell, set)
+                        && (include_strs.is_empty()
+                            || include_strs.iter().any(|s| cell_str.contains(s)))
+                        && (exclude_strs.iter().all(|s| !cell_str.contains(s)))
+                })
+                .collect(),
+        )
+    }
+}
 
 impl<'a, S> Display for PointsToResult<'a, S>
 where
@@ -54,11 +82,7 @@ where
     S::TermSet: fmt::Debug,
 {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        for (cell, set) in self
-            .0
-            .iter()
-            .filter(|(c, _)| matches!(c, Cell::Stack(..) | Cell::Global(..)))
-        {
+        for (cell, set) in self.0.iter() {
             writeln!(f, "[[{cell}]] = {set:#?}")?;
         }
         Ok(())
@@ -217,6 +241,9 @@ impl<'a> PointerModuleObserver<'a> for PointsToPreAnalyzer<'a> {
         context: PointerContext<'a>,
     ) {
         match instr {
+            PointerInstruction::Fresh { ident, struct_type } => {
+                self.add_cells_and_allowed_offsets(ident, struct_type.as_deref(), Cell::Var)
+            }
             PointerInstruction::Gep { dest, .. } => {
                 self.add_cells_and_allowed_offsets(dest, None, Cell::Var)
             }
@@ -234,6 +261,7 @@ impl<'a> PointerModuleObserver<'a> for PointsToPreAnalyzer<'a> {
                 return_struct_type: struct_type,
                 ..
             } => self.add_cells_and_allowed_offsets(dest, struct_type.as_deref(), Cell::Var),
+            PointerInstruction::Call { dest: None, .. } => (),
 
             PointerInstruction::Alloca { dest, struct_type } => {
                 self.cells.push(Cell::Var(dest.clone()));
@@ -262,8 +290,11 @@ impl<'a> PointerModuleObserver<'a> for PointsToPreAnalyzer<'a> {
                     s.return_reg = Some(return_reg);
                 });
             }
-
-            _ => {}
+            PointerInstruction::Store {
+                address,
+                value,
+                struct_type,
+            } => (),
         }
     }
 }

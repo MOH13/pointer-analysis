@@ -15,12 +15,19 @@ use llvm_ir::{
     Type, TypeRef,
 };
 
+use crate::module_visitor::pointer;
+
 use super::{
     strip_array_types, strip_pointer_type, Context, ModuleVisitor, StructMap, StructType, VarIdent,
 };
 
 #[derive(Debug)]
 pub enum PointerInstruction<'a> {
+    /// Used to simply register an ident
+    Fresh {
+        ident: VarIdent<'a>,
+        struct_type: Option<Rc<StructType>>,
+    },
     /// x = y
     Assign {
         dest: VarIdent<'a>,
@@ -135,13 +142,18 @@ where
                 for (i, val) in values.iter().enumerate() {
                     let (val, ty, _) = self.unroll_constant(val, context);
                     value_types.push(ty.clone());
-                    if let Some(val) = val {
-                        let fresh_field = VarIdent::Offset {
-                            base: fresh_rc.clone(),
-                            offset: i,
-                        };
-                        let struct_type = StructType::try_from_type(ty, context.structs);
-                        self.handle_assign(fresh_field, val, struct_type, pointer_context);
+                    let fresh_field = VarIdent::Offset {
+                        base: fresh_rc.clone(),
+                        offset: i,
+                    };
+                    let struct_type = StructType::try_from_type(ty, context.structs);
+                    match val {
+                        Some(val) => {
+                            self.handle_assign(fresh_field, val, struct_type, pointer_context);
+                        }
+                        None => {
+                            self.handle_unused_fresh(fresh_field, struct_type, pointer_context);
+                        }
                     }
                 }
 
@@ -159,13 +171,20 @@ where
 
             Constant::Vector(elements) => self.unroll_array(elements, None, context),
 
-            Constant::GlobalReference { name, ty } => (
-                Some(VarIdent::Global {
-                    name: Cow::Borrowed(name),
-                }),
-                context.module.types.pointer_to(ty.clone()),
-                0,
-            ),
+            Constant::GlobalReference { name, ty } => {
+                if matches!(ty.as_ref(), Type::FuncType { .. }) {
+                    println!("Warning: Unhandled function type reference");
+                    (None, context.module.types.pointer_to(ty.clone()), 0)
+                } else {
+                    (
+                        Some(VarIdent::Global {
+                            name: Cow::Borrowed(name),
+                        }),
+                        context.module.types.pointer_to(ty.clone()),
+                        0,
+                    )
+                }
+            }
 
             Constant::ExtractElement(constant::ExtractElement {
                 vector: operand, ..
@@ -234,17 +253,30 @@ where
                 indices,
             }) => {
                 // TODO
-
-                if indices.len() != 1 {
-                    println!("Warning: Unhandled InsertValue");
-                    return (None, context.module.types.i8(), 0);
-                }
-
-                println!("Warning: Potentially unhandled InsertValue");
                 let fresh = self.add_fresh_ident();
                 let (aggregate, ty, d) = self.unroll_constant(aggregate, context);
                 let (element, ..) = self.unroll_constant(element, context);
                 let struct_type = StructType::try_from_type(ty.clone(), context.structs);
+
+                if indices.len() != 1 {
+                    println!("Warning: Unhandled InsertValue");
+
+                    match aggregate {
+                        Some(aggregate) => self.handle_assign(
+                            fresh.clone(),
+                            aggregate,
+                            struct_type,
+                            pointer_context,
+                        ),
+                        None => {
+                            self.handle_unused_fresh(fresh.clone(), struct_type, pointer_context);
+                        }
+                    }
+
+                    return (Some(fresh), context.module.types.i8(), 0);
+                }
+
+                println!("Warning: Potentially unhandled InsertValue");
                 self.handle_join(
                     fresh.clone(),
                     aggregate.unwrap(),
@@ -284,7 +316,25 @@ where
 
             Constant::IntToPtr(constant::IntToPtr { to_type, .. }) => {
                 println!("Warning: IntToPtr detected");
-                (None, to_type.clone(), 1)
+                let fresh = self.add_fresh_ident();
+                self.handle_unused_fresh(fresh.clone(), None, pointer_context);
+
+                (Some(fresh), to_type.clone(), 0)
+            }
+
+            Constant::Poison(ty) => {
+                let struct_type = StructType::try_from_type(ty.clone(), context.structs);
+                let fresh = self.add_fresh_ident();
+                self.handle_unused_fresh(fresh.clone(), struct_type, pointer_context);
+
+                (Some(fresh), ty.clone(), 0)
+            }
+
+            Constant::Null(ty) => {
+                let fresh = self.add_fresh_ident();
+                self.handle_unused_fresh(fresh.clone(), None, pointer_context);
+
+                (Some(fresh), ty.clone(), 0)
             }
 
             _ => (None, context.module.types.i8(), 0),
@@ -349,6 +399,19 @@ where
             }
             Operand::MetadataOperand => None,
         }
+    }
+
+    fn handle_unused_fresh(
+        &mut self,
+        ident: VarIdent<'a>,
+        struct_type: Option<Rc<StructType>>,
+        pointer_context: PointerContext<'a>,
+    ) {
+        let instr = PointerInstruction::Fresh {
+            ident: ident,
+            struct_type: struct_type,
+        };
+        self.observer.handle_ptr_instruction(instr, pointer_context);
     }
 
     fn handle_call(
@@ -455,18 +518,8 @@ where
         struct_type: Option<Rc<StructType>>,
         context: PointerContext<'a>,
     ) {
-        let x_instr = PointerInstruction::Assign {
-            dest: dest.clone(),
-            value: x,
-            struct_type: struct_type.clone(),
-        };
-        let y_instr = PointerInstruction::Assign {
-            dest,
-            value: y,
-            struct_type,
-        };
-        self.observer.handle_ptr_instruction(x_instr, context);
-        self.observer.handle_ptr_instruction(y_instr, context);
+        self.handle_assign(dest.clone(), x, struct_type.clone(), context);
+        self.handle_assign(dest.clone(), y, struct_type.clone(), context);
     }
 
     fn handle_assign(
@@ -656,11 +709,11 @@ where
                 dest,
                 ..
             }) => {
+                let dest = VarIdent::new_local(dest, function);
                 if let (Some((x, ty, ..)), Some((y, ..))) = (
                     self.get_operand_ident_type(x, context),
                     self.get_operand_ident_type(y, context),
                 ) {
-                    let dest = VarIdent::new_local(dest, function);
                     let struct_type = StructType::try_from_type(ty, context.structs);
                     self.handle_join(dest, x, y, struct_type, pointer_context);
                 }
@@ -684,7 +737,22 @@ where
                 indices,
                 dest,
                 ..
-            }) => todo!(),
+            }) => {
+                println!("Warning: Unhandled InsertValue");
+                println!("{instr}");
+                //todo!()
+
+                let dest_ident = VarIdent::new_local(dest, function);
+
+                if let Some((aggregate_ident, ty, ..)) =
+                    self.get_operand_ident_type(aggregate, context)
+                {
+                    let struct_type = StructType::try_from_type(ty, context.structs);
+                    self.handle_assign(dest_ident, aggregate_ident, struct_type, pointer_context);
+                } else {
+                    self.handle_unused_fresh(dest_ident, None, pointer_context);
+                }
+            }
 
             Instruction::Alloca(Alloca {
                 dest,
