@@ -127,13 +127,10 @@ solver_tests! {
 
     // Pseudo code:
     //
-    // x = null
-    // y = { f: 0, g: &x }
-    // py = &y
-    // pg = &py->g
-    // z = *pg
-    // *z = py
-    // *pg = py
+    // x1 = { f: 0, g: 0 }
+    // x1 = &x1
+    // x2 = &x1->g
+    // x1 = x2
     fn positive_cycle<S>(x1, x2, y) {
         let terms = vec![x1, x2, y];
         let constraints = [cstr!(x1 in x1), cstr!(x1 + 1 <= x2), cstr!(x2 <= x1)];
