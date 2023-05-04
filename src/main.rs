@@ -17,16 +17,22 @@ mod solver;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
+    /// Path to .bc file
     file_path: String,
     #[arg(short, long)]
+    // Select used solver
     solver: Option<SolverMode>,
     #[arg(short, long)]
+    /// List of keywords that must present to be included in output
     include_keywords: Vec<String>,
     #[arg(short, long)]
+    /// List of keywords to exclude from output
     exclude_keywords: Vec<String>,
     #[arg(short = 'E', long, default_value_t = false)]
+    /// Include empty points-to sets in output
     include_empty: bool,
     #[arg(short = 'S', long, default_value_t = false)]
+    /// Exclude strings from points-to set output
     exclude_strings: bool,
 }
 
