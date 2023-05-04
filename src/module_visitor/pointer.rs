@@ -15,8 +15,6 @@ use llvm_ir::{
     Type, TypeRef,
 };
 
-use crate::module_visitor::pointer;
-
 use super::{
     strip_array_types, strip_pointer_type, Context, ModuleVisitor, StructMap, StructType, VarIdent,
 };
@@ -361,12 +359,7 @@ where
 
                 let struct_type = StructType::try_from_type(t, context.structs);
                 let dest = fresh.get_or_insert_with(|| self.add_fresh_ident());
-                let instr = PointerInstruction::Assign {
-                    dest: dest.clone(),
-                    value: e,
-                    struct_type,
-                };
-                self.observer.handle_ptr_instruction(instr, pointer_context);
+                self.handle_assign(dest.clone(), e, struct_type, pointer_context);
             }
         }
 
@@ -609,12 +602,7 @@ where
             }
 
             _ => {
-                let instr = PointerInstruction::Assign {
-                    dest,
-                    value: address,
-                    struct_type: None,
-                };
-                self.observer.handle_ptr_instruction(instr, pointer_context);
+                self.handle_assign(dest, address, None, pointer_context);
                 (ty, degree)
             }
         }
@@ -773,17 +761,15 @@ where
                         .expect("bitcast and addrspacecast should only take pointer args");
                     let dest = VarIdent::new_local(dest, function);
                     let struct_type = StructType::try_from_type(src_ty.clone(), context.structs);
-                    let instr = PointerInstruction::Assign {
-                        dest: dest.clone(),
-                        value: value.clone(),
-                        struct_type: None, //Always a pointer type
-                    };
-                    self.observer.handle_ptr_instruction(instr, pointer_context);
+
                     if let Some(st) = self.original_ptr_types.get(&value) {
                         self.original_ptr_types.insert(dest.clone(), st.clone());
                     } else if let Some(st) = struct_type {
                         self.original_ptr_types.insert(dest.clone(), st);
                     }
+
+                    // Always a pointer type, so no struct type
+                    self.handle_assign(dest, value, None, pointer_context);
                 };
             }
 
