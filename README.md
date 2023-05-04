@@ -8,7 +8,7 @@ This tool analyses LLVM `.bc` files:
 
 > `pointer-analysis <path/to/bc_file.bc>`
 
-Use `pointer-analysis --help` for more options.
+Use `--help` for more options.
 
 We recommend using the VS Code Dev Container included in the project, since it has the required dependencies and configurations.
 
