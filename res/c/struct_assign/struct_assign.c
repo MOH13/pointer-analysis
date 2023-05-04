@@ -8,7 +8,8 @@ typedef struct my_struct
 
 my_struct_t struct_instance;
 
-void main() {
+int main()
+{
     my_struct_t a, b;
     int c = 0;
     a.f2 = &c;
