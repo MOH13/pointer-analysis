@@ -290,11 +290,7 @@ impl<'a> PointerModuleObserver<'a> for PointsToPreAnalyzer<'a> {
                     s.return_reg = Some(return_reg);
                 });
             }
-            PointerInstruction::Store {
-                address,
-                value,
-                struct_type,
-            } => (),
+            PointerInstruction::Store { .. } => (),
         }
     }
 }

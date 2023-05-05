@@ -1,5 +1,3 @@
-#include <stdlib.h>
-
 typedef struct
 {
     int *a;
@@ -15,6 +13,4 @@ int main()
     d.a = &e;
 
     st f = foo(d);
-
-    return 0;
 }
