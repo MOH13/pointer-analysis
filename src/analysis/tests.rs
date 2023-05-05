@@ -1,5 +1,6 @@
 use std::fmt::Debug;
 use std::fs::File;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -24,20 +25,44 @@ struct TestConfig {
 fn compile_c(config_dir: &Path, c_path: &String) -> PathBuf {
     let full_c_path = config_dir.join(c_path);
     let bc_path = full_c_path.with_extension("bc");
-    Command::new("./ctobc.sh")
+
+    let output = Command::new("./ctobc.sh")
         .args([&full_c_path, &bc_path])
         .output()
         .expect("Could not compile c source to bytecode");
+
+    if !output.status.success() {
+        io::stdout()
+            .write_all(&output.stdout)
+            .expect("Failed to write output");
+        io::stderr()
+            .write_all(&output.stderr)
+            .expect("Failed to write output");
+        panic!("Could not compile c source to bytecode");
+    }
+
     bc_path
 }
 
 fn compile_llvm(config_dir: &Path, llvm_path: &String) -> PathBuf {
     let full_llvm_path = config_dir.join(llvm_path);
     let bc_path = full_llvm_path.with_extension("bc");
-    Command::new("./lltobc.sh")
+
+    let output = Command::new("./lltobc.sh")
         .args([&full_llvm_path, &bc_path])
         .output()
         .expect("Could not compile ll to bytecode");
+
+    if !output.status.success() {
+        io::stdout()
+            .write_all(&output.stdout)
+            .expect("Failed to write output");
+        io::stderr()
+            .write_all(&output.stderr)
+            .expect("Failed to write output");
+        panic!("Could not compile ll to bytecode");
+    }
+
     bc_path
 }
 

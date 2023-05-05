@@ -250,39 +250,28 @@ where
                 element,
                 indices,
             }) => {
-                // TODO
-                let fresh = self.add_fresh_ident();
-                let (aggregate, ty, d) = self.unroll_constant(aggregate, context);
-                let (element, ..) = self.unroll_constant(element, context);
-                let struct_type = StructType::try_from_type(ty.clone(), context.structs);
+                let (base, base_ty, base_degree) = self.unroll_constant(aggregate, context);
+                let (value, ..) = self.unroll_constant(element, context);
 
-                if indices.len() != 1 {
-                    println!("Warning: Unhandled InsertValue");
-
-                    match aggregate {
-                        Some(aggregate) => self.handle_assign(
+                match (base, value) {
+                    (Some(base), Some(value)) => {
+                        let fresh = self.add_fresh_ident();
+                        self.handle_insert_value(
                             fresh.clone(),
-                            aggregate,
-                            struct_type,
-                            pointer_context,
-                        ),
-                        None => {
-                            self.handle_unused_fresh(fresh.clone(), struct_type, pointer_context);
-                        }
+                            base,
+                            value,
+                            &indices,
+                            base_degree,
+                            base_ty.clone(),
+                            context,
+                        );
+                        (Some(fresh), base_ty, base_degree)
                     }
-
-                    return (Some(fresh), context.module.types.i8(), 0);
+                    // inserted element is irrelevant
+                    (Some(base), None) => (Some(base), base_ty, base_degree),
+                    // aggregate is an array of irrelevant type
+                    (None, _) => (None, base_ty, base_degree),
                 }
-
-                println!("Warning: Potentially unhandled InsertValue");
-                self.handle_join(
-                    fresh.clone(),
-                    aggregate.unwrap(),
-                    element.unwrap(),
-                    struct_type,
-                    pointer_context,
-                );
-                (Some(fresh), ty, d)
             }
 
             Constant::GetElementPtr(constant::GetElementPtr {
@@ -390,7 +379,10 @@ where
                 let (ident, ty, degree) = self.unroll_constant(constant, context);
                 ident.map(|id| (id, ty, degree))
             }
-            Operand::MetadataOperand => None,
+            Operand::MetadataOperand => {
+                println!("Warning: Metadata operand");
+                None
+            }
         }
     }
 
@@ -545,26 +537,55 @@ where
 
         match StructType::try_from_type_with_degree(ty.clone(), context.structs) {
             Some((st, 0)) if degree < indices.len() => {
-                let indices: Vec<_> = indices.iter().map(|&i| Some(i as usize)).collect();
-                let (reduced_indices, field_ty, field_degree) =
-                    get_reduced_indices(st, &indices, degree);
-                let field_ident =
-                    reduced_indices
-                        .into_iter()
-                        .fold(base, |acc, i| VarIdent::Offset {
-                            base: Rc::new(acc),
-                            offset: i,
-                        });
+                let (field_ident, field_ty, field_degree) =
+                    get_field_ident_type(base, &*st, indices, degree);
 
                 let field_st = StructType::try_from_type(field_ty.clone(), context.structs);
                 self.handle_assign(dest, field_ident, field_st, pointer_context);
                 (field_ty, field_degree)
             }
+            // extracing a struct from an array
+            Some((st, 0)) => {
+                self.handle_assign(dest, base, Some(st), pointer_context);
+                (ty, degree - indices.len())
+            }
+            // base should be pre-stripped of array types
             Some(_) => panic!("Type was an array type ({ty})"),
             _ => {
                 self.handle_assign(dest, base, None, pointer_context);
                 (ty, degree - indices.len())
             }
+        }
+    }
+
+    fn handle_insert_value(
+        &mut self,
+        dest: VarIdent<'a>,
+        base: VarIdent<'a>,
+        value: VarIdent<'a>,
+        indices: &[u32],
+        base_degree: usize,
+        base_ty: TypeRef,
+        context: Context<'a, '_>,
+    ) {
+        let pointer_context = PointerContext {
+            fun_name: context.function.map(|func| func.name.as_str()),
+        };
+
+        match StructType::try_from_type_with_degree(base_ty.clone(), context.structs) {
+            Some((st, 0)) if base_degree < indices.len() => {
+                self.handle_assign(dest.clone(), base, Some(st.clone()), pointer_context);
+
+                let (field_ident, field_ty, _) =
+                    get_field_ident_type(dest, &*st, indices, base_degree);
+                let field_st = StructType::try_from_type(field_ty, context.structs);
+                self.handle_assign(field_ident, value, field_st, pointer_context);
+            }
+            // inserting a struct into an array
+            Some((st, 0)) => self.handle_join(dest, base, value, Some(st), pointer_context),
+            // base should be pre-stripped of array types
+            Some(_) => panic!("Type was an array type ({base_ty})"),
+            None => self.handle_join(dest, base, value, None, pointer_context),
         }
     }
 
@@ -589,7 +610,7 @@ where
         match struct_type {
             Some((struct_type, s_degree)) if indices.len() > degree + s_degree => {
                 let (reduced_indices, field_ty, field_degree) =
-                    get_reduced_indices(struct_type.clone(), indices, degree + s_degree);
+                    get_reduced_indices(&*struct_type, indices, degree + s_degree);
 
                 let instr = PointerInstruction::Gep {
                     dest,
@@ -726,19 +747,29 @@ where
                 dest,
                 ..
             }) => {
-                println!("Warning: Unhandled InsertValue");
-                println!("{instr}");
-                //todo!()
-
-                let dest_ident = VarIdent::new_local(dest, function);
-
-                if let Some((aggregate_ident, ty, ..)) =
-                    self.get_operand_ident_type(aggregate, context)
-                {
-                    let struct_type = StructType::try_from_type(ty, context.structs);
-                    self.handle_assign(dest_ident, aggregate_ident, struct_type, pointer_context);
-                } else {
-                    self.handle_unused_fresh(dest_ident, None, pointer_context);
+                let dest = VarIdent::new_local(dest, function);
+                match (
+                    self.get_operand_ident_type(aggregate, context),
+                    self.get_operand_ident_type(element, context),
+                ) {
+                    (Some((base, base_ty, base_degree)), Some((value, ..))) => self
+                        .handle_insert_value(
+                            dest,
+                            base,
+                            value,
+                            &indices,
+                            base_degree,
+                            base_ty,
+                            context,
+                        ),
+                    // inserted element is irrelevant
+                    (Some((base, ty, _)), None) => {
+                        let struct_type = StructType::try_from_type(ty, context.structs);
+                        self.handle_assign(dest, base, struct_type, pointer_context);
+                    }
+                    // aggregate is an array of irrelevant type
+                    // TODO: Do we need a Fresh instrcuction here>
+                    (None, _) => {}
                 }
             }
 
@@ -919,12 +950,12 @@ pub trait PointerModuleObserver<'a> {
 }
 
 fn get_reduced_indices(
-    struct_type: Rc<StructType>,
+    struct_type: &StructType,
     indices: &[Option<usize>],
     degree: usize,
 ) -> (Vec<usize>, TypeRef, usize) {
     let mut reduced_indices = vec![];
-    let mut sub_struct_type = struct_type.as_ref();
+    let mut sub_struct_type = struct_type;
     let mut remaining_indices = &indices[degree..];
     loop {
         let i = remaining_indices[0].expect("all indices into structs must be constant i32");
@@ -941,6 +972,25 @@ fn get_reduced_indices(
             }
         }
     }
+}
+
+fn get_field_ident_type<'a>(
+    base: VarIdent<'a>,
+    struct_type: &StructType,
+    indices: &[u32],
+    degree: usize,
+) -> (VarIdent<'a>, TypeRef, usize) {
+    let indices: Vec<_> = indices.iter().map(|&i| Some(i as usize)).collect();
+    let (reduced_indices, field_ty, field_degree) =
+        get_reduced_indices(struct_type, &indices, degree);
+    let field_ident = reduced_indices
+        .into_iter()
+        .fold(base, |acc, i| VarIdent::Offset {
+            base: Rc::new(acc),
+            offset: i,
+        });
+
+    (field_ident, field_ty, field_degree)
 }
 
 fn is_ptr_type(ty: TypeRef) -> bool {
