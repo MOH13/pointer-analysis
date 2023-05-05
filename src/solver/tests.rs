@@ -127,14 +127,46 @@ solver_tests! {
 
     // Pseudo code:
     //
-    // x1 = { f: 0, g: 0 }
+    // y = null
+    // x1 = null
     // x1 = &x1
-    // x2 = &x1->g
+    // x2 = x1 + 1
     // x1 = x2
     fn positive_cycle<S>(x1, x2, y) {
         let terms = vec![x1, x2, y];
         let constraints = [cstr!(x1 in x1), cstr!(x1 + 1 <= x2), cstr!(x2 <= x1)];
         let expected_output = output![x1 -> {x1,x2}, x2 -> {x2}, y -> {}];
         solver_test_template::<_, S>(terms, vec![(x1, 1)], constraints, expected_output);
+    }
+
+    // Pseudo code:
+    //
+    // x = null
+    // a = { f: 0, g: &x }
+    // b = malloc { f: 0, g: null }
+    // *b = a
+    // c = *b
+    fn struct_load_store<S>(x, af, ag, b, hf, hg, cf, cg) {
+        let terms = vec![x, af, ag, b, hf, hg, cf, cg];
+        let constraints = [
+            cstr!(x in ag),
+            cstr!(hf in b),
+            cstr!(c in b + 0 : af <= c),
+            cstr!(c in b + 1 : ag <= c),
+            cstr!(c in b + 0 : c <= cf),
+            cstr!(c in b + 1 : c <= cg),
+        ];
+        let expected_output = output![
+            x -> {},
+            af -> {},
+            ag -> {x},
+            b -> {hf},
+            hf -> {},
+            hg -> {x},
+            cf -> {},
+            cg -> {x}
+        ];
+        let allowed_offsets = vec![(af, 1), (hf, 1), (cf, 1)];
+        solver_test_template::<_, S>(terms, allowed_offsets, constraints, expected_output);
     }
 }
