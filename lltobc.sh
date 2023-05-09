@@ -5,4 +5,4 @@ then
     exit 1
 fi
 
-llvm-as-14 $1 -o $2
+llvm-as $1 -o $2

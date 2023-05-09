@@ -24,13 +24,8 @@ pub struct Context<'a, 'b> {
 /// which the `visit_module` function will call.
 pub trait ModuleVisitor<'a> {
     fn init(&mut self, structs: &StructMap);
-    fn handle_function(&mut self, function: &'a Function, module: &'a Module);
-    fn handle_global(
-        &mut self,
-        global: &'a GlobalVariable,
-        structs: &StructMap,
-        module: &'a Module,
-    );
+    fn handle_function(&mut self, function: &'a Function, context: Context<'a, '_>);
+    fn handle_global(&mut self, global: &'a GlobalVariable, context: Context<'a, '_>);
     fn handle_instruction(&mut self, instr: &'a Instruction, context: Context<'a, '_>);
     fn handle_terminator(&mut self, term: &'a Terminator, context: Context<'a, '_>);
 
@@ -46,17 +41,21 @@ pub trait ModuleVisitor<'a> {
 
         self.init(&structs);
 
+        let context = Context {
+            module,
+            function: None,
+            structs: &structs,
+        };
         for global in &module.global_vars {
-            self.handle_global(global, &structs, module);
+            self.handle_global(global, context);
         }
 
         for function in &module.functions {
-            self.handle_function(function, module);
+            self.handle_function(function, context);
             for block in &function.basic_blocks {
                 let context = Context {
-                    module,
                     function: Some(function),
-                    structs: &structs,
+                    ..context
                 };
 
                 for instr in &block.instrs {
