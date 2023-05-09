@@ -1,0 +1,13 @@
+{
+    "c_path": "dynamic_struct_return.c",
+    "points_to": {
+        "stack-%f@main": [
+            "ret-%a[0]",
+            "ret-%b[0]"
+        ],
+        "stack-%p@main": [
+            "global-%x",
+            "global-%y"
+        ]
+    }
+}
