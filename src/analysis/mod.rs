@@ -602,8 +602,7 @@ where
                     return_struct_type.as_deref(),
                 );
             }
-
-            _ => {}
+            PointerInstruction::Fresh { .. } => (),
         }
     }
 }
