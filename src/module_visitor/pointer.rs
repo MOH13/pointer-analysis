@@ -436,7 +436,8 @@ where
 
         if let VarIdent::Global { name } = &function {
             if let Name::Name(name) = name.as_ref() {
-                if self.handle_special_function(name.as_str(), arguments, dest.clone(), context) {
+                if !context.functions.contains(name.as_str()) {
+                    self.handle_special_function(name.as_str(), arguments, dest.clone(), context);
                     return;
                 }
             }
@@ -469,7 +470,7 @@ where
         arguments: &'a [(Operand, Vec<ParameterAttribute>)],
         dest: Option<VarIdent<'a>>,
         context: Context<'a, '_>,
-    ) -> bool {
+    ) {
         let pointer_context = PointerContext::from_context(context);
 
         match function {
@@ -495,9 +496,7 @@ where
                         .handle_ptr_instruction(src_load, pointer_context);
                     self.observer
                         .handle_ptr_instruction(dest_store, pointer_context);
-                }
-
-                true
+                };
             }
 
             // TODO: What if someone defines their own function called malloc?
@@ -507,11 +506,11 @@ where
                     dest: dest.expect("malloc should have a destination"),
                 };
                 self.observer.handle_ptr_instruction(instr, pointer_context);
-
-                true
             }
 
-            _ => false,
+            _ => {
+                println!("Warning: Unhandled function '{function}'");
+            }
         }
     }
 
@@ -648,8 +647,8 @@ impl<'a, 'b, O> ModuleVisitor<'a> for PointerModuleVisitor<'a, 'b, O>
 where
     O: PointerModuleObserver<'a>,
 {
-    fn init(&mut self, structs: &StructMap) {
-        self.observer.init(structs)
+    fn init(&mut self, context: Context<'a, '_>) {
+        self.observer.init(context.structs);
     }
 
     fn handle_function(&mut self, function: &'a Function, context: Context<'a, '_>) {
@@ -668,6 +667,7 @@ where
     }
 
     fn handle_global(&mut self, global: &'a GlobalVariable, context: Context<'a, '_>) {
+        dbg!(&global.name);
         let init_ref = global
             .initializer
             .as_ref()
@@ -906,7 +906,12 @@ where
                 self.handle_call(callee, arguments, dest.as_ref(), context);
             }
 
-            _ => {}
+            Instruction::VAArg(_) => println!("Warning: Unhandled VAArg"),
+            Instruction::IntToPtr(_) => println!("Warning: Unhandled VAArg"),
+            Instruction::LandingPad(_) => println!("Warning: Unhandled LandingPad"),
+            Instruction::CatchPad(_) => println!("Warning: Unhandled CatchPad"),
+            Instruction::CleanupPad(_) => println!("Warning: Unhandled CleanupPad"),
+            _ => (),
         }
     }
 
