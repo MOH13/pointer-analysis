@@ -1,0 +1,12 @@
+{
+    "c_path": "global_struct.c",
+    "points_to": {
+        "global-%struct_instance[0]": [
+            "global-%global_int",
+            "stack-%a@main"
+        ],
+        "global-%struct_instance[1]": [
+            "stack-%b@main"
+        ]
+    }
+}

@@ -217,15 +217,17 @@ impl<'a> PointerModuleObserver<'a> for PointsToPreAnalyzer<'a> {
         return_struct_type: Option<Rc<StructType>>,
     ) {
         self.cells.push(Cell::Var(ident.clone()));
-        for param in &parameters {
-            self.cells.push(Cell::Var(param.clone()));
-        }
 
         let offset = self.add_cells(ident.clone(), return_struct_type.as_deref(), Cell::Return)
             + parameters.len()
             - 1;
-        let function_cell = get_function_cell(ident, parameters, return_struct_type.as_deref());
-        self.allowed_offsets.push((function_cell, offset));
+
+        for param in &parameters {
+            self.cells.push(Cell::Var(param.clone()));
+        }
+
+        let first_cell = Cell::Return(first_ident(ident, return_struct_type.as_deref()));
+        self.allowed_offsets.push((first_cell, offset));
     }
 
     fn handle_ptr_global(
@@ -304,18 +306,6 @@ fn first_ident<'a>(base_ident: VarIdent<'a>, struct_type: Option<&StructType>) -
     }
 }
 
-fn get_function_cell<'a>(
-    ident: VarIdent<'a>,
-    parameters: Vec<VarIdent<'a>>,
-    return_struct_type: Option<&StructType>,
-) -> Cell<'a> {
-    parameters
-        .into_iter()
-        .next()
-        .map(Cell::Var)
-        .unwrap_or_else(|| Cell::Return(first_ident(ident, return_struct_type)))
-}
-
 /// Visits a module, generating and solving constraints using a supplied constraint solver.
 struct PointsToSolver<'a, S> {
     solver: S,
@@ -376,13 +366,12 @@ where
     fn handle_ptr_function(
         &mut self,
         ident: VarIdent<'a>,
-        parameters: Vec<VarIdent<'a>>,
+        _parameters: Vec<VarIdent<'a>>,
         return_struct_type: Option<Rc<StructType>>,
     ) {
-        let function_cell =
-            get_function_cell(ident.clone(), parameters, return_struct_type.as_deref());
+        let first_cell = Cell::Return(first_ident(ident.clone(), return_struct_type.as_deref()));
         let var_cell = Cell::Var(ident.clone());
-        let c = cstr!(function_cell in var_cell);
+        let c = cstr!(first_cell in var_cell);
         self.solver.add_constraint(c);
 
         self.return_struct_types.insert(ident, return_struct_type);
@@ -563,12 +552,13 @@ where
                 return_struct_type,
             } => {
                 let function_cell = Cell::Var(function);
-                for (offset, arg) in arguments
+                for (i, arg) in arguments
                     .iter()
                     .enumerate()
                     .filter_map(|(i, a)| a.clone().map(|a| (i, a)))
                 {
                     let arg_cell = Cell::Var(arg);
+                    let offset = return_struct_type.as_ref().map(|st| st.size).unwrap_or(1) + i;
                     let c = cstr!(c in (function_cell.clone()) + offset : arg_cell <= c);
                     self.solver.add_constraint(c);
                 }
@@ -584,8 +574,7 @@ where
                     );
 
                     for (i, cell) in dest_cells.into_iter().enumerate() {
-                        let offset = arguments.len() + i;
-                        let c = cstr!(c in (function_cell.clone()) + offset : c <= cell);
+                        let c = cstr!(c in (function_cell.clone()) + i : c <= cell);
                         self.solver.add_constraint(c);
                     }
                 }
