@@ -434,16 +434,7 @@ where
             None
         };
 
-        if let VarIdent::Global { name } = &function {
-            if let Name::Name(name) = name.as_ref() {
-                if !context.functions.contains(name.as_str()) {
-                    self.handle_special_function(name.as_str(), arguments, dest.clone(), context);
-                    return;
-                }
-            }
-        }
-
-        let arguments = arguments
+        let argument_idents = arguments
             .iter()
             .map(|(arg, _)| {
                 self.get_operand_ident_type(arg, context)
@@ -451,10 +442,33 @@ where
             })
             .collect();
 
+        if let VarIdent::Global { name } = &function {
+            if let Name::Name(name) = name.as_ref() {
+                if !context.functions.contains(name.as_str()) {
+                    self.handle_special_function(
+                        name.as_str(),
+                        arguments,
+                        &argument_idents,
+                        dest.clone(),
+                        return_struct_type.clone(),
+                        context,
+                    );
+                    if let Some(dest) = dest {
+                        let instr = PointerInstruction::Fresh {
+                            ident: dest,
+                            struct_type: return_struct_type,
+                        };
+                        self.observer.handle_ptr_instruction(instr, pointer_context);
+                    }
+                    return;
+                }
+            }
+        }
+
         let instr = PointerInstruction::Call {
             dest,
             function,
-            arguments,
+            arguments: argument_idents,
             return_struct_type,
         };
 
@@ -468,7 +482,9 @@ where
         &mut self,
         function: &str,
         arguments: &'a [(Operand, Vec<ParameterAttribute>)],
+        argument_idents: &Vec<Option<VarIdent<'a>>>,
         dest: Option<VarIdent<'a>>,
+        dest_struct_type: Option<Rc<StructType>>,
         context: Context<'a, '_>,
     ) {
         let pointer_context = PointerContext::from_context(context);
@@ -501,14 +517,74 @@ where
 
             // TODO: What if someone defines their own function called malloc?
             //       Maybe look at function signature?
-            "malloc" => {
+            "malloc" | "calloc" => {
                 let instr = PointerInstruction::Malloc {
                     dest: dest.expect("malloc should have a destination"),
                 };
                 self.observer.handle_ptr_instruction(instr, pointer_context);
             }
 
+            "realloc" => {
+                if let Some(dest) = dest {
+                    let src = argument_idents
+                        .get(0)
+                        .cloned()
+                        .expect("Expected at least 1 argument to realloc")
+                        .expect("Expected a VarIdent for the first argument of realloc");
+
+                    let instr = PointerInstruction::Assign {
+                        dest: dest,
+                        value: src,
+                        struct_type: dest_struct_type,
+                    };
+                    self.observer.handle_ptr_instruction(instr, pointer_context);
+                }
+            }
+
+            "memchr" => {
+                if let Some(dest) = dest {
+                    let src = argument_idents
+                        .get(0)
+                        .cloned()
+                        .expect("Expected at least 1 argument to memchr")
+                        .expect("Expected a VarIdent for the first argument of memchr");
+
+                    println!("Warning: Potentially unsound handling of function 'memchr'");
+                    let instr = PointerInstruction::Assign {
+                        dest: dest,
+                        value: src,
+                        struct_type: dest_struct_type,
+                    };
+                    self.observer.handle_ptr_instruction(instr, pointer_context);
+                }
+            }
+
+            "strdup" => {
+                if let Some(dest) = dest {
+                    let src = argument_idents
+                        .get(0)
+                        .cloned()
+                        .expect("Expected at least 1 argument to strdup")
+                        .expect("Expected a VarIdent for the first argument of strdup");
+
+                    println!("Warning: Potentially unsound handling of function 'strdup'");
+                    let instr = PointerInstruction::Assign {
+                        dest: dest,
+                        value: src,
+                        struct_type: dest_struct_type,
+                    };
+                    self.observer.handle_ptr_instruction(instr, pointer_context);
+                }
+            }
+
+            "free" | "strlen" | "strchr" | "strtol" | "strtoul" | "strcmp" | "strcasecmp"
+            | "strncmp" | "fputc" | "fputs" | "fgets" | "fwrite" | "fcntl" | "fsetxattr"
+            | "fclose" | "fopen" | "freopen" | "fprintf" | "clock_gettime" | "gettimeofday" => (),
+
             _ => {
+                if function.starts_with("llvm.lifetime") {
+                    return;
+                }
                 println!("Warning: Unhandled function '{function}'");
             }
         }
@@ -667,7 +743,6 @@ where
     }
 
     fn handle_global(&mut self, global: &'a GlobalVariable, context: Context<'a, '_>) {
-        dbg!(&global.name);
         let init_ref = global
             .initializer
             .as_ref()

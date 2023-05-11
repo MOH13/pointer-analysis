@@ -14,6 +14,8 @@ use crate::module_visitor::structs::{StructMap, StructType};
 use crate::module_visitor::{ModuleVisitor, VarIdent};
 use crate::solver::Solver;
 
+pub mod dummy;
+
 #[cfg(test)]
 mod tests;
 
@@ -51,9 +53,10 @@ impl<'a, S: Solver> PointsToResult<'a, S>
 where
     S::TermSet: IntoIterator<Item = Cell<'a>>,
     S::TermSet: FromIterator<Cell<'a>>,
+    S::TermSet: Clone,
 {
     pub fn get_filtered_entries(
-        self,
+        &self,
         mut key_filter: impl FnMut(&Cell<'a>, &S::TermSet) -> bool,
         mut value_filter: impl FnMut(&Cell<'a>) -> bool,
         include_strs: Vec<&str>,
@@ -61,6 +64,7 @@ where
     ) -> Self {
         Self(
             self.0
+                .clone()
                 .into_iter()
                 .map(|(cell, set)| (cell, set.into_iter().filter(&mut value_filter).collect()))
                 .filter(|(cell, set)| {
@@ -604,5 +608,24 @@ where
             }
             PointerInstruction::Fresh { .. } => (),
         }
+    }
+}
+
+pub fn cell_is_in_function<'a>(cell: &Cell<'a>, function: &str) -> bool {
+    match cell {
+        Cell::Var(ident)
+        | Cell::Return(ident)
+        | Cell::Stack(ident)
+        | Cell::Heap(ident)
+        | Cell::Global(ident) => ident_is_in_function(ident, function),
+    }
+}
+
+fn ident_is_in_function<'a>(ident: &VarIdent<'a>, function: &str) -> bool {
+    match ident {
+        VarIdent::Local { fun_name, .. } => fun_name == function,
+        VarIdent::Offset { base, .. } => ident_is_in_function(base.as_ref(), function),
+        VarIdent::Global { .. } => false,
+        VarIdent::Fresh { .. } => false,
     }
 }
