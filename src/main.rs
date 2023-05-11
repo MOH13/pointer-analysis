@@ -1,12 +1,18 @@
 use analysis::PointsToAnalysis;
 use clap::Parser;
 use clap::ValueEnum;
+use hashbrown::HashMap;
 use llvm_ir::Module;
 use solver::{BasicHashSolver, GenericSolver};
 use std::io;
+use std::io::Write;
 
+use crate::analysis::cell_is_in_function;
+use crate::analysis::dummy::DummyPointerObserver;
 use crate::analysis::Cell;
 use crate::analysis::PointsToResult;
+use crate::module_visitor::pointer::PointerModuleVisitor;
+use crate::module_visitor::ModuleVisitor;
 use crate::solver::BasicBitVecSolver;
 
 mod analysis;
@@ -34,6 +40,8 @@ struct Args {
     #[arg(short = 'S', long, default_value_t = false)]
     /// Exclude strings from points-to set output
     exclude_strings: bool,
+    #[arg(short = 'I', long, default_value_t = false)]
+    interactive_output: bool,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
@@ -42,6 +50,8 @@ enum SolverMode {
     Bitvec,
     /// Hashset based solver
     Hash,
+    /// Do not solve (used to test constraint generation speed)
+    None,
 }
 
 const STRING_FILTER: &'static str = ".str.";
@@ -62,6 +72,13 @@ fn main() -> io::Result<()> {
             Some(SolverMode::Bitvec) => {
                 PointsToAnalysis::run::<GenericSolver<_, BasicBitVecSolver>>(&module).0
             }
+            Some(SolverMode::None) => {
+                let mut observer = DummyPointerObserver::new();
+                PointerModuleVisitor::new(&mut observer).visit_module(&module);
+                PointerModuleVisitor::new(&mut observer).visit_module(&module);
+                println!("Dummy-visit counter {}", observer.get_counter());
+                HashMap::new()
+            }
             None => PointsToAnalysis::run::<GenericSolver<_, BasicHashSolver>>(&module).0,
         });
 
@@ -76,6 +93,30 @@ fn main() -> io::Result<()> {
         args.exclude_keywords.iter().map(|s| s.as_str()).collect(),
     );
     println!("{filtered_result}");
+
+    if args.interactive_output {
+        loop {
+            print!("Search nodes in function: ");
+            std::io::stdout().flush().expect("Could not flush stdout");
+            let mut input = String::new();
+            std::io::stdin()
+                .read_line(&mut input)
+                .expect("Cannot read user input");
+            let function = input.trim();
+            if function == "" {
+                break;
+            }
+            let filtered_result = result.get_filtered_entries(
+                |c, set| {
+                    cell_is_in_function(c, function) && (args.include_empty || !set.is_empty())
+                },
+                |pointee| (!args.exclude_strings || !pointee.to_string().contains(STRING_FILTER)),
+                vec![],
+                vec![],
+            );
+            println!("{filtered_result}");
+        }
+    }
 
     Ok(())
 }
