@@ -1,0 +1,17 @@
+{
+    "c_path": "dynamic_function_call.c",
+    "points_to": {
+        "%id": [
+            "ret-%id"
+        ],
+        "stack-%p.addr@id": [
+            "stack-%x@main"
+        ],
+        "stack-%f@main": [
+            "ret-%id"
+        ],
+        "stack-%q@main": [
+            "stack-%x@main"
+        ]
+    }
+}

@@ -11,8 +11,8 @@ use llvm_ir::instruction::{
 use llvm_ir::module::GlobalVariable;
 use llvm_ir::terminator::{Invoke, Ret};
 use llvm_ir::{
-    constant, Constant, ConstantRef, Function, Instruction, Module, Name, Operand, Terminator,
-    Type, TypeRef,
+    constant, Constant, ConstantRef, Function, Instruction, Name, Operand, Terminator, Type,
+    TypeRef,
 };
 
 use super::{
@@ -67,7 +67,7 @@ pub enum PointerInstruction<'a> {
     /// [x =] f(y1, y2, ..)
     Call {
         dest: Option<VarIdent<'a>>,
-        function: &'a str,
+        function: VarIdent<'a>,
         arguments: Vec<Option<VarIdent<'a>>>,
         return_struct_type: Option<Rc<StructType>>,
     },
@@ -78,6 +78,14 @@ pub enum PointerInstruction<'a> {
 #[derive(Clone, Copy)]
 pub struct PointerContext<'a> {
     pub fun_name: Option<&'a str>,
+}
+
+impl<'a> PointerContext<'a> {
+    fn from_context(context: Context<'a, '_>) -> Self {
+        Self {
+            fun_name: context.function.map(|fun| fun.name.as_str()),
+        }
+    }
 }
 
 pub struct PointerModuleVisitor<'a, 'b, O> {
@@ -128,9 +136,7 @@ where
         constant: &'a ConstantRef,
         context: Context<'a, '_>,
     ) -> (Option<VarIdent<'a>>, TypeRef, usize) {
-        let pointer_context = PointerContext {
-            fun_name: context.function.map(|func| func.name.as_str()),
-        };
+        let pointer_context = PointerContext::from_context(context);
 
         match constant.as_ref() {
             Constant::Struct { name, values, .. } => {
@@ -169,20 +175,13 @@ where
 
             Constant::Vector(elements) => self.unroll_array(elements, None, context),
 
-            Constant::GlobalReference { name, ty } => {
-                if matches!(ty.as_ref(), Type::FuncType { .. }) {
-                    println!("Warning: Unhandled function type reference");
-                    (None, context.module.types.pointer_to(ty.clone()), 0)
-                } else {
-                    (
-                        Some(VarIdent::Global {
-                            name: Cow::Borrowed(name),
-                        }),
-                        context.module.types.pointer_to(ty.clone()),
-                        0,
-                    )
-                }
-            }
+            Constant::GlobalReference { name, ty } => (
+                Some(VarIdent::Global {
+                    name: Cow::Borrowed(name),
+                }),
+                context.module.types.pointer_to(ty.clone()),
+                0,
+            ),
 
             Constant::ExtractElement(constant::ExtractElement {
                 vector: operand, ..
@@ -334,9 +333,7 @@ where
         element_type: Option<TypeRef>,
         context: Context<'a, '_>,
     ) -> (Option<VarIdent<'a>>, TypeRef, usize) {
-        let pointer_context = PointerContext {
-            fun_name: context.function.map(|func| func.name.as_str()),
-        };
+        let pointer_context = PointerContext::from_context(context);
 
         let mut fresh = None;
         let mut degree = 0;
@@ -409,58 +406,26 @@ where
         let caller = context
             .function
             .expect("Expected calls to happen in other calls");
+        let pointer_context = PointerContext::from_context(context);
+
         // TODO: Filter out irrelevant function calls
-        let (function, ty) = match function {
-            Either::Right(Operand::ConstantOperand(name_ref)) => match name_ref.as_ref() {
-                Constant::GlobalReference {
-                    name: Name::Name(name),
-                    ty,
-                } => (&**name, ty),
-                _ => {
-                    println!("Warning: Indirect function call not handled");
-                    return;
-                }
-            },
+        let (function, ty, _) = match function {
+            Either::Right(op) => self
+                .get_operand_ident_type(op, context)
+                .expect("Functions should always be relevant"),
             _ => {
                 println!("Warning: Inline assembly not handled");
                 return;
             }
         };
 
-        let pointer_context = PointerContext {
-            fun_name: Some(&caller.name),
-        };
-
-        // Special behavior for struct assignments (that are compiled to memcpy)
-        if function == "llvm.memcpy.p0i8.p0i8.i64" {
-            let dest = self.get_original_type(&arguments[0].0, context);
-            let src = self.get_original_type(&arguments[1].0, context);
-            // Assume src_ty and dest_ty are same
-            if let (Some((dest_ident, _)), Some((src_ident, src_ty))) = (dest, src) {
-                let intermediate_ident = self.add_fresh_ident();
-                let src_load = PointerInstruction::Load {
-                    dest: intermediate_ident.clone(),
-                    address: src_ident,
-                    struct_type: Some(src_ty.clone()),
-                };
-                let dest_store = PointerInstruction::Store {
-                    address: dest_ident,
-                    value: intermediate_ident,
-                    struct_type: Some(src_ty),
-                };
-                self.observer
-                    .handle_ptr_instruction(src_load, pointer_context);
-                self.observer
-                    .handle_ptr_instruction(dest_store, pointer_context);
-            }
-            return;
-        }
-
-        let result_ty = match ty.as_ref() {
+        let result_ty = match strip_pointer_type(ty.clone())
+            .expect("Functions should be pointer types")
+            .as_ref()
+        {
             Type::FuncType { result_type, .. } => strip_array_types(result_type.clone()).0,
             _ => panic!("Unexpected type {ty} of function {function}"),
         };
-
         let return_struct_type = StructType::try_from_type(result_ty.clone(), context.structs);
 
         let dest = if is_ptr_type(result_ty.clone()) || is_struct_type(result_ty) {
@@ -469,30 +434,160 @@ where
             None
         };
 
-        // TODO: What if someone defines their own function called malloc?
-        //       Maybe look at function signature?
-        let instr = if function == "malloc" && dest.is_some() {
-            PointerInstruction::Malloc {
-                dest: dest.unwrap(),
-            }
-        } else {
-            let arguments = arguments
-                .iter()
-                .map(|(arg, _)| {
-                    self.get_operand_ident_type(arg, context)
-                        .map(|(ident, _, _)| ident)
-                })
-                .collect();
+        let argument_idents = arguments
+            .iter()
+            .map(|(arg, _)| {
+                self.get_operand_ident_type(arg, context)
+                    .map(|(ident, _, _)| ident)
+            })
+            .collect();
 
-            PointerInstruction::Call {
-                dest,
-                function,
-                arguments,
-                return_struct_type,
+        if let VarIdent::Global { name } = &function {
+            if let Name::Name(name) = name.as_ref() {
+                if !context.functions.contains(name.as_str()) {
+                    self.handle_special_function(
+                        name.as_str(),
+                        arguments,
+                        &argument_idents,
+                        dest.clone(),
+                        return_struct_type.clone(),
+                        context,
+                    );
+                    if let Some(dest) = dest {
+                        let instr = PointerInstruction::Fresh {
+                            ident: dest,
+                            struct_type: return_struct_type,
+                        };
+                        self.observer.handle_ptr_instruction(instr, pointer_context);
+                    }
+                    return;
+                }
             }
+        }
+
+        let instr = PointerInstruction::Call {
+            dest,
+            function,
+            arguments: argument_idents,
+            return_struct_type,
         };
 
         self.observer.handle_ptr_instruction(instr, pointer_context);
+    }
+
+    /// Handle (possibly) special-case functions like malloc.
+    ///
+    /// Returns `true` if the function was special-case, `false` if not.
+    fn handle_special_function(
+        &mut self,
+        function: &str,
+        arguments: &'a [(Operand, Vec<ParameterAttribute>)],
+        argument_idents: &Vec<Option<VarIdent<'a>>>,
+        dest: Option<VarIdent<'a>>,
+        dest_struct_type: Option<Rc<StructType>>,
+        context: Context<'a, '_>,
+    ) {
+        let pointer_context = PointerContext::from_context(context);
+
+        match function {
+            // Special behavior for struct assignments (that are compiled to memcpy)
+            "llvm.memcpy.p0i8.p0i8.i64" => {
+                let dest = self.get_original_type(&arguments[0].0, context);
+                let src = self.get_original_type(&arguments[1].0, context);
+
+                // Assume src_ty and dest_ty are same
+                if let (Some((dest_ident, _)), Some((src_ident, src_ty))) = (dest, src) {
+                    let intermediate_ident = self.add_fresh_ident();
+                    let src_load = PointerInstruction::Load {
+                        dest: intermediate_ident.clone(),
+                        address: src_ident,
+                        struct_type: Some(src_ty.clone()),
+                    };
+                    let dest_store = PointerInstruction::Store {
+                        address: dest_ident,
+                        value: intermediate_ident,
+                        struct_type: Some(src_ty),
+                    };
+                    self.observer
+                        .handle_ptr_instruction(src_load, pointer_context);
+                    self.observer
+                        .handle_ptr_instruction(dest_store, pointer_context);
+                };
+            }
+
+            // TODO: What if someone defines their own function called malloc?
+            //       Maybe look at function signature?
+            "malloc" | "calloc" => {
+                let instr = PointerInstruction::Malloc {
+                    dest: dest.expect("malloc should have a destination"),
+                };
+                self.observer.handle_ptr_instruction(instr, pointer_context);
+            }
+
+            "realloc" => {
+                if let Some(dest) = dest {
+                    let src = argument_idents
+                        .get(0)
+                        .cloned()
+                        .expect("Expected at least 1 argument to realloc")
+                        .expect("Expected a VarIdent for the first argument of realloc");
+
+                    let instr = PointerInstruction::Assign {
+                        dest: dest,
+                        value: src,
+                        struct_type: dest_struct_type,
+                    };
+                    self.observer.handle_ptr_instruction(instr, pointer_context);
+                }
+            }
+
+            "memchr" => {
+                if let Some(dest) = dest {
+                    let src = argument_idents
+                        .get(0)
+                        .cloned()
+                        .expect("Expected at least 1 argument to memchr")
+                        .expect("Expected a VarIdent for the first argument of memchr");
+
+                    println!("Warning: Potentially unsound handling of function 'memchr'");
+                    let instr = PointerInstruction::Assign {
+                        dest: dest,
+                        value: src,
+                        struct_type: dest_struct_type,
+                    };
+                    self.observer.handle_ptr_instruction(instr, pointer_context);
+                }
+            }
+
+            "strdup" => {
+                if let Some(dest) = dest {
+                    let src = argument_idents
+                        .get(0)
+                        .cloned()
+                        .expect("Expected at least 1 argument to strdup")
+                        .expect("Expected a VarIdent for the first argument of strdup");
+
+                    println!("Warning: Potentially unsound handling of function 'strdup'");
+                    let instr = PointerInstruction::Assign {
+                        dest: dest,
+                        value: src,
+                        struct_type: dest_struct_type,
+                    };
+                    self.observer.handle_ptr_instruction(instr, pointer_context);
+                }
+            }
+
+            "free" | "strlen" | "strchr" | "strtol" | "strtoul" | "strcmp" | "strcasecmp"
+            | "strncmp" | "fputc" | "fputs" | "fgets" | "fwrite" | "fcntl" | "fsetxattr"
+            | "fclose" | "fopen" | "freopen" | "fprintf" | "clock_gettime" | "gettimeofday" => (),
+
+            _ => {
+                if function.starts_with("llvm.lifetime") {
+                    return;
+                }
+                println!("Warning: Unhandled function '{function}'");
+            }
+        }
     }
 
     fn handle_join(
@@ -531,9 +626,7 @@ where
         ty: TypeRef,
         context: Context<'a, '_>,
     ) -> (TypeRef, usize) {
-        let pointer_context = PointerContext {
-            fun_name: context.function.map(|func| func.name.as_str()),
-        };
+        let pointer_context = PointerContext::from_context(context);
 
         match StructType::try_from_type_with_degree(ty.clone(), context.structs) {
             Some((st, 0)) if degree < indices.len() => {
@@ -568,9 +661,7 @@ where
         base_ty: TypeRef,
         context: Context<'a, '_>,
     ) {
-        let pointer_context = PointerContext {
-            fun_name: context.function.map(|func| func.name.as_str()),
-        };
+        let pointer_context = PointerContext::from_context(context);
 
         match StructType::try_from_type_with_degree(base_ty.clone(), context.structs) {
             Some((st, 0)) if base_degree < indices.len() => {
@@ -598,9 +689,7 @@ where
         ty: TypeRef,
         context: Context<'a, '_>,
     ) -> (TypeRef, usize) {
-        let pointer_context = PointerContext {
-            fun_name: context.function.map(|func| func.name.as_str()),
-        };
+        let pointer_context = PointerContext::from_context(context);
 
         let stripped_ty =
             strip_pointer_type(ty.clone()).expect("GEP should only be used on pointer types");
@@ -634,31 +723,26 @@ impl<'a, 'b, O> ModuleVisitor<'a> for PointerModuleVisitor<'a, 'b, O>
 where
     O: PointerModuleObserver<'a>,
 {
-    fn init(&mut self, structs: &StructMap) {
-        self.observer.init(structs)
+    fn init(&mut self, context: Context<'a, '_>) {
+        self.observer.init(context.structs);
     }
 
-    fn handle_function(&mut self, function: &'a Function, _module: &'a Module) {
+    fn handle_function(&mut self, function: &'a Function, context: Context<'a, '_>) {
+        let ident = VarIdent::Global {
+            name: Cow::Owned(Name::Name(Box::new(function.name.clone()))),
+        };
         let parameters = function
             .parameters
             .iter()
             .map(|p| VarIdent::new_local(&p.name, function))
             .collect();
+        let return_struct_type =
+            StructType::try_from_type(function.return_type.clone(), context.structs);
         self.observer
-            .handle_ptr_function(&function.name, parameters)
+            .handle_ptr_function(ident, parameters, return_struct_type);
     }
 
-    fn handle_global(
-        &mut self,
-        global: &'a GlobalVariable,
-        structs: &StructMap,
-        module: &'a Module,
-    ) {
-        let context = Context {
-            module,
-            function: None,
-            structs,
-        };
+    fn handle_global(&mut self, global: &'a GlobalVariable, context: Context<'a, '_>) {
         let init_ref = global
             .initializer
             .as_ref()
@@ -669,13 +753,13 @@ where
             _ => &global.ty,
         };
 
-        let struct_type = StructType::try_from_type(ty.clone(), structs);
+        let struct_type = StructType::try_from_type(ty.clone(), context.structs);
         self.observer.handle_ptr_global(
             VarIdent::Global {
                 name: Cow::Borrowed(&global.name),
             },
             init_ref,
-            struct_type.as_deref(),
+            struct_type,
         );
     }
 
@@ -683,9 +767,7 @@ where
         let function = context
             .function
             .expect("Expected to be called in a function");
-        let pointer_context = PointerContext {
-            fun_name: Some(&function.name),
-        };
+        let pointer_context = PointerContext::from_context(context);
         match instr {
             Instruction::ExtractElement(ExtractElement {
                 vector: operand,
@@ -899,14 +981,17 @@ where
                 self.handle_call(callee, arguments, dest.as_ref(), context);
             }
 
-            _ => {}
+            Instruction::VAArg(_) => println!("Warning: Unhandled VAArg"),
+            Instruction::IntToPtr(_) => println!("Warning: Unhandled VAArg"),
+            Instruction::LandingPad(_) => println!("Warning: Unhandled LandingPad"),
+            Instruction::CatchPad(_) => println!("Warning: Unhandled CatchPad"),
+            Instruction::CleanupPad(_) => println!("Warning: Unhandled CleanupPad"),
+            _ => (),
         }
     }
 
     fn handle_terminator(&mut self, term: &'a Terminator, context: Context<'a, '_>) {
-        let pointer_context = PointerContext {
-            fun_name: context.function.map(|func| func.name.as_str()),
-        };
+        let pointer_context = PointerContext::from_context(context);
         match term {
             Terminator::Invoke(Invoke {
                 function,
@@ -935,12 +1020,17 @@ where
 
 pub trait PointerModuleObserver<'a> {
     fn init(&mut self, structs: &StructMap);
-    fn handle_ptr_function(&mut self, name: &'a str, parameters: Vec<VarIdent<'a>>);
+    fn handle_ptr_function(
+        &mut self,
+        name: VarIdent<'a>,
+        parameters: Vec<VarIdent<'a>>,
+        return_struct_type: Option<Rc<StructType>>,
+    );
     fn handle_ptr_global(
         &mut self,
         ident: VarIdent<'a>,
         init_ref: Option<VarIdent<'a>>,
-        struct_type: Option<&StructType>,
+        struct_type: Option<Rc<StructType>>,
     );
     fn handle_ptr_instruction(
         &mut self,

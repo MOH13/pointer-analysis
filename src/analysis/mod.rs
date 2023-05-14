@@ -1,9 +1,10 @@
+use std::borrow::Cow;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::rc::Rc;
 use std::str::FromStr;
 
 use hashbrown::HashMap;
-use llvm_ir::Module;
+use llvm_ir::{Module, Name};
 
 use crate::cstr;
 use crate::module_visitor::pointer::{
@@ -12,6 +13,8 @@ use crate::module_visitor::pointer::{
 use crate::module_visitor::structs::{StructMap, StructType};
 use crate::module_visitor::{ModuleVisitor, VarIdent};
 use crate::solver::Solver;
+
+pub mod dummy;
 
 #[cfg(test)]
 mod tests;
@@ -28,10 +31,8 @@ impl PointsToAnalysis {
         PointerModuleVisitor::new(&mut pre_analyzer).visit_module(module);
         let cells_copy = pre_analyzer.cells.clone();
 
-        let mut points_to_solver = PointsToSolver {
-            solver: S::new(pre_analyzer.cells, pre_analyzer.allowed_offsets),
-            summaries: pre_analyzer.summaries,
-        };
+        let mut points_to_solver =
+            PointsToSolver::<'a, S>::new(pre_analyzer.cells, pre_analyzer.allowed_offsets);
         PointerModuleVisitor::new(&mut points_to_solver).visit_module(module);
 
         let result_map = cells_copy
@@ -52,9 +53,10 @@ impl<'a, S: Solver> PointsToResult<'a, S>
 where
     S::TermSet: IntoIterator<Item = Cell<'a>>,
     S::TermSet: FromIterator<Cell<'a>>,
+    S::TermSet: Clone,
 {
     pub fn get_filtered_entries(
-        self,
+        &self,
         mut key_filter: impl FnMut(&Cell<'a>, &S::TermSet) -> bool,
         mut value_filter: impl FnMut(&Cell<'a>) -> bool,
         include_strs: Vec<&str>,
@@ -62,6 +64,7 @@ where
     ) -> Self {
         Self(
             self.0
+                .clone()
                 .into_iter()
                 .map(|(cell, set)| (cell, set.into_iter().filter(&mut value_filter).collect()))
                 .filter(|(cell, set)| {
@@ -92,7 +95,9 @@ where
 #[derive(Clone, Hash, PartialEq, Eq)]
 pub enum Cell<'a> {
     Var(VarIdent<'a>),
-    // Since LLVM is in SSA, we can use the name of the allocation register to refer to the allocation site
+    Return(VarIdent<'a>),
+    // Since LLVM is in SSA, we can use the name of the
+    // allocation register to refer to the allocation site
     Stack(VarIdent<'a>),
     Heap(VarIdent<'a>),
     Global(VarIdent<'a>),
@@ -102,6 +107,7 @@ impl<'a> Display for Cell<'a> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             Self::Var(ident) => write!(f, "{ident}"),
+            Self::Return(ident) => write!(f, "ret-{ident}"),
             Self::Stack(ident) => write!(f, "stack-{ident}"),
             Self::Heap(ident) => write!(f, "heap-{ident}"),
             Self::Global(ident) => write!(f, "global-{ident}"),
@@ -113,7 +119,9 @@ impl<'a> FromStr for Cell<'a> {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.starts_with("stack-") {
+        if s.starts_with("ret-") {
+            s["ret-".len()..].parse().map(Self::Return)
+        } else if s.starts_with("stack-") {
             s["stack-".len()..].parse().map(Self::Stack)
         } else if s.starts_with("heap-") {
             s["heap-".len()..].parse().map(Self::Heap)
@@ -131,15 +139,9 @@ impl<'a> Debug for Cell<'a> {
     }
 }
 
-struct FunctionSummary<'a> {
-    parameters: Vec<VarIdent<'a>>,
-    return_reg: Option<VarIdent<'a>>,
-}
-
 struct PointsToPreAnalyzer<'a> {
     cells: Vec<Cell<'a>>,
     allowed_offsets: Vec<(Cell<'a>, usize)>,
-    summaries: HashMap<&'a str, FunctionSummary<'a>>,
     num_cells_per_malloc: usize,
 }
 
@@ -179,7 +181,6 @@ impl<'a> PointsToPreAnalyzer<'a> {
         Self {
             cells: vec![],
             allowed_offsets: vec![],
-            summaries: HashMap::new(),
             num_cells_per_malloc: 0,
         }
     }
@@ -213,32 +214,40 @@ impl<'a> PointerModuleObserver<'a> for PointsToPreAnalyzer<'a> {
         self.num_cells_per_malloc = structs.values().map(|st| st.size).max().unwrap_or(0).max(1);
     }
 
-    fn handle_ptr_function(&mut self, name: &'a str, parameters: Vec<VarIdent<'a>>) {
+    fn handle_ptr_function(
+        &mut self,
+        ident: VarIdent<'a>,
+        parameters: Vec<VarIdent<'a>>,
+        return_struct_type: Option<Rc<StructType>>,
+    ) {
+        self.cells.push(Cell::Var(ident.clone()));
+
+        let offset = self.add_cells(ident.clone(), return_struct_type.as_deref(), Cell::Return)
+            + parameters.len()
+            - 1;
+
         for param in &parameters {
             self.cells.push(Cell::Var(param.clone()));
         }
 
-        let summary = FunctionSummary {
-            parameters,
-            return_reg: None,
-        };
-        self.summaries.insert(name, summary);
+        let first_cell = Cell::Return(first_ident(ident, return_struct_type.as_deref()));
+        self.allowed_offsets.push((first_cell, offset));
     }
 
     fn handle_ptr_global(
         &mut self,
         ident: VarIdent<'a>,
         _init_ref: Option<VarIdent<'a>>,
-        struct_type: Option<&StructType>,
+        struct_type: Option<Rc<StructType>>,
     ) {
         self.cells.push(Cell::Var(ident.clone()));
-        self.add_cells_and_allowed_offsets(ident, struct_type, Cell::Global);
+        self.add_cells_and_allowed_offsets(ident, struct_type.as_deref(), Cell::Global);
     }
 
     fn handle_ptr_instruction(
         &mut self,
         instr: PointerInstruction<'a>,
-        context: PointerContext<'a>,
+        _context: PointerContext<'a>,
     ) {
         match instr {
             PointerInstruction::Fresh { ident, struct_type } => {
@@ -261,7 +270,7 @@ impl<'a> PointerModuleObserver<'a> for PointsToPreAnalyzer<'a> {
                 return_struct_type: struct_type,
                 ..
             } => self.add_cells_and_allowed_offsets(dest, struct_type.as_deref(), Cell::Var),
-            PointerInstruction::Call { dest: None, .. } => (),
+            PointerInstruction::Call { dest: None, .. } => {}
 
             PointerInstruction::Alloca { dest, struct_type } => {
                 self.cells.push(Cell::Var(dest.clone()));
@@ -282,23 +291,11 @@ impl<'a> PointerModuleObserver<'a> for PointsToPreAnalyzer<'a> {
                 }
             }
 
-            PointerInstruction::Return { return_reg } => {
-                let fun_name = context
-                    .fun_name
-                    .expect("return instructions should only be generated inside functions");
-                self.summaries.entry_ref(fun_name).and_modify(|s| {
-                    s.return_reg = Some(return_reg);
-                });
-            }
-            PointerInstruction::Store { .. } => (),
+            PointerInstruction::Return { .. } => {}
+
+            PointerInstruction::Store { .. } => {}
         }
     }
-}
-
-/// Visits a module, generating and solving constraints using a supplied constraint solver.
-struct PointsToSolver<'a, S> {
-    solver: S,
-    summaries: HashMap<&'a str, FunctionSummary<'a>>,
 }
 
 fn first_ident<'a>(base_ident: VarIdent<'a>, struct_type: Option<&StructType>) -> VarIdent<'a> {
@@ -313,10 +310,23 @@ fn first_ident<'a>(base_ident: VarIdent<'a>, struct_type: Option<&StructType>) -
     }
 }
 
+/// Visits a module, generating and solving constraints using a supplied constraint solver.
+struct PointsToSolver<'a, S> {
+    solver: S,
+    return_struct_types: HashMap<VarIdent<'a>, Option<Rc<StructType>>>,
+}
+
 impl<'a, S> PointsToSolver<'a, S>
 where
     S: Solver<Term = Cell<'a>>,
 {
+    fn new(cells: Vec<Cell<'a>>, allowed_offsets: Vec<(Cell<'a>, usize)>) -> Self {
+        Self {
+            solver: S::new(cells, allowed_offsets),
+            return_struct_types: HashMap::new(),
+        }
+    }
+
     fn do_assignment(
         &mut self,
         dest: VarIdent<'a>,
@@ -357,13 +367,25 @@ where
 {
     fn init(&mut self, _structs: &StructMap) {}
 
-    fn handle_ptr_function(&mut self, _name: &str, _parameters: Vec<VarIdent>) {}
+    fn handle_ptr_function(
+        &mut self,
+        ident: VarIdent<'a>,
+        _parameters: Vec<VarIdent<'a>>,
+        return_struct_type: Option<Rc<StructType>>,
+    ) {
+        let first_cell = Cell::Return(first_ident(ident.clone(), return_struct_type.as_deref()));
+        let var_cell = Cell::Var(ident.clone());
+        let c = cstr!(first_cell in var_cell);
+        self.solver.add_constraint(c);
+
+        self.return_struct_types.insert(ident, return_struct_type);
+    }
 
     fn handle_ptr_global(
         &mut self,
         ident: VarIdent<'a>,
         init_ref: Option<VarIdent<'a>>,
-        struct_type: Option<&StructType>,
+        struct_type: Option<Rc<StructType>>,
     ) {
         let global_cell = Cell::Global(first_ident(ident.clone(), struct_type.as_deref()));
         let var_cell = Cell::Var(ident.clone());
@@ -371,11 +393,21 @@ where
         self.solver.add_constraint(c);
 
         if let Some(init_ident) = init_ref {
-            self.do_assignment(ident, Cell::Global, init_ident, Cell::Var, struct_type);
+            self.do_assignment(
+                ident,
+                Cell::Global,
+                init_ident,
+                Cell::Var,
+                struct_type.as_deref(),
+            );
         }
     }
 
-    fn handle_ptr_instruction(&mut self, instr: PointerInstruction<'a>, _context: PointerContext) {
+    fn handle_ptr_instruction(
+        &mut self,
+        instr: PointerInstruction<'a>,
+        context: PointerContext<'a>,
+    ) {
         match instr {
             PointerInstruction::Assign {
                 dest,
@@ -523,34 +555,77 @@ where
                 arguments,
                 return_struct_type,
             } => {
-                let summary = match self.summaries.get(function) {
-                    Some(s) => s,
-                    None => return, // TODO: Handle outside function calls
-                };
-                for (arg, param) in arguments
+                let function_cell = Cell::Var(function);
+                for (i, arg) in arguments
                     .iter()
-                    .zip(&summary.parameters)
-                    .filter_map(|(a, p)| a.as_ref().map(|a| (a, p)))
+                    .enumerate()
+                    .filter_map(|(i, a)| a.clone().map(|a| (i, a)))
                 {
-                    let arg_cell = Cell::Var(arg.clone());
-                    let param_cell = Cell::Var(param.clone());
-                    let c = cstr!(arg_cell <= param_cell);
+                    let arg_cell = Cell::Var(arg);
+                    let offset = return_struct_type.as_ref().map(|st| st.size).unwrap_or(1) + i;
+                    let c = cstr!(c in (function_cell.clone()) + offset : arg_cell <= c);
                     self.solver.add_constraint(c);
                 }
 
-                match (&summary.return_reg, dest) {
-                    (Some(return_ident), Some(dest_ident)) => self.do_assignment(
+                // Constraints for function return
+                if let Some(dest_ident) = dest {
+                    let mut dest_cells = vec![];
+                    get_and_push_cells(
                         dest_ident,
-                        Cell::Var,
-                        return_ident.clone(),
-                        Cell::Var,
                         return_struct_type.as_deref(),
-                    ),
-                    _ => {}
+                        Cell::Var,
+                        &mut dest_cells,
+                    );
+
+                    for (i, cell) in dest_cells.into_iter().enumerate() {
+                        let c = cstr!(c in (function_cell.clone()) + i : c <= cell);
+                        self.solver.add_constraint(c);
+                    }
                 }
             }
 
-            _ => {}
+            PointerInstruction::Return { return_reg } => {
+                let fun_name = context
+                    .fun_name
+                    .expect("return instructions should only be generated inside functions");
+                let function = VarIdent::Global {
+                    name: Cow::Owned(Name::Name(Box::new(fun_name.into()))),
+                };
+
+                let return_struct_type = self
+                    .return_struct_types
+                    .get(&function)
+                    .expect("StructType should have been added in handle_ptr_function")
+                    .clone();
+
+                self.do_assignment(
+                    function,
+                    Cell::Return,
+                    return_reg,
+                    Cell::Var,
+                    return_struct_type.as_deref(),
+                );
+            }
+            PointerInstruction::Fresh { .. } => (),
         }
+    }
+}
+
+pub fn cell_is_in_function<'a>(cell: &Cell<'a>, function: &str) -> bool {
+    match cell {
+        Cell::Var(ident)
+        | Cell::Return(ident)
+        | Cell::Stack(ident)
+        | Cell::Heap(ident)
+        | Cell::Global(ident) => ident_is_in_function(ident, function),
+    }
+}
+
+fn ident_is_in_function<'a>(ident: &VarIdent<'a>, function: &str) -> bool {
+    match ident {
+        VarIdent::Local { fun_name, .. } => fun_name == function,
+        VarIdent::Offset { base, .. } => ident_is_in_function(base.as_ref(), function),
+        VarIdent::Global { .. } => false,
+        VarIdent::Fresh { .. } => false,
     }
 }
