@@ -48,11 +48,8 @@ impl BasicHashSolver {
         }
     }
 
-    fn get_edges<'a>(&'a mut self, left: usize, right: usize) -> &'a mut HashSet<usize> {
-        if !self.edges[left].contains_key(&right) {
-            self.edges[left].insert(right, HashSet::new());
-        }
-        self.edges[left].get_mut(&right).unwrap()
+    fn get_edges(&mut self, left: usize, right: usize) -> &mut HashSet<usize> {
+        self.edges[left].entry(right).or_default()
     }
 
     fn add_edge(&mut self, left: usize, right: usize, offset: usize) {
