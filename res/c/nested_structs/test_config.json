@@ -1,0 +1,17 @@
+{
+    "c_path": "nested_structs.c",
+    "points_to": {
+        "stack-%a@main[1][0]": [
+            "stack-%x@main"
+        ],
+        "stack-%a@main[1][1][0]": [
+            "stack-%x@main"
+        ],
+        "stack-%ap@main": [
+            "stack-%a@main[0][0]"
+        ],
+        "stack-%q@main": [
+            "stack-%x@main"
+        ]
+    }
+}

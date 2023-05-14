@@ -1,0 +1,17 @@
+{
+    "c_path": "test7.c",
+    "points_to": {
+        "stack-%ints@main": [
+            "heap-%call@main[0]"
+        ],
+        "stack-%i@main": [
+            "heap-%call@main[0]"
+        ],
+        "stack-%structs@main": [
+            "heap-%call1@main[0]"
+        ],
+        "stack-%s@main": [
+            "heap-%call1@main[0]"
+        ]
+    }
+}

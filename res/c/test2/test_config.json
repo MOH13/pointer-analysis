@@ -1,0 +1,14 @@
+{
+    "c_path": "test2.c",
+    "points_to": {
+        "stack-%null_p@main": [
+            "stack-%null_p@main"
+        ],
+        "stack-%pp@main": [
+            "stack-%null_p@main"
+        ],
+        "stack-%q@main": [
+            "stack-%null_p@main"
+        ]
+    }
+}
