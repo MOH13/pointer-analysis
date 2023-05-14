@@ -1,0 +1,8 @@
+{
+    "c_path": "var_args.c",
+    "points_to": {
+        "stack-%p@main": [
+            "global-%x"
+        ]
+    }
+}
