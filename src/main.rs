@@ -1,24 +1,14 @@
-use analysis::PointsToAnalysis;
 use clap::Parser;
 use clap::ValueEnum;
 use hashbrown::HashMap;
 use llvm_ir::Module;
-use solver::{BasicHashSolver, GenericSolver};
+use pointer_analysis::analysis::dummy::DummyPointerObserver;
+use pointer_analysis::analysis::{cell_is_in_function, Cell, PointsToAnalysis, PointsToResult};
+use pointer_analysis::module_visitor::pointer::PointerModuleVisitor;
+use pointer_analysis::module_visitor::ModuleVisitor;
+use pointer_analysis::solver::{BasicBitVecSolver, BasicHashSolver, GenericSolver};
 use std::io;
 use std::io::Write;
-
-use crate::analysis::cell_is_in_function;
-use crate::analysis::dummy::DummyPointerObserver;
-use crate::analysis::Cell;
-use crate::analysis::PointsToResult;
-use crate::module_visitor::pointer::PointerModuleVisitor;
-use crate::module_visitor::ModuleVisitor;
-use crate::solver::BasicBitVecSolver;
-
-mod analysis;
-mod bit_index_utils;
-mod module_visitor;
-mod solver;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
