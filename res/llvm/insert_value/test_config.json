@@ -1,0 +1,15 @@
+{
+    "llvm_path": "insert_value.ll",
+    "points_to": {
+        "stack-%sub@main[0]": [
+            "stack-%e@main"
+        ],
+        "%dval@main[1][0]": [],
+        "%subval@main[0]": [
+            "stack-%e@main"
+        ],
+        "%res@main[1][0]": [
+            "stack-%e@main"
+        ]
+    }
+}

@@ -1,0 +1,20 @@
+{
+    "c_path": "test8.c",
+    "points_to": {
+        "stack-%local@main": [],
+        "stack-%a@main[0]": [
+            "global-%x",
+            "global-%y"
+        ],
+        "stack-%a@main[1]": [
+            "stack-%local@main",
+            "global-%x"
+        ],
+        "stack-%b@main[0]": [
+            "global-%y"
+        ],
+        "stack-%b@main[1]": [
+            "global-%x"
+        ]
+    }
+}

@@ -1,0 +1,14 @@
+{
+    "c_path": "static_vars.c",
+    "points_to": {
+        "stack-%p.addr@foo": [
+            "stack-%x@main"
+        ],
+        "global-%foo.q": [
+            "stack-%x@main"
+        ],
+        "stack-%r@main": [
+            "stack-%x@main"
+        ]
+    }
+}

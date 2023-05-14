@@ -1,4 +1,10 @@
 #!/bin/bash
+mkdir llvmtemp 1>/dev/null 2>&1
+rm llvmtemp/* 1>/dev/null 2>&1
+for file in "$@"; do
+    ./ctobc.sh $file "llvmtemp/$(basename -s .c $file).bc"
+done
+llvm-link-14 llvmtemp/*.bc -o llvmtemp/linked.ll -S
+llvm-link-14 llvmtemp/*.bc -o llvmtemp/linked.bc
 
-clang -c -fno-discard-value-names -emit-llvm $1 -o /tmp/source.bc
-cargo run --release /tmp/source.bc
+cargo run --release -- --solver hash ./llvmtemp/linked.bc
