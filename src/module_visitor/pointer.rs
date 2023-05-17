@@ -14,6 +14,7 @@ use llvm_ir::{
     constant, Constant, ConstantRef, Function, Instruction, Name, Operand, Terminator, Type,
     TypeRef,
 };
+use log::warn;
 
 use super::{
     strip_array_types, strip_pointer_type, Context, ModuleVisitor, StructMap, StructType, VarIdent,
@@ -185,14 +186,31 @@ where
 
             Constant::ExtractElement(constant::ExtractElement {
                 vector: operand, ..
-            })
-            | Constant::AddrSpaceCast(constant::AddrSpaceCast { operand, .. }) => {
-                self.unroll_constant(operand, context)
+            }) => self.unroll_constant(operand, context),
+
+            Constant::AddrSpaceCast(constant::AddrSpaceCast { operand, .. }) => {
+                let (value, src_ty, degree) = self.unroll_constant(operand, context);
+                match value {
+                    Some(value) => {
+                        let fresh = self.add_fresh_ident();
+                        self.handle_bitcast(fresh.clone(), value, src_ty.clone(), context);
+                        (Some(fresh), src_ty, degree)
+                    }
+                    None => (None, src_ty, degree),
+                }
             }
 
-            Constant::BitCast(constant::BitCast { operand, .. }) => {
-                let (ident, from_type, degree) = self.unroll_constant(operand, context);
-                (ident, from_type, degree) // Notice that we return from_type!
+            Constant::BitCast(constant::BitCast { operand, to_type }) => {
+                let (value, src_ty, _) = self.unroll_constant(operand, context);
+                let (dest_ty, degree) = strip_array_types(to_type.clone());
+                match value {
+                    Some(value) => {
+                        let fresh = self.add_fresh_ident();
+                        self.handle_bitcast(fresh.clone(), value, src_ty, context);
+                        (Some(fresh), dest_ty, degree)
+                    }
+                    None => (None, dest_ty, degree),
+                }
             }
 
             Constant::InsertElement(constant::InsertElement {
@@ -294,14 +312,14 @@ where
                         (Some(fresh), sub_ty, sub_degree)
                     }
                     None => {
-                        println!("Warning: GEP on a None value");
+                        warn!("GEP on a None value");
                         (None, ty, degree)
                     }
                 }
             }
 
             Constant::IntToPtr(constant::IntToPtr { to_type, .. }) => {
-                println!("Warning: IntToPtr detected");
+                warn!("IntToPtr detected");
                 let fresh = self.add_fresh_ident();
                 self.handle_unused_fresh(fresh.clone(), None, pointer_context);
 
@@ -377,7 +395,7 @@ where
                 ident.map(|id| (id, ty, degree))
             }
             Operand::MetadataOperand => {
-                println!("Warning: Metadata operand");
+                warn!("Metadata operand");
                 None
             }
         }
@@ -414,7 +432,7 @@ where
                 .get_operand_ident_type(op, context)
                 .expect("Functions should always be relevant"),
             _ => {
-                println!("Warning: Inline assembly not handled");
+                warn!("Inline assembly not handled");
                 return;
             }
         };
@@ -549,7 +567,7 @@ where
                         .expect("Expected at least 1 argument to memchr")
                         .expect("Expected a VarIdent for the first argument of memchr");
 
-                    println!("Warning: Potentially unsound handling of function 'memchr'");
+                    warn!("Potentially unsound handling of function 'memchr'");
                     let instr = PointerInstruction::Assign {
                         dest: dest,
                         value: src,
@@ -567,7 +585,7 @@ where
                         .expect("Expected at least 1 argument to strdup")
                         .expect("Expected a VarIdent for the first argument of strdup");
 
-                    println!("Warning: Potentially unsound handling of function 'strdup'");
+                    warn!("Potentially unsound handling of function 'strdup'");
                     let instr = PointerInstruction::Assign {
                         dest: dest,
                         value: src,
@@ -585,7 +603,7 @@ where
                 if function.starts_with("llvm.lifetime") {
                     return;
                 }
-                println!("Warning: Unhandled function '{function}'");
+                warn!("Unhandled function '{function}'");
             }
         }
     }
@@ -615,6 +633,28 @@ where
             struct_type,
         };
         self.observer.handle_ptr_instruction(instr, context)
+    }
+
+    fn handle_bitcast(
+        &mut self,
+        dest: VarIdent<'a>,
+        value: VarIdent<'a>,
+        src_ty: TypeRef,
+        context: Context<'a, '_>,
+    ) {
+        let src_ty = strip_pointer_type(src_ty)
+            .expect("bitcast and addrspacecast should only take pointer args");
+        let struct_type = StructType::try_from_type(src_ty.clone(), context.structs);
+
+        if let Some(st) = self.original_ptr_types.get(&value) {
+            self.original_ptr_types.insert(dest.clone(), st.clone());
+        } else if let Some(st) = struct_type {
+            self.original_ptr_types.insert(dest.clone(), st);
+        }
+
+        let pointer_context = PointerContext::from_context(context);
+        // Always a pointer type, so no struct type
+        self.handle_assign(dest, value, None, pointer_context);
     }
 
     fn handle_extract_value(
@@ -754,6 +794,11 @@ where
         };
 
         let struct_type = StructType::try_from_type(ty.clone(), context.structs);
+        print!("{} ", &global.name);
+        match &global.initializer {
+            Some(init) => println!("{init}"),
+            None => println!("None"),
+        }
         self.observer.handle_ptr_global(
             VarIdent::Global {
                 name: Cow::Borrowed(&global.name),
@@ -870,19 +915,8 @@ where
             Instruction::BitCast(BitCast { operand, dest, .. })
             | Instruction::AddrSpaceCast(AddrSpaceCast { operand, dest, .. }) => {
                 if let Some((value, src_ty, _)) = self.get_operand_ident_type(operand, context) {
-                    let src_ty = strip_pointer_type(src_ty)
-                        .expect("bitcast and addrspacecast should only take pointer args");
                     let dest = VarIdent::new_local(dest, function);
-                    let struct_type = StructType::try_from_type(src_ty.clone(), context.structs);
-
-                    if let Some(st) = self.original_ptr_types.get(&value) {
-                        self.original_ptr_types.insert(dest.clone(), st.clone());
-                    } else if let Some(st) = struct_type {
-                        self.original_ptr_types.insert(dest.clone(), st);
-                    }
-
-                    // Always a pointer type, so no struct type
-                    self.handle_assign(dest, value, None, pointer_context);
+                    self.handle_bitcast(dest, value, src_ty, context);
                 };
             }
 
@@ -981,11 +1015,11 @@ where
                 self.handle_call(callee, arguments, dest.as_ref(), context);
             }
 
-            Instruction::VAArg(_) => println!("Warning: Unhandled VAArg"),
-            Instruction::IntToPtr(_) => println!("Warning: Unhandled VAArg"),
-            Instruction::LandingPad(_) => println!("Warning: Unhandled LandingPad"),
-            Instruction::CatchPad(_) => println!("Warning: Unhandled CatchPad"),
-            Instruction::CleanupPad(_) => println!("Warning: Unhandled CleanupPad"),
+            Instruction::VAArg(_) => warn!("Unhandled VAArg"),
+            Instruction::IntToPtr(_) => warn!("Unhandled IntToPtr"),
+            Instruction::LandingPad(_) => warn!("Unhandled LandingPad"),
+            Instruction::CatchPad(_) => warn!("Unhandled CatchPad"),
+            Instruction::CleanupPad(_) => warn!("Unhandled CleanupPad"),
             _ => (),
         }
     }
