@@ -2,11 +2,12 @@ use std::borrow::Cow;
 use std::rc::Rc;
 
 use either::Either;
-use hashbrown::HashMap;
+use hashbrown::{HashMap, HashSet};
 use llvm_ir::function::ParameterAttribute;
 use llvm_ir::instruction::{
     AddrSpaceCast, Alloca, BitCast, Call, ExtractElement, ExtractValue, Freeze, GetElementPtr,
-    InlineAssembly, InsertElement, InsertValue, Load, Phi, Select, ShuffleVector, Store,
+    InlineAssembly, InsertElement, InsertValue, IntToPtr, Load, Phi, Select, ShuffleVector, Store,
+    VAArg,
 };
 use llvm_ir::module::GlobalVariable;
 use llvm_ir::terminator::{Invoke, Ret};
@@ -91,6 +92,7 @@ impl<'a> PointerContext<'a> {
 
 pub struct PointerModuleVisitor<'a, 'b, O> {
     original_ptr_types: HashMap<VarIdent<'a>, Rc<StructType>>,
+    non_defined_functions: HashSet<&'a str>,
     fresh_counter: usize,
     observer: &'b mut O,
 }
@@ -102,6 +104,7 @@ where
     pub fn new(observer: &'b mut O) -> Self {
         Self {
             original_ptr_types: HashMap::new(),
+            non_defined_functions: HashSet::new(),
             fresh_counter: 0,
             observer,
         }
@@ -176,13 +179,20 @@ where
 
             Constant::Vector(elements) => self.unroll_array(elements, None, context),
 
-            Constant::GlobalReference { name, ty } => (
-                Some(VarIdent::Global {
+            Constant::GlobalReference { name, ty } => {
+                let ident = VarIdent::Global {
                     name: Cow::Borrowed(name),
-                }),
-                context.module.types.pointer_to(ty.clone()),
-                0,
-            ),
+                };
+                if let Name::Name(name) = name {
+                    if is_function_type(ty)
+                        && !context.functions.contains(name.as_str())
+                        && !self.non_defined_functions.insert(name)
+                    {
+                        self.handle_unused_fresh(ident.clone(), None, pointer_context);
+                    }
+                }
+                (Some(ident), context.module.types.pointer_to(ty.clone()), 0)
+            }
 
             Constant::ExtractElement(constant::ExtractElement {
                 vector: operand, ..
@@ -341,6 +351,14 @@ where
                 (Some(fresh), ty.clone(), 0)
             }
 
+            Constant::AggregateZero(ty) | Constant::Undef(ty) => {
+                let fresh = self.add_fresh_ident();
+                let struct_type = StructType::try_from_type(ty.clone(), context.structs);
+                self.handle_unused_fresh(fresh.clone(), struct_type, pointer_context);
+                let (ty, degree) = strip_array_types(ty.clone());
+                (Some(fresh), ty, degree)
+            }
+
             _ => (None, context.module.types.i8(), 0),
         }
     }
@@ -394,10 +412,7 @@ where
                 let (ident, ty, degree) = self.unroll_constant(constant, context);
                 ident.map(|id| (id, ty, degree))
             }
-            Operand::MetadataOperand => {
-                warn!("Metadata operand");
-                None
-            }
+            Operand::MetadataOperand => None,
         }
     }
 
@@ -446,7 +461,7 @@ where
         };
         let return_struct_type = StructType::try_from_type(result_ty.clone(), context.structs);
 
-        let dest = if is_ptr_type(result_ty.clone()) || is_struct_type(result_ty) {
+        let dest = if is_ptr_type(&result_ty) || is_struct_type(&result_ty) {
             dest.map(|d| VarIdent::new_local(d, caller))
         } else {
             None
@@ -600,7 +615,7 @@ where
             | "fclose" | "fopen" | "freopen" | "fprintf" | "clock_gettime" | "gettimeofday" => (),
 
             _ => {
-                if function.starts_with("llvm.lifetime") {
+                if function.starts_with("llvm.lifetime") || function.starts_with("llvm.dbg") {
                     return;
                 }
                 warn!("Unhandled function '{function}'");
@@ -794,11 +809,6 @@ where
         };
 
         let struct_type = StructType::try_from_type(ty.clone(), context.structs);
-        print!("{} ", &global.name);
-        match &global.initializer {
-            Some(init) => println!("{init}"),
-            None => println!("None"),
-        }
         self.observer.handle_ptr_global(
             VarIdent::Global {
                 name: Cow::Borrowed(&global.name),
@@ -971,7 +981,7 @@ where
 
             Instruction::Load(Load { address, dest, .. }) => {
                 match self.get_operand_ident_type(address, context) {
-                    Some((address, address_ty, _)) if is_ptr_type(address_ty.clone()) => {
+                    Some((address, address_ty, _)) if is_ptr_type(&address_ty) => {
                         let dest = VarIdent::new_local(dest, function);
                         let struct_type = match address_ty.as_ref() {
                             Type::PointerType { pointee_type, .. } => {
@@ -1015,8 +1025,19 @@ where
                 self.handle_call(callee, arguments, dest.as_ref(), context);
             }
 
-            Instruction::VAArg(_) => warn!("Unhandled VAArg"),
-            Instruction::IntToPtr(_) => warn!("Unhandled IntToPtr"),
+            Instruction::VAArg(VAArg { cur_type, dest, .. }) => {
+                let dest = VarIdent::new_local(dest, function);
+                let struct_type = StructType::try_from_type(cur_type.clone(), context.structs);
+                self.handle_unused_fresh(dest, struct_type, pointer_context);
+                warn!("Unhandled VAArg");
+            }
+
+            Instruction::IntToPtr(IntToPtr { dest, .. }) => {
+                let dest = VarIdent::new_local(dest, function);
+                self.handle_unused_fresh(dest, None, pointer_context);
+                warn!("Unhandled IntToPtr");
+            }
+
             Instruction::LandingPad(_) => warn!("Unhandled LandingPad"),
             Instruction::CatchPad(_) => warn!("Unhandled CatchPad"),
             Instruction::CleanupPad(_) => warn!("Unhandled CleanupPad"),
@@ -1117,13 +1138,17 @@ fn get_field_ident_type<'a>(
     (field_ident, field_ty, field_degree)
 }
 
-fn is_ptr_type(ty: TypeRef) -> bool {
+fn is_ptr_type(ty: &TypeRef) -> bool {
     matches!(ty.as_ref(), Type::PointerType { .. })
 }
 
-fn is_struct_type(ty: TypeRef) -> bool {
+fn is_struct_type(ty: &TypeRef) -> bool {
     matches!(
         ty.as_ref(),
         Type::StructType { .. } | Type::NamedStructType { .. }
     )
+}
+
+fn is_function_type(ty: &TypeRef) -> bool {
+    matches!(ty.as_ref(), Type::FuncType { .. })
 }

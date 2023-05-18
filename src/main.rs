@@ -2,11 +2,8 @@ use clap::Parser;
 use clap::ValueEnum;
 use hashbrown::HashMap;
 use llvm_ir::Module;
-use pointer_analysis::analysis::dummy::DummyPointerObserver;
 use pointer_analysis::analysis::{cell_is_in_function, Cell, PointsToAnalysis, PointsToResult};
-use pointer_analysis::module_visitor::pointer::PointerModuleVisitor;
-use pointer_analysis::module_visitor::ModuleVisitor;
-use pointer_analysis::solver::{BasicBitVecSolver, BasicHashSolver, GenericSolver};
+use pointer_analysis::solver::{BasicBitVecSolver, BasicHashSolver, GenericSolver, StatSolver};
 use std::io;
 use std::io::Write;
 
@@ -71,10 +68,7 @@ fn main() -> io::Result<()> {
                 PointsToAnalysis::run::<GenericSolver<_, BasicBitVecSolver>>(&module).0
             }
             Some(SolverMode::None) => {
-                let mut observer = DummyPointerObserver::new();
-                PointerModuleVisitor::new(&mut observer).visit_module(&module);
-                PointerModuleVisitor::new(&mut observer).visit_module(&module);
-                println!("Dummy-visit counter {}", observer.get_counter());
+                PointsToAnalysis::run::<StatSolver<_>>(&module);
                 HashMap::new()
             }
             None => PointsToAnalysis::run::<GenericSolver<_, BasicHashSolver>>(&module).0,
