@@ -14,8 +14,6 @@ use crate::module_visitor::structs::{StructMap, StructType};
 use crate::module_visitor::{ModuleVisitor, VarIdent};
 use crate::solver::Solver;
 
-pub mod dummy;
-
 #[cfg(test)]
 mod tests;
 
@@ -34,6 +32,7 @@ impl PointsToAnalysis {
         let mut points_to_solver =
             PointsToSolver::<'a, S>::new(pre_analyzer.cells, pre_analyzer.allowed_offsets);
         PointerModuleVisitor::new(&mut points_to_solver).visit_module(module);
+        points_to_solver.solver.finalize();
 
         let result_map = cells_copy
             .into_iter()
