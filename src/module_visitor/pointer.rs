@@ -557,50 +557,17 @@ where
                 self.observer.handle_ptr_instruction(instr, pointer_context);
             }
 
-            "realloc" => {
+            "llvm.memmove.p0i8.p0i8.i64" | "realloc" | "memchr" | "strdup" => {
                 if let Some(dest) = dest {
                     let src = argument_idents
                         .get(0)
                         .cloned()
-                        .expect("Expected at least 1 argument to realloc")
-                        .expect("Expected a VarIdent for the first argument of realloc");
+                        .expect(&format!("Expected at least 1 argument to {function}"))
+                        .expect(&format!(
+                            "Expected a VarIdent for the first argument of {function}"
+                        ));
 
-                    let instr = PointerInstruction::Assign {
-                        dest: dest,
-                        value: src,
-                        struct_type: dest_struct_type,
-                    };
-                    self.observer.handle_ptr_instruction(instr, pointer_context);
-                }
-            }
-
-            "memchr" => {
-                if let Some(dest) = dest {
-                    let src = argument_idents
-                        .get(0)
-                        .cloned()
-                        .expect("Expected at least 1 argument to memchr")
-                        .expect("Expected a VarIdent for the first argument of memchr");
-
-                    warn!("Potentially unsound handling of function 'memchr'");
-                    let instr = PointerInstruction::Assign {
-                        dest: dest,
-                        value: src,
-                        struct_type: dest_struct_type,
-                    };
-                    self.observer.handle_ptr_instruction(instr, pointer_context);
-                }
-            }
-
-            "strdup" => {
-                if let Some(dest) = dest {
-                    let src = argument_idents
-                        .get(0)
-                        .cloned()
-                        .expect("Expected at least 1 argument to strdup")
-                        .expect("Expected a VarIdent for the first argument of strdup");
-
-                    warn!("Potentially unsound handling of function 'strdup'");
+                    warn!("Potentially unsound handling of function '{function}'");
                     let instr = PointerInstruction::Assign {
                         dest: dest,
                         value: src,
@@ -615,7 +582,10 @@ where
             | "fclose" | "fopen" | "freopen" | "fprintf" | "clock_gettime" | "gettimeofday" => (),
 
             _ => {
-                if function.starts_with("llvm.lifetime") || function.starts_with("llvm.dbg") {
+                if function.starts_with("llvm.lifetime")
+                    || function.starts_with("llvm.dbg")
+                    || function.starts_with("llvm.memset")
+                {
                     return;
                 }
                 warn!("Unhandled function '{function}'");
