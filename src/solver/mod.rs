@@ -8,6 +8,7 @@ mod bit_vec;
 mod hash;
 #[cfg(test)]
 mod tests;
+mod wave_propagation;
 
 pub use bit_vec::BasicBitVecSolver;
 pub use hash::BasicHashSolver;
@@ -142,6 +143,14 @@ where
     *term_map.get(term).expect(&format!(
         "Invalid lookup for term that was not passed in during initialization: {term:?}"
     ))
+}
+
+fn edges_between(
+    edges: &mut Vec<HashMap<usize, HashSet<usize>>>,
+    left: usize,
+    right: usize,
+) -> &mut HashSet<usize> {
+    edges[left].entry(right).or_default()
 }
 
 fn offset_term(

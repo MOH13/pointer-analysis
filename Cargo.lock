@@ -322,6 +322,7 @@ dependencies = [
  "either",
  "hashbrown",
  "llvm-ir",
+ "once_cell",
  "serde",
  "serde_json",
  "test-generator",
