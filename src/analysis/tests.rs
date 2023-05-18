@@ -11,7 +11,10 @@ use serde::{Deserialize, Serialize};
 use test_generator::test_resources;
 
 use crate::analysis::{PointsToAnalysis, PointsToResult};
-use crate::solver::{BasicBitVecSolver, BasicHashSolver, GenericSolver, IterableTermSet, Solver};
+use crate::solver::{
+    BasicBitVecSolver, BasicHashSolver, GenericSolver, IterableTermSet, Solver,
+    WavePropagationSolver,
+};
 
 use super::Cell;
 
@@ -134,4 +137,9 @@ fn hash(resource: &str) {
 #[test_resources("res/**/test_config.json")]
 fn bit_vec(resource: &str) {
     run_test_template::<BasicBitVecSolver>(resource)
+}
+
+#[test_resources("res/**/test_config.json")]
+fn wave_prop(resource: &str) {
+    run_test_template::<WavePropagationSolver>(resource)
 }

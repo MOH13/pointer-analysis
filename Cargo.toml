@@ -26,6 +26,9 @@ glob = "0.3.1"
 [build-dependencies]
 build-deps = "0.1.4"
 
+[profile.bench]
+opt-level=0
+
 [[bench]]
 name = "real_world"
 harness = false

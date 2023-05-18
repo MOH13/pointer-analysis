@@ -14,6 +14,7 @@ mod wave_propagation;
 pub use bit_vec::BasicBitVecSolver;
 pub use hash::BasicHashSolver;
 pub use stats::StatSolver;
+pub use wave_propagation::WavePropagationSolver;
 
 #[derive(Debug)]
 pub enum Constraint<T> {
