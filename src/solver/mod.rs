@@ -6,12 +6,14 @@ use std::iter::Copied;
 
 mod bit_vec;
 mod hash;
+mod stats;
 #[cfg(test)]
 mod tests;
 mod wave_propagation;
 
 pub use bit_vec::BasicBitVecSolver;
 pub use hash::BasicHashSolver;
+pub use stats::StatSolver;
 
 #[derive(Debug)]
 pub enum Constraint<T> {
@@ -102,6 +104,8 @@ pub trait Solver {
 
     fn add_constraint(&mut self, c: Constraint<Self::Term>);
     fn get_solution(&self, node: &Self::Term) -> Self::TermSet;
+
+    fn finalize(&mut self);
 }
 
 pub trait IterableTermSet<T> {
@@ -269,5 +273,9 @@ where
     fn get_solution(&self, node: &T) -> HashSet<T> {
         let sol = self.sub_solver.get_solution(&self.term_to_usize(node));
         HashSet::from_iter(sol.iter_term_set().map(|i| self.usize_to_term(i)))
+    }
+
+    fn finalize(&mut self) {
+        self.sub_solver.finalize();
     }
 }

@@ -162,4 +162,6 @@ impl Solver for BasicBitVecSolver {
     fn get_solution(&self, node: &usize) -> BitVec {
         self.sols[*node].clone()
     }
+
+    fn finalize(&mut self) {}
 }

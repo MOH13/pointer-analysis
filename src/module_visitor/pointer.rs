@@ -2,11 +2,12 @@ use std::borrow::Cow;
 use std::rc::Rc;
 
 use either::Either;
-use hashbrown::HashMap;
+use hashbrown::{HashMap, HashSet};
 use llvm_ir::function::ParameterAttribute;
 use llvm_ir::instruction::{
     AddrSpaceCast, Alloca, BitCast, Call, ExtractElement, ExtractValue, Freeze, GetElementPtr,
-    InlineAssembly, InsertElement, InsertValue, Load, Phi, Select, ShuffleVector, Store,
+    InlineAssembly, InsertElement, InsertValue, IntToPtr, Load, Phi, Select, ShuffleVector, Store,
+    VAArg,
 };
 use llvm_ir::module::GlobalVariable;
 use llvm_ir::terminator::{Invoke, Ret};
@@ -14,6 +15,7 @@ use llvm_ir::{
     constant, Constant, ConstantRef, Function, Instruction, Name, Operand, Terminator, Type,
     TypeRef,
 };
+use log::warn;
 
 use super::{
     strip_array_types, strip_pointer_type, Context, ModuleVisitor, StructMap, StructType, VarIdent,
@@ -90,6 +92,7 @@ impl<'a> PointerContext<'a> {
 
 pub struct PointerModuleVisitor<'a, 'b, O> {
     original_ptr_types: HashMap<VarIdent<'a>, Rc<StructType>>,
+    non_defined_functions: HashSet<&'a str>,
     fresh_counter: usize,
     observer: &'b mut O,
 }
@@ -101,6 +104,7 @@ where
     pub fn new(observer: &'b mut O) -> Self {
         Self {
             original_ptr_types: HashMap::new(),
+            non_defined_functions: HashSet::new(),
             fresh_counter: 0,
             observer,
         }
@@ -175,24 +179,48 @@ where
 
             Constant::Vector(elements) => self.unroll_array(elements, None, context),
 
-            Constant::GlobalReference { name, ty } => (
-                Some(VarIdent::Global {
+            Constant::GlobalReference { name, ty } => {
+                let ident = VarIdent::Global {
                     name: Cow::Borrowed(name),
-                }),
-                context.module.types.pointer_to(ty.clone()),
-                0,
-            ),
+                };
+                if let Name::Name(name) = name {
+                    if is_function_type(ty)
+                        && !context.functions.contains(name.as_str())
+                        && !self.non_defined_functions.insert(name)
+                    {
+                        self.handle_unused_fresh(ident.clone(), None, pointer_context);
+                    }
+                }
+                (Some(ident), context.module.types.pointer_to(ty.clone()), 0)
+            }
 
             Constant::ExtractElement(constant::ExtractElement {
                 vector: operand, ..
-            })
-            | Constant::AddrSpaceCast(constant::AddrSpaceCast { operand, .. }) => {
-                self.unroll_constant(operand, context)
+            }) => self.unroll_constant(operand, context),
+
+            Constant::AddrSpaceCast(constant::AddrSpaceCast { operand, .. }) => {
+                let (value, src_ty, degree) = self.unroll_constant(operand, context);
+                match value {
+                    Some(value) => {
+                        let fresh = self.add_fresh_ident();
+                        self.handle_bitcast(fresh.clone(), value, src_ty.clone(), context);
+                        (Some(fresh), src_ty, degree)
+                    }
+                    None => (None, src_ty, degree),
+                }
             }
 
-            Constant::BitCast(constant::BitCast { operand, .. }) => {
-                let (ident, from_type, degree) = self.unroll_constant(operand, context);
-                (ident, from_type, degree) // Notice that we return from_type!
+            Constant::BitCast(constant::BitCast { operand, to_type }) => {
+                let (value, src_ty, _) = self.unroll_constant(operand, context);
+                let (dest_ty, degree) = strip_array_types(to_type.clone());
+                match value {
+                    Some(value) => {
+                        let fresh = self.add_fresh_ident();
+                        self.handle_bitcast(fresh.clone(), value, src_ty, context);
+                        (Some(fresh), dest_ty, degree)
+                    }
+                    None => (None, dest_ty, degree),
+                }
             }
 
             Constant::InsertElement(constant::InsertElement {
@@ -294,14 +322,14 @@ where
                         (Some(fresh), sub_ty, sub_degree)
                     }
                     None => {
-                        println!("Warning: GEP on a None value");
+                        warn!("GEP on a None value");
                         (None, ty, degree)
                     }
                 }
             }
 
             Constant::IntToPtr(constant::IntToPtr { to_type, .. }) => {
-                println!("Warning: IntToPtr detected");
+                warn!("IntToPtr detected");
                 let fresh = self.add_fresh_ident();
                 self.handle_unused_fresh(fresh.clone(), None, pointer_context);
 
@@ -321,6 +349,14 @@ where
                 self.handle_unused_fresh(fresh.clone(), None, pointer_context);
 
                 (Some(fresh), ty.clone(), 0)
+            }
+
+            Constant::AggregateZero(ty) | Constant::Undef(ty) => {
+                let fresh = self.add_fresh_ident();
+                let struct_type = StructType::try_from_type(ty.clone(), context.structs);
+                self.handle_unused_fresh(fresh.clone(), struct_type, pointer_context);
+                let (ty, degree) = strip_array_types(ty.clone());
+                (Some(fresh), ty, degree)
             }
 
             _ => (None, context.module.types.i8(), 0),
@@ -376,10 +412,7 @@ where
                 let (ident, ty, degree) = self.unroll_constant(constant, context);
                 ident.map(|id| (id, ty, degree))
             }
-            Operand::MetadataOperand => {
-                println!("Warning: Metadata operand");
-                None
-            }
+            Operand::MetadataOperand => None,
         }
     }
 
@@ -414,7 +447,7 @@ where
                 .get_operand_ident_type(op, context)
                 .expect("Functions should always be relevant"),
             _ => {
-                println!("Warning: Inline assembly not handled");
+                warn!("Inline assembly not handled");
                 return;
             }
         };
@@ -428,7 +461,7 @@ where
         };
         let return_struct_type = StructType::try_from_type(result_ty.clone(), context.structs);
 
-        let dest = if is_ptr_type(result_ty.clone()) || is_struct_type(result_ty) {
+        let dest = if is_ptr_type(&result_ty) || is_struct_type(&result_ty) {
             dest.map(|d| VarIdent::new_local(d, caller))
         } else {
             None
@@ -524,50 +557,17 @@ where
                 self.observer.handle_ptr_instruction(instr, pointer_context);
             }
 
-            "realloc" => {
+            "llvm.memmove.p0i8.p0i8.i64" | "realloc" | "memchr" | "strdup" => {
                 if let Some(dest) = dest {
                     let src = argument_idents
                         .get(0)
                         .cloned()
-                        .expect("Expected at least 1 argument to realloc")
-                        .expect("Expected a VarIdent for the first argument of realloc");
+                        .expect(&format!("Expected at least 1 argument to {function}"))
+                        .expect(&format!(
+                            "Expected a VarIdent for the first argument of {function}"
+                        ));
 
-                    let instr = PointerInstruction::Assign {
-                        dest: dest,
-                        value: src,
-                        struct_type: dest_struct_type,
-                    };
-                    self.observer.handle_ptr_instruction(instr, pointer_context);
-                }
-            }
-
-            "memchr" => {
-                if let Some(dest) = dest {
-                    let src = argument_idents
-                        .get(0)
-                        .cloned()
-                        .expect("Expected at least 1 argument to memchr")
-                        .expect("Expected a VarIdent for the first argument of memchr");
-
-                    println!("Warning: Potentially unsound handling of function 'memchr'");
-                    let instr = PointerInstruction::Assign {
-                        dest: dest,
-                        value: src,
-                        struct_type: dest_struct_type,
-                    };
-                    self.observer.handle_ptr_instruction(instr, pointer_context);
-                }
-            }
-
-            "strdup" => {
-                if let Some(dest) = dest {
-                    let src = argument_idents
-                        .get(0)
-                        .cloned()
-                        .expect("Expected at least 1 argument to strdup")
-                        .expect("Expected a VarIdent for the first argument of strdup");
-
-                    println!("Warning: Potentially unsound handling of function 'strdup'");
+                    warn!("Potentially unsound handling of function '{function}'");
                     let instr = PointerInstruction::Assign {
                         dest: dest,
                         value: src,
@@ -582,10 +582,13 @@ where
             | "fclose" | "fopen" | "freopen" | "fprintf" | "clock_gettime" | "gettimeofday" => (),
 
             _ => {
-                if function.starts_with("llvm.lifetime") {
+                if function.starts_with("llvm.lifetime")
+                    || function.starts_with("llvm.dbg")
+                    || function.starts_with("llvm.memset")
+                {
                     return;
                 }
-                println!("Warning: Unhandled function '{function}'");
+                warn!("Unhandled function '{function}'");
             }
         }
     }
@@ -615,6 +618,28 @@ where
             struct_type,
         };
         self.observer.handle_ptr_instruction(instr, context)
+    }
+
+    fn handle_bitcast(
+        &mut self,
+        dest: VarIdent<'a>,
+        value: VarIdent<'a>,
+        src_ty: TypeRef,
+        context: Context<'a, '_>,
+    ) {
+        let src_ty = strip_pointer_type(src_ty)
+            .expect("bitcast and addrspacecast should only take pointer args");
+        let struct_type = StructType::try_from_type(src_ty.clone(), context.structs);
+
+        if let Some(st) = self.original_ptr_types.get(&value) {
+            self.original_ptr_types.insert(dest.clone(), st.clone());
+        } else if let Some(st) = struct_type {
+            self.original_ptr_types.insert(dest.clone(), st);
+        }
+
+        let pointer_context = PointerContext::from_context(context);
+        // Always a pointer type, so no struct type
+        self.handle_assign(dest, value, None, pointer_context);
     }
 
     fn handle_extract_value(
@@ -870,19 +895,8 @@ where
             Instruction::BitCast(BitCast { operand, dest, .. })
             | Instruction::AddrSpaceCast(AddrSpaceCast { operand, dest, .. }) => {
                 if let Some((value, src_ty, _)) = self.get_operand_ident_type(operand, context) {
-                    let src_ty = strip_pointer_type(src_ty)
-                        .expect("bitcast and addrspacecast should only take pointer args");
                     let dest = VarIdent::new_local(dest, function);
-                    let struct_type = StructType::try_from_type(src_ty.clone(), context.structs);
-
-                    if let Some(st) = self.original_ptr_types.get(&value) {
-                        self.original_ptr_types.insert(dest.clone(), st.clone());
-                    } else if let Some(st) = struct_type {
-                        self.original_ptr_types.insert(dest.clone(), st);
-                    }
-
-                    // Always a pointer type, so no struct type
-                    self.handle_assign(dest, value, None, pointer_context);
+                    self.handle_bitcast(dest, value, src_ty, context);
                 };
             }
 
@@ -937,7 +951,7 @@ where
 
             Instruction::Load(Load { address, dest, .. }) => {
                 match self.get_operand_ident_type(address, context) {
-                    Some((address, address_ty, _)) if is_ptr_type(address_ty.clone()) => {
+                    Some((address, address_ty, _)) if is_ptr_type(&address_ty) => {
                         let dest = VarIdent::new_local(dest, function);
                         let struct_type = match address_ty.as_ref() {
                             Type::PointerType { pointee_type, .. } => {
@@ -981,11 +995,22 @@ where
                 self.handle_call(callee, arguments, dest.as_ref(), context);
             }
 
-            Instruction::VAArg(_) => println!("Warning: Unhandled VAArg"),
-            Instruction::IntToPtr(_) => println!("Warning: Unhandled VAArg"),
-            Instruction::LandingPad(_) => println!("Warning: Unhandled LandingPad"),
-            Instruction::CatchPad(_) => println!("Warning: Unhandled CatchPad"),
-            Instruction::CleanupPad(_) => println!("Warning: Unhandled CleanupPad"),
+            Instruction::VAArg(VAArg { cur_type, dest, .. }) => {
+                let dest = VarIdent::new_local(dest, function);
+                let struct_type = StructType::try_from_type(cur_type.clone(), context.structs);
+                self.handle_unused_fresh(dest, struct_type, pointer_context);
+                warn!("Unhandled VAArg");
+            }
+
+            Instruction::IntToPtr(IntToPtr { dest, .. }) => {
+                let dest = VarIdent::new_local(dest, function);
+                self.handle_unused_fresh(dest, None, pointer_context);
+                warn!("Unhandled IntToPtr");
+            }
+
+            Instruction::LandingPad(_) => warn!("Unhandled LandingPad"),
+            Instruction::CatchPad(_) => warn!("Unhandled CatchPad"),
+            Instruction::CleanupPad(_) => warn!("Unhandled CleanupPad"),
             _ => (),
         }
     }
@@ -1083,13 +1108,17 @@ fn get_field_ident_type<'a>(
     (field_ident, field_ty, field_degree)
 }
 
-fn is_ptr_type(ty: TypeRef) -> bool {
+fn is_ptr_type(ty: &TypeRef) -> bool {
     matches!(ty.as_ref(), Type::PointerType { .. })
 }
 
-fn is_struct_type(ty: TypeRef) -> bool {
+fn is_struct_type(ty: &TypeRef) -> bool {
     matches!(
         ty.as_ref(),
         Type::StructType { .. } | Type::NamedStructType { .. }
     )
+}
+
+fn is_function_type(ty: &TypeRef) -> bool {
+    matches!(ty.as_ref(), Type::FuncType { .. })
 }

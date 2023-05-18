@@ -5,7 +5,7 @@ typedef struct my_struct
 } my_struct_t;
 
 int global_int = 5;
-my_struct_t struct_instance[1] = {{.f1 = &global_int, .f2 = 0}};
+my_struct_t struct_instance[2] = {{.f1 = &global_int, .f2 = 0}, {.f1 = 0, .f2 = &global_int}};
 
 int main()
 {
@@ -16,3 +16,4 @@ int main()
 }
 
 // Should get that struct_instance.f1 points to a and struct_instance.f2 points to b
+// Both f1 and f2 should point to global_int
