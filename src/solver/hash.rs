@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use hashbrown::{HashMap, HashSet};
 
-use super::{offset_term, offset_terms, Constraint, Solver, UnivCond};
+use super::{edges_between, offset_term, offset_terms, Constraint, Solver, UnivCond};
 
 pub struct BasicHashSolver {
     worklist: VecDeque<(usize, usize)>,
@@ -48,12 +48,8 @@ impl BasicHashSolver {
         }
     }
 
-    fn get_edges(&mut self, left: usize, right: usize) -> &mut HashSet<usize> {
-        self.edges[left].entry(right).or_default()
-    }
-
     fn add_edge(&mut self, left: usize, right: usize, offset: usize) {
-        let edges = self.get_edges(left, right);
+        let edges = edges_between(&mut self.edges, left, right);
         if edges.insert(offset) {
             for t in offset_terms(
                 self.sols[left].iter().copied(),
