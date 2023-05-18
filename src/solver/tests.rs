@@ -43,6 +43,10 @@ macro_rules! solver_tests {
                     vars!($crate::solver::BasicBitVecSolver)
                 }
                 #[test]
+                fn wave_prop() {
+                    vars!($crate::solver::WavePropagationSolver)
+                }
+                #[test]
                 fn generic() {
                     #[allow(non_camel_case_types)]
                     #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
@@ -72,6 +76,7 @@ fn solver_test_template<T, S>(
     for c in constraints {
         solver.add_constraint(c);
     }
+    solver.finalize();
 
     let actual_output: HashMap<T, HashSet<T>> = terms
         .into_iter()

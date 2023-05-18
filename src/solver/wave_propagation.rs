@@ -42,17 +42,18 @@ impl SCC {
     fn visit(&mut self, v: usize, solver: &WavePropagationSolver) {
         self.iteration += 1;
         self.D.insert(v, self.iteration);
+        self.R.insert(v, v);
         for (&w, offsets) in &solver.edges[v] {
             if offsets.contains(&0) {
                 if !self.D.contains_key(&w) {
                     self.visit(w, solver)
                 }
-            }
-            if !self.C.contains(&w) {
-                let Rv = self.R[&v];
-                let Rw = self.R[&w];
-                self.R
-                    .insert(v, if self.D[&Rv] < self.D[&Rw] { Rv } else { Rw });
+                if !self.C.contains(&w) {
+                    let Rv = self.R[&v];
+                    let Rw = self.R[&w];
+                    self.R
+                        .insert(v, if self.D[&Rv] < self.D[&Rw] { Rv } else { Rw });
+                }
             }
         }
         if self.R[&v] == v {
@@ -96,8 +97,8 @@ impl SCC {
         solver.sols[parent].extend(child_sols);
         for (other, offsets) in solver.edges[child].clone() {
             solver.edges[parent]
-                .get_mut(&other)
-                .unwrap()
+                .entry(other)
+                .or_default()
                 .extend(offsets.clone());
         }
         let child_rev_edges = mem::take(&mut solver.rev_edges[child]);
@@ -147,6 +148,7 @@ impl WavePropagationSolver {
             self.wave_propagate_iteration(&scc.top_order, &mut p_old);
             let changed =
                 self.add_edges_after_wave_prop(&mut p_cache_left, &mut p_cache_right, &mut p_old);
+            self.wave_propagate_iteration(&scc.top_order, &mut p_old);
             if !changed {
                 break;
             }
@@ -206,16 +208,14 @@ impl WavePropagationSolver {
                 .collect();
             p_cache_left[i].extend(&p_new);
             for t in p_new {
-                if t == *right && *offset == 0 {
-                    continue;
-                }
-                if edges_between(&mut self.edges, t, *right).insert(*offset) {
-                    self.sols[*right].extend(offset_terms(
-                        p_old[t].iter().copied(),
-                        &self.allowed_offsets,
-                        *offset,
-                    ));
-                    changed = true;
+                if let Some(t) = offset_term(t, &self.allowed_offsets, *offset) {
+                    if t == *right {
+                        continue;
+                    }
+                    if edges_between(&mut self.edges, t, *right).insert(0) {
+                        self.sols[*right].extend(&p_old[t]);
+                        changed = true;
+                    }
                 }
             }
         }
@@ -234,16 +234,14 @@ impl WavePropagationSolver {
                 .collect();
             p_cache_right[i].extend(&p_new);
             for t in p_new {
-                if t == *left && *offset == 0 {
-                    continue;
-                }
-                if edges_between(&mut self.edges, *left, t).insert(*offset) {
-                    self.sols[t].extend(offset_terms(
-                        p_old[*left].iter().copied(),
-                        &self.allowed_offsets,
-                        *offset,
-                    ));
-                    changed = true;
+                if let Some(t) = offset_term(t, &self.allowed_offsets, *offset) {
+                    if t == *left {
+                        continue;
+                    }
+                    if edges_between(&mut self.edges, *left, t).insert(0) {
+                        self.sols[t].extend(&p_old[*left]);
+                        changed = true;
+                    }
                 }
             }
         }
@@ -306,6 +304,10 @@ impl Solver for WavePropagationSolver {
                 });
             }
         };
+    }
+
+    fn finalize(&mut self) {
+        self.run_wave_propagation();
     }
 
     fn get_solution(&self, node: &usize) -> HashSet<usize> {
