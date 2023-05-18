@@ -127,4 +127,6 @@ impl Solver for BasicHashSolver {
     fn get_solution(&self, node: &usize) -> HashSet<usize> {
         self.sols[*node].clone()
     }
+
+    fn finalize(&mut self) {}
 }

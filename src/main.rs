@@ -1,53 +1,43 @@
-use analysis::PointsToAnalysis;
 use clap::Parser;
 use clap::ValueEnum;
 use hashbrown::HashMap;
 use llvm_ir::Module;
-use solver::{BasicHashSolver, GenericSolver};
+use pointer_analysis::analysis::{cell_is_in_function, Cell, PointsToAnalysis, PointsToResult};
+use pointer_analysis::solver::{BasicBitVecSolver, BasicHashSolver, GenericSolver, StatSolver};
 use std::io;
 use std::io::Write;
-
-use crate::analysis::cell_is_in_function;
-use crate::analysis::dummy::DummyPointerObserver;
-use crate::analysis::Cell;
-use crate::analysis::PointsToResult;
-use crate::module_visitor::pointer::PointerModuleVisitor;
-use crate::module_visitor::ModuleVisitor;
-use crate::solver::BasicBitVecSolver;
-
-mod analysis;
-mod bit_index_utils;
-mod module_visitor;
-mod solver;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Path to .bc file
     file_path: String,
-    #[arg(short, long)]
     // Select used solver
+    #[arg(short, long)]
     solver: Option<SolverMode>,
-    #[arg(short, long)]
     /// List of keywords that must present to be included in output
-    include_keywords: Vec<String>,
     #[arg(short, long)]
+    include_keywords: Vec<String>,
     /// List of keywords to exclude from output
+    #[arg(short, long)]
     exclude_keywords: Vec<String>,
-    #[arg(short = 'E', long, default_value_t = false)]
     /// Include empty points-to sets in output
+    #[arg(short = 'E', long, default_value_t = false)]
     include_empty: bool,
-    #[arg(short = 'S', long, default_value_t = false)]
     /// Exclude strings from points-to set output
+    #[arg(short = 'S', long, default_value_t = false)]
     exclude_strings: bool,
     #[arg(short = 'I', long, default_value_t = false)]
     interactive_output: bool,
+    /// Don't print warnings
+    #[arg(short = 'q', long, default_value_t = false)]
+    quiet: bool,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
 enum SolverMode {
     /// Bitvec based solver
-    Bitvec,
+    BitVec,
     /// Hashset based solver
     Hash,
     /// Do not solve (used to test constraint generation speed)
@@ -59,7 +49,12 @@ const STRING_FILTER: &'static str = ".str.";
 fn main() -> io::Result<()> {
     let args = Args::parse();
 
-    //dbg!(&args);
+    stderrlog::new()
+        .module(module_path!())
+        .verbosity(log::Level::Warn)
+        .quiet(args.quiet)
+        .init()
+        .unwrap();
 
     let file_path = args.file_path;
     let module = Module::from_bc_path(&file_path).expect("Error parsing bc file");
@@ -69,14 +64,11 @@ fn main() -> io::Result<()> {
             Some(SolverMode::Hash) => {
                 PointsToAnalysis::run::<GenericSolver<_, BasicHashSolver>>(&module).0
             }
-            Some(SolverMode::Bitvec) => {
+            Some(SolverMode::BitVec) => {
                 PointsToAnalysis::run::<GenericSolver<_, BasicBitVecSolver>>(&module).0
             }
             Some(SolverMode::None) => {
-                let mut observer = DummyPointerObserver::new();
-                PointerModuleVisitor::new(&mut observer).visit_module(&module);
-                PointerModuleVisitor::new(&mut observer).visit_module(&module);
-                println!("Dummy-visit counter {}", observer.get_counter());
+                PointsToAnalysis::run::<StatSolver<_>>(&module);
                 HashMap::new()
             }
             None => PointsToAnalysis::run::<GenericSolver<_, BasicHashSolver>>(&module).0,
