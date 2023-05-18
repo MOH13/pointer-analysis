@@ -31,45 +31,44 @@ pub struct WavePropagationSolver {
 struct SCC {
     node_count: usize,
     iteration: usize,
-    D: HashMap<usize, usize>,
-    R: HashMap<usize, usize>,
-    C: HashSet<usize>,
-    S: Vec<usize>,
+    d: Vec<Option<usize>>,
+    r: Vec<Option<usize>>,
+    c: HashSet<usize>,
+    s: Vec<usize>,
     top_order: Vec<usize>,
 }
 
 impl SCC {
     fn visit(&mut self, v: usize, solver: &WavePropagationSolver) {
         self.iteration += 1;
-        self.D.insert(v, self.iteration);
-        self.R.insert(v, v);
+        self.d[v] = Some(self.iteration);
+        self.r[v] = Some(v);
         for (&w, offsets) in &solver.edges[v] {
             if offsets.contains(&0) {
-                if !self.D.contains_key(&w) {
+                if self.d[w] == None {
                     self.visit(w, solver)
                 }
-                if !self.C.contains(&w) {
-                    let Rv = self.R[&v];
-                    let Rw = self.R[&w];
-                    self.R
-                        .insert(v, if self.D[&Rv] < self.D[&Rw] { Rv } else { Rw });
+                if !self.c.contains(&w) {
+                    let r_v = self.r[v].unwrap();
+                    let r_w = self.r[w].unwrap();
+                    self.r[v] = Some(if self.d[r_v] < self.d[r_w] { r_v } else { r_w });
                 }
             }
         }
-        if self.R[&v] == v {
-            self.C.insert(v);
-            while let Some(&w) = self.S.last() {
-                if self.D[&w] <= self.D[&v] {
+        if self.r[v] == Some(v) {
+            self.c.insert(v);
+            while let Some(&w) = self.s.last() {
+                if self.d[w] <= self.d[v] {
                     break;
                 } else {
-                    self.S.pop();
-                    self.C.insert(w.clone());
-                    self.R.insert(w, v);
+                    self.s.pop();
+                    self.c.insert(w.clone());
+                    self.r[w] = Some(v);
                 }
             }
             self.top_order.push(v);
         } else {
-            self.S.push(v);
+            self.s.push(v);
         }
     }
 
@@ -78,14 +77,14 @@ impl SCC {
         let mut result = Self {
             node_count,
             iteration: 0,
-            D: HashMap::new(),
-            R: HashMap::new(),
-            C: HashSet::new(),
-            S: vec![],
+            d: vec![None; node_count],
+            r: vec![None; node_count],
+            c: HashSet::new(),
+            s: vec![],
             top_order: vec![],
         };
         for v in 0..node_count {
-            if !result.D.contains_key(&v) {
+            if result.d[v] == None {
                 result.visit(v, solver);
             }
         }
@@ -129,9 +128,9 @@ impl SCC {
 
     fn apply_to_graph(&self, solver: &mut WavePropagationSolver) {
         for v in 0..self.node_count {
-            let Rv = self.R[&v];
-            if Rv != v {
-                self.unify(v, Rv, solver)
+            let r_v = self.r[v].unwrap();
+            if r_v != v {
+                self.unify(v, r_v, solver)
             }
         }
     }
