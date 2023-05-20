@@ -1,11 +1,13 @@
 use bitvec::prelude::*;
 use hashbrown::{hash_set, HashMap, HashSet};
+use roaring::RoaringBitmap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::iter::Copied;
 
 mod bit_vec;
 mod hash;
+mod roaring_solver;
 mod stats;
 #[cfg(test)]
 mod tests;
@@ -13,6 +15,7 @@ mod wave_propagation;
 
 pub use bit_vec::BasicBitVecSolver;
 pub use hash::BasicHashSolver;
+pub use roaring_solver::RoaringSolver;
 pub use stats::StatSolver;
 pub use wave_propagation::WavePropagationSolver;
 
@@ -135,6 +138,14 @@ impl IterableTermSet<usize> for BitVec {
     }
 }
 
+impl IterableTermSet<usize> for RoaringBitmap {
+    type Iter<'a> = std::iter::Map<roaring::bitmap::Iter<'a>, fn(u32) -> usize>;
+
+    fn iter_term_set<'a>(&'a self) -> Self::Iter<'a> {
+        self.iter().map(|v| v as usize)
+    }
+}
+
 pub struct GenericSolver<T, S> {
     terms: Vec<T>,
     term_map: HashMap<T, usize>,
@@ -150,33 +161,49 @@ where
     ))
 }
 
-fn edges_between(
-    edges: &mut Vec<HashMap<usize, HashSet<usize>>>,
-    left: usize,
-    right: usize,
-) -> &mut HashSet<usize> {
-    edges[left].entry(right).or_default()
+fn edges_between<T: Hash + Eq + TryInto<usize>, U: Default>(
+    edges: &mut Vec<HashMap<T, U>>,
+    left: T,
+    right: T,
+) -> &mut U {
+    edges[left
+        .try_into()
+        .map_err(|_| ())
+        .expect("Could not convert to usize")]
+    .entry(right)
+    .or_default()
 }
 
-fn offset_term(
-    term: usize,
-    allowed_offsets: &HashMap<usize, usize>,
-    offset: usize,
-) -> Option<usize> {
+fn offset_term<T>(term: T, allowed_offsets: &HashMap<usize, usize>, offset: usize) -> Option<T>
+where
+    T: Hash + Eq + Ord + TryInto<usize> + TryFrom<usize>,
+{
     if offset == 0 {
         Some(term)
     } else {
-        allowed_offsets
-            .get(&term)
-            .and_then(|&max_offset| (offset <= max_offset).then(|| term + offset))
+        let term = &term
+            .try_into()
+            .map_err(|_| ())
+            .expect("Could not convert to usize");
+        allowed_offsets.get(term).and_then(|&max_offset| {
+            (offset <= max_offset).then(|| {
+                (term + offset)
+                    .try_into()
+                    .map_err(|_| ())
+                    .expect("Could not convert from usize")
+            })
+        })
     }
 }
 
-fn offset_terms<'a>(
-    terms: impl Iterator<Item = usize>,
+fn offset_terms<T>(
+    terms: impl Iterator<Item = T>,
     allowed_offsets: &HashMap<usize, usize>,
     offset: usize,
-) -> Vec<usize> {
+) -> Vec<T>
+where
+    T: Hash + Eq + Ord + TryInto<usize> + TryFrom<usize>,
+{
     if offset == 0 {
         terms.collect()
     } else {

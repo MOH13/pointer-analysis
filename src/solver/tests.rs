@@ -47,6 +47,10 @@ macro_rules! solver_tests {
                     vars!($crate::solver::WavePropagationSolver)
                 }
                 #[test]
+                fn roaring() {
+                    vars!($crate::solver::RoaringSolver)
+                }
+                #[test]
                 fn generic() {
                     #[allow(non_camel_case_types)]
                     #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]

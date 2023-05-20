@@ -3,7 +3,9 @@ use clap::ValueEnum;
 use hashbrown::HashMap;
 use llvm_ir::Module;
 use pointer_analysis::analysis::{cell_is_in_function, Cell, PointsToAnalysis, PointsToResult};
-use pointer_analysis::solver::{BasicBitVecSolver, BasicHashSolver, GenericSolver, StatSolver};
+use pointer_analysis::solver::{
+    BasicBitVecSolver, BasicHashSolver, GenericSolver, RoaringSolver, StatSolver,
+};
 use std::io;
 use std::io::Write;
 
@@ -40,6 +42,8 @@ enum SolverMode {
     BitVec,
     /// Hashset based solver
     Hash,
+    /// Roaring bitmap based solver
+    Roaring,
     /// Do not solve (used to test constraint generation speed)
     None,
 }
@@ -63,6 +67,9 @@ fn main() -> io::Result<()> {
         PointsToResult(match args.solver {
             Some(SolverMode::Hash) => {
                 PointsToAnalysis::run::<GenericSolver<_, BasicHashSolver>>(&module).0
+            }
+            Some(SolverMode::Roaring) => {
+                PointsToAnalysis::run::<GenericSolver<_, RoaringSolver>>(&module).0
             }
             Some(SolverMode::BitVec) => {
                 PointsToAnalysis::run::<GenericSolver<_, BasicBitVecSolver>>(&module).0
