@@ -1,0 +1,15 @@
+{
+    "c_path": "cycle_elim_test.c",
+    "points_to": {
+        "stack-%p@main": [
+            "stack-%a@main",
+            "stack-%b@main"
+        ],
+        "stack-%q@main": [
+            "stack-%p@main"
+        ],
+        "stack-%r@main": [
+            "stack-%p@main"
+        ]
+    }
+}
