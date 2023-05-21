@@ -1,11 +1,11 @@
 use core::panic;
-use std::cmp::{max, min};
+use std::cmp::max;
 use std::mem;
 
 use hashbrown::{HashMap, HashSet};
 use once_cell::unsync::Lazy;
 
-use super::{edges_between, offset_term, offset_terms, Constraint, Solver, UnivCond};
+use super::{edges_between, offset_term, Constraint, Solver};
 
 struct CondLeftEntry {
     cond_node: usize,
@@ -26,9 +26,12 @@ pub struct WavePropagationSolver {
     left_conds: Vec<CondLeftEntry>,
     right_conds: Vec<CondRightEntry>,
     allowed_offsets: HashMap<usize, usize>,
+    parents: HashMap<usize, usize>,
+    top_order: Vec<usize>,
 }
 
 struct SCC {
+    iterative: bool,
     node_count: usize,
     iteration: usize,
     d: Vec<Option<usize>>,
@@ -46,7 +49,7 @@ impl SCC {
         for (&w, offsets) in &solver.edges[v] {
             if offsets.contains(&0) {
                 if self.d[w] == None {
-                    self.visit(w, solver)
+                    self.visit(w, solver);
                 }
                 if !self.c.contains(&w) {
                     let r_v = self.r[v].unwrap();
@@ -62,7 +65,7 @@ impl SCC {
                     break;
                 } else {
                     self.s.pop();
-                    self.c.insert(w.clone());
+                    self.c.insert(w);
                     self.r[w] = Some(v);
                 }
             }
@@ -72,9 +75,10 @@ impl SCC {
         }
     }
 
-    fn run(solver: &mut WavePropagationSolver) -> Self {
+    fn init_result(iterative: bool, solver: &WavePropagationSolver) -> SCC {
         let node_count = solver.edges.len();
-        let mut result = Self {
+        Self {
+            iterative,
             node_count,
             iteration: 0,
             d: vec![None; node_count],
@@ -82,8 +86,25 @@ impl SCC {
             c: HashSet::new(),
             s: vec![],
             top_order: vec![],
-        };
-        for v in 0..node_count {
+        }
+    }
+
+    fn run(solver: &mut WavePropagationSolver) -> Self {
+        let mut result = SCC::init_result(false, solver);
+        for v in 0..result.node_count {
+            if result.d[v] == None {
+                result.visit(v, solver);
+            }
+        }
+        result
+    }
+
+    fn run_iteratively<I: Iterator<Item = usize>>(
+        solver: &mut WavePropagationSolver,
+        nodes_to_search: I,
+    ) -> Self {
+        let mut result = SCC::init_result(true, solver);
+        for v in nodes_to_search {
             if result.d[v] == None {
                 result.visit(v, solver);
             }
@@ -98,7 +119,9 @@ impl SCC {
             solver.edges[parent]
                 .entry(other)
                 .or_default()
-                .extend(offsets.clone());
+                .extend(&offsets);
+            // solver.rev_edges[other].remove(&child);
+            // solver.rev_edges[other].insert(parent);
         }
         let child_rev_edges = mem::take(&mut solver.rev_edges[child]);
         for &i in &child_rev_edges {
@@ -108,12 +131,21 @@ impl SCC {
                     solver.edges[i]
                         .entry(parent)
                         .or_default()
-                        .extend(orig_edges.iter());
+                        .extend(&orig_edges);
                 }
-                None => panic!("Expected edges from {i} to {child}"),
+                None => {
+                    if solver.parents.get(&i).is_none() {
+                        panic!("Expected edges from {i} to {child}");
+                    }
+                }
             }
         }
         solver.rev_edges[parent].extend(child_rev_edges);
+        if solver.rev_edges[parent].remove(&child) {
+            solver.rev_edges[parent].insert(parent);
+        }
+
+        solver.edges[child] = HashMap::new();
 
         // Required to be sound
         let child_allowed_offset = solver.allowed_offsets.get(&child);
@@ -124,14 +156,33 @@ impl SCC {
                 .and_modify(|o2| *o2 = max(o1, *o2))
                 .or_insert(o1);
         }
+        solver.parents.insert(child, parent);
     }
 
-    fn apply_to_graph(&self, solver: &mut WavePropagationSolver) {
+    // Collapse cycles and update topological order
+    fn apply_to_graph(self, solver: &mut WavePropagationSolver) {
+        let mut removed = HashSet::new();
         for v in 0..self.node_count {
-            let r_v = self.r[v].unwrap();
-            if r_v != v {
-                self.unify(v, r_v, solver)
+            if let Some(r_v) = self.r[v] {
+                if r_v != v {
+                    self.unify(v, r_v, solver);
+                    if self.iterative {
+                        removed.insert(v);
+                    }
+                }
             }
+        }
+        if self.iterative {
+            if !removed.is_empty() {
+                solver.top_order = solver
+                    .top_order
+                    .iter()
+                    .copied()
+                    .filter(|node| !removed.contains(node))
+                    .collect()
+            }
+        } else {
+            solver.top_order = self.top_order;
         }
     }
 }
@@ -141,25 +192,41 @@ impl WavePropagationSolver {
         let mut p_old = vec![HashSet::new(); self.sols.len()];
         let mut p_cache_left = vec![HashSet::new(); self.left_conds.len()];
         let mut p_cache_right = vec![HashSet::new(); self.right_conds.len()];
+        let mut nodes_with_new_outgoing = HashSet::new();
+
+        SCC::run(self).apply_to_graph(self);
+
         loop {
-            let scc = SCC::run(self);
-            scc.apply_to_graph(self);
-            self.wave_propagate_iteration(&scc.top_order, &mut p_old);
-            let changed =
-                self.add_edges_after_wave_prop(&mut p_cache_left, &mut p_cache_right, &mut p_old);
-            self.wave_propagate_iteration(&scc.top_order, &mut p_old);
+            SCC::run_iteratively(self, nodes_with_new_outgoing.into_iter()).apply_to_graph(self);
+            nodes_with_new_outgoing = HashSet::new();
+
+            let changed = self.wave_propagate_iteration(
+                &mut p_old,
+                //&mut added_since_last
+            );
+
             if !changed {
                 break;
             }
+
+            self.add_edges_after_wave_prop(
+                &mut p_cache_left,
+                &mut p_cache_right,
+                &mut p_old,
+                &mut nodes_with_new_outgoing,
+                //&mut added_since_last,
+            );
         }
     }
 
-    fn wave_propagate_iteration(
-        &mut self,
-        top_order: &Vec<usize>,
-        p_old: &mut Vec<HashSet<usize>>,
-    ) {
-        for &v in top_order.iter().rev() {
+    fn wave_propagate_iteration(&mut self, p_old: &mut Vec<HashSet<usize>>) -> bool {
+        let mut changed = false;
+        for &v in self.top_order.iter().rev() {
+            // Skip if no new terms in solution set
+            if self.sols[v].len() == p_old[v].len() {
+                continue;
+            }
+            changed = true;
             let p_dif: Vec<usize> = self.sols[v].difference(&p_old[v]).copied().collect();
             p_old[v] = self.sols[v].clone();
 
@@ -183,6 +250,7 @@ impl WavePropagationSolver {
                 }
             }
         }
+        changed
     }
 
     fn add_edges_after_wave_prop(
@@ -190,6 +258,7 @@ impl WavePropagationSolver {
         p_cache_left: &mut Vec<HashSet<usize>>,
         p_cache_right: &mut Vec<HashSet<usize>>,
         p_old: &mut Vec<HashSet<usize>>,
+        nodes_with_new_outgoing: &mut HashSet<usize>,
     ) -> bool {
         let mut changed = false;
         for (
@@ -213,7 +282,9 @@ impl WavePropagationSolver {
                     }
                     if edges_between(&mut self.edges, t, *right).insert(0) {
                         self.sols[*right].extend(&p_old[t]);
+                        self.rev_edges[*right].insert(t);
                         changed = true;
+                        nodes_with_new_outgoing.insert(t);
                     }
                 }
             }
@@ -239,7 +310,9 @@ impl WavePropagationSolver {
                     }
                     if edges_between(&mut self.edges, *left, t).insert(0) {
                         self.sols[t].extend(&p_old[*left]);
+                        self.rev_edges[t].insert(*left);
                         changed = true;
+                        nodes_with_new_outgoing.insert(t);
                     }
                 }
             }
@@ -264,6 +337,8 @@ impl Solver for WavePropagationSolver {
             left_conds: vec![],
             right_conds: vec![],
             allowed_offsets: allowed_offsets.into_iter().collect(),
+            parents: HashMap::new(),
+            top_order: Vec::new(),
         }
     }
 
@@ -310,6 +385,11 @@ impl Solver for WavePropagationSolver {
     }
 
     fn get_solution(&self, node: &usize) -> HashSet<usize> {
+        let mut node = node;
+        // Iteratively search for representative
+        while let Some(parent) = self.parents.get(node) {
+            node = parent;
+        }
         self.sols[*node].clone()
     }
 }
