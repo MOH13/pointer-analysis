@@ -88,8 +88,9 @@ fn parse_points_to<'a>(
 
 fn run_test_template<S>(resource: &str)
 where
-    S: Solver<Term = usize>,
-    S::TermSet: IterableTermSet<usize>,
+    S: Solver,
+    S::TermSet: IterableTermSet<S::Term>,
+    S::Term: TryInto<usize> + TryFrom<usize> + Copy,
 {
     dbg!(resource);
     let config_file = File::open(resource).expect("Could not open file");
@@ -114,7 +115,7 @@ where
 
     dbg!(&expected_points_to);
 
-    let PointsToResult(actual_points_to) = PointsToAnalysis::run::<GenericSolver<_, S>>(&module);
+    let PointsToResult(actual_points_to) = PointsToAnalysis::run::<GenericSolver<_, S, _>>(&module);
 
     dbg!(&actual_points_to);
 

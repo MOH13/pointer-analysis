@@ -22,7 +22,7 @@ macro_rules! solver_tests {
                     ( $solver_ty:ty ) => {
                         #[allow(unused_assignments)]
                         {
-                            let mut index = 0;
+                            let mut index = 0 as <$solver_ty as Solver>::Term;
                             $(
                                 let $var = index;
                                 index += 1;
@@ -57,7 +57,7 @@ macro_rules! solver_tests {
                     enum Term {
                         $( $var , )+
                     }
-                    type $solver = $crate::solver::GenericSolver<Term, $crate::solver::BasicHashSolver>;
+                    type $solver = $crate::solver::GenericSolver<Term, $crate::solver::BasicHashSolver, <$crate::solver::BasicHashSolver as Solver>::Term>;
                     use Term::*;
                     $body
                 }

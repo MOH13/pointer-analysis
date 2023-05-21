@@ -4,17 +4,19 @@ use hashbrown::{HashMap, HashSet};
 
 use super::{edges_between, offset_term, offset_terms, Constraint, Solver, UnivCond};
 
+type Term = u32;
+
 pub struct BasicHashSolver {
-    worklist: VecDeque<(usize, usize)>,
-    sols: Vec<HashSet<usize>>,
-    edges: Vec<HashMap<usize, HashSet<usize>>>,
-    conds: Vec<Vec<UnivCond<usize>>>,
-    allowed_offsets: HashMap<usize, usize>,
+    worklist: VecDeque<(Term, Term)>,
+    sols: Vec<HashSet<Term>>,
+    edges: Vec<HashMap<Term, HashSet<Term>>>,
+    conds: Vec<Vec<UnivCond<Term>>>,
+    allowed_offsets: HashMap<Term, usize>,
 }
 
 macro_rules! add_token {
     ($solver:expr, $term:expr, $node:expr) => {
-        if $solver.sols[$node].insert($term) {
+        if $solver.sols[$node as usize].insert($term) {
             $solver.worklist.push_back(($term, $node));
         }
     };
@@ -23,7 +25,7 @@ macro_rules! add_token {
 impl BasicHashSolver {
     fn propagate(&mut self) {
         while let Some((term, node)) = self.worklist.pop_front() {
-            for cond in &self.conds[node].clone() {
+            for cond in &self.conds[node as usize].clone() {
                 match cond {
                     UnivCond::SubsetLeft { right, offset } => {
                         if let Some(t) = offset_term(term, &self.allowed_offsets, *offset) {
@@ -38,9 +40,9 @@ impl BasicHashSolver {
                 }
             }
 
-            for (&n2, edges) in &self.edges[node] {
+            for (&n2, edges) in &self.edges[node as usize] {
                 for &offset in edges {
-                    if let Some(t) = offset_term(term, &self.allowed_offsets, offset) {
+                    if let Some(t) = offset_term(term, &self.allowed_offsets, offset as usize) {
                         add_token!(self, t, n2);
                     }
                 }
@@ -48,11 +50,11 @@ impl BasicHashSolver {
         }
     }
 
-    fn add_edge(&mut self, left: usize, right: usize, offset: usize) {
+    fn add_edge(&mut self, left: Term, right: Term, offset: usize) {
         let edges = edges_between(&mut self.edges, left, right);
-        if edges.insert(offset) {
+        if edges.insert(offset as Term) {
             for t in offset_terms(
-                self.sols[left].iter().copied(),
+                self.sols[left as usize].iter().copied(),
                 &self.allowed_offsets,
                 offset,
             ) {
@@ -63,10 +65,10 @@ impl BasicHashSolver {
 }
 
 impl Solver for BasicHashSolver {
-    type Term = usize;
-    type TermSet = HashSet<usize>;
+    type Term = Term;
+    type TermSet = HashSet<Term>;
 
-    fn new(terms: Vec<usize>, allowed_offsets: Vec<(usize, usize)>) -> Self {
+    fn new(terms: Vec<Term>, allowed_offsets: Vec<(Term, usize)>) -> Self {
         Self {
             worklist: VecDeque::new(),
             sols: vec![HashSet::new(); terms.len()],
@@ -76,7 +78,7 @@ impl Solver for BasicHashSolver {
         }
     }
 
-    fn add_constraint(&mut self, c: Constraint<usize>) {
+    fn add_constraint(&mut self, c: Constraint<Term>) {
         match c {
             Constraint::Inclusion { term, node } => {
                 add_token!(self, term, node);
@@ -93,9 +95,9 @@ impl Solver for BasicHashSolver {
                 right,
                 offset,
             } => {
-                self.conds[cond_node].push(UnivCond::SubsetLeft { right, offset });
+                self.conds[cond_node as usize].push(UnivCond::SubsetLeft { right, offset });
                 let terms = offset_terms(
-                    self.sols[cond_node].iter().copied(),
+                    self.sols[cond_node as usize].iter().copied(),
                     &self.allowed_offsets,
                     offset,
                 );
@@ -109,9 +111,9 @@ impl Solver for BasicHashSolver {
                 left,
                 offset,
             } => {
-                self.conds[cond_node].push(UnivCond::SubsetRight { left, offset });
+                self.conds[cond_node as usize].push(UnivCond::SubsetRight { left, offset });
                 let terms = offset_terms(
-                    self.sols[cond_node].iter().copied(),
+                    self.sols[cond_node as usize].iter().copied(),
                     &self.allowed_offsets,
                     offset,
                 );
@@ -124,8 +126,8 @@ impl Solver for BasicHashSolver {
         self.propagate();
     }
 
-    fn get_solution(&self, node: &usize) -> HashSet<usize> {
-        self.sols[*node].clone()
+    fn get_solution(&self, node: &Term) -> HashSet<Term> {
+        self.sols[*node as usize].clone()
     }
 
     fn finalize(&mut self) {}

@@ -11,7 +11,7 @@ pub struct RoaringSolver {
     sols: Vec<RoaringBitmap>,
     edges: Vec<HashMap<u32, RoaringBitmap>>,
     conds: Vec<Vec<UnivCond<u32>>>,
-    allowed_offsets: HashMap<usize, usize>,
+    allowed_offsets: HashMap<u32, usize>,
 }
 
 macro_rules! add_token {
@@ -21,6 +21,8 @@ macro_rules! add_token {
         }
     };
 }
+
+type Term = u32;
 
 impl RoaringSolver {
     fn propagate(&mut self) {
@@ -42,35 +44,33 @@ impl RoaringSolver {
 
             for (&n2, edges) in &self.edges[node as usize] {
                 for offset in edges {
-                    if let Some(t) =
-                        offset_term(term as usize, &self.allowed_offsets, offset as usize)
-                    {
-                        add_token!(self, t as u32, n2 as u32);
+                    if let Some(t) = offset_term(term, &self.allowed_offsets, offset as usize) {
+                        add_token!(self, t, n2);
                     }
                 }
             }
         }
     }
 
-    fn add_edge(&mut self, left: u32, right: u32, offset: usize) {
+    fn add_edge(&mut self, left: Term, right: Term, offset: usize) {
         let edges = edges_between(&mut self.edges, left, right);
-        if edges.insert(offset as u32) {
+        if edges.insert(offset as Term) {
             for t in offset_terms(
                 self.sols[left as usize].iter(),
                 &self.allowed_offsets,
                 offset,
             ) {
-                add_token!(self, t as u32, right as u32);
+                add_token!(self, t, right);
             }
         }
     }
 }
 
 impl Solver for RoaringSolver {
-    type Term = usize;
+    type Term = Term;
     type TermSet = RoaringBitmap;
 
-    fn new(terms: Vec<usize>, allowed_offsets: Vec<(usize, usize)>) -> Self {
+    fn new(terms: Vec<Term>, allowed_offsets: Vec<(Term, usize)>) -> Self {
         Self {
             worklist: VecDeque::new(),
             sols: vec![RoaringBitmap::new(); terms.len()],
@@ -80,32 +80,35 @@ impl Solver for RoaringSolver {
         }
     }
 
-    fn add_constraint(&mut self, c: Constraint<usize>) {
+    fn add_constraint(&mut self, c: Constraint<Term>) {
         match c {
             Constraint::Inclusion { term, node } => {
-                add_token!(self, term as u32, node as u32);
+                add_token!(self, term, node);
             }
             Constraint::Subset {
                 left,
                 right,
                 offset,
             } => {
-                self.add_edge(left as u32, right as u32, offset);
+                self.add_edge(left, right, offset);
             }
             Constraint::UnivCondSubsetLeft {
                 cond_node,
                 right,
                 offset,
             } => {
-                self.conds[cond_node].push(UnivCond::SubsetLeft {
-                    right: right as u32,
+                self.conds[cond_node as usize].push(UnivCond::SubsetLeft {
+                    right: right,
                     offset,
                 });
-                let terms =
-                    offset_terms(self.sols[cond_node].iter(), &self.allowed_offsets, offset);
+                let terms = offset_terms(
+                    self.sols[cond_node as usize].iter(),
+                    &self.allowed_offsets,
+                    offset,
+                );
 
                 for t in terms {
-                    self.add_edge(t, right as u32, 0);
+                    self.add_edge(t, right, 0);
                 }
             }
             Constraint::UnivCondSubsetRight {
@@ -113,23 +116,23 @@ impl Solver for RoaringSolver {
                 left,
                 offset,
             } => {
-                self.conds[cond_node].push(UnivCond::SubsetRight {
-                    left: left as u32,
+                self.conds[cond_node as usize].push(UnivCond::SubsetRight { left: left, offset });
+                let terms = offset_terms(
+                    self.sols[cond_node as usize].iter(),
+                    &self.allowed_offsets,
                     offset,
-                });
-                let terms =
-                    offset_terms(self.sols[cond_node].iter(), &self.allowed_offsets, offset);
+                );
 
                 for t in terms {
-                    self.add_edge(left as u32, t, 0);
+                    self.add_edge(left, t, 0);
                 }
             }
         };
         self.propagate();
     }
 
-    fn get_solution(&self, node: &usize) -> RoaringBitmap {
-        self.sols[*node].clone()
+    fn get_solution(&self, node: &Term) -> RoaringBitmap {
+        self.sols[*node as usize].clone()
     }
 
     fn finalize(&mut self) {}

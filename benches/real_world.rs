@@ -9,15 +9,16 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 fn bench_template<S>(name: &str, c: &mut Criterion)
 where
-    S: Solver<Term = usize>,
-    S::TermSet: IterableTermSet<usize>,
+    S: Solver,
+    S::Term: TryInto<usize> + TryFrom<usize> + Copy,
+    S::TermSet: IterableTermSet<S::Term>,
 {
     for entry in glob::glob("benchmarks/*/bench.bc").unwrap() {
         let entry = entry.expect("Error in path");
         let module = Module::from_bc_path(&entry).expect("Error parsing bc file");
         let bench_name = format!("{} {name}", entry.display());
         c.bench_function(&bench_name, |b| {
-            b.iter(|| black_box(PointsToAnalysis::run::<GenericSolver<_, S>>(&module)));
+            b.iter(|| black_box(PointsToAnalysis::run::<GenericSolver<_, S, _>>(&module)));
         });
     }
 }
