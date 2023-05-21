@@ -63,22 +63,22 @@ fn main() -> io::Result<()> {
     let file_path = args.file_path;
     let module = Module::from_bc_path(&file_path).expect("Error parsing bc file");
 
-    let result: PointsToResult<GenericSolver<_, BasicHashSolver>> =
+    let result: PointsToResult<GenericSolver<_, BasicHashSolver, _>> =
         PointsToResult(match args.solver {
             Some(SolverMode::Hash) => {
-                PointsToAnalysis::run::<GenericSolver<_, BasicHashSolver>>(&module).0
+                PointsToAnalysis::run::<GenericSolver<_, BasicHashSolver, _>>(&module).0
             }
             Some(SolverMode::Roaring) => {
-                PointsToAnalysis::run::<GenericSolver<_, RoaringSolver>>(&module).0
+                PointsToAnalysis::run::<GenericSolver<_, RoaringSolver, _>>(&module).0
             }
             Some(SolverMode::BitVec) => {
-                PointsToAnalysis::run::<GenericSolver<_, BasicBitVecSolver>>(&module).0
+                PointsToAnalysis::run::<GenericSolver<_, BasicBitVecSolver, _>>(&module).0
             }
             Some(SolverMode::None) => {
                 PointsToAnalysis::run::<StatSolver<_>>(&module);
                 HashMap::new()
             }
-            None => PointsToAnalysis::run::<GenericSolver<_, BasicHashSolver>>(&module).0,
+            None => PointsToAnalysis::run::<GenericSolver<_, BasicHashSolver, _>>(&module).0,
         });
 
     let filtered_result = result.get_filtered_entries(

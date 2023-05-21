@@ -4,6 +4,7 @@ use roaring::RoaringBitmap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::iter::Copied;
+use std::ops::Add;
 
 mod bit_vec;
 mod hash;
@@ -138,23 +139,24 @@ impl IterableTermSet<usize> for BitVec {
     }
 }
 
-impl IterableTermSet<usize> for RoaringBitmap {
-    type Iter<'a> = std::iter::Map<roaring::bitmap::Iter<'a>, fn(u32) -> usize>;
+impl IterableTermSet<u32> for RoaringBitmap {
+    type Iter<'a> = roaring::bitmap::Iter<'a>;
 
     fn iter_term_set<'a>(&'a self) -> Self::Iter<'a> {
-        self.iter().map(|v| v as usize)
+        self.iter()
     }
 }
 
-pub struct GenericSolver<T, S> {
+pub struct GenericSolver<T, S, T2> {
     terms: Vec<T>,
-    term_map: HashMap<T, usize>,
+    term_map: HashMap<T, T2>,
     sub_solver: S,
 }
 
-fn term_to_usize<T>(term_map: &HashMap<T, usize>, term: &T) -> usize
+fn term_to_t2<T, T2>(term_map: &HashMap<T, T2>, term: &T) -> T2
 where
     T: Hash + Eq + Debug,
+    T2: Copy,
 {
     *term_map.get(term).expect(&format!(
         "Invalid lookup for term that was not passed in during initialization: {term:?}"
@@ -174,20 +176,16 @@ fn edges_between<T: Hash + Eq + TryInto<usize>, U: Default>(
     .or_default()
 }
 
-fn offset_term<T>(term: T, allowed_offsets: &HashMap<usize, usize>, offset: usize) -> Option<T>
+fn offset_term<T>(term: T, allowed_offsets: &HashMap<T, usize>, offset: usize) -> Option<T>
 where
-    T: Hash + Eq + Ord + TryInto<usize> + TryFrom<usize>,
+    T: Hash + Eq + Ord + TryInto<usize> + TryFrom<usize> + Add<T, Output = T>,
 {
     if offset == 0 {
         Some(term)
     } else {
-        let term = &term
-            .try_into()
-            .map_err(|_| ())
-            .expect("Could not convert to usize");
-        allowed_offsets.get(term).and_then(|&max_offset| {
+        allowed_offsets.get(&term).and_then(|&max_offset| {
             (offset <= max_offset).then(|| {
-                (term + offset)
+                term + offset
                     .try_into()
                     .map_err(|_| ())
                     .expect("Could not convert from usize")
@@ -198,11 +196,11 @@ where
 
 fn offset_terms<T>(
     terms: impl Iterator<Item = T>,
-    allowed_offsets: &HashMap<usize, usize>,
+    allowed_offsets: &HashMap<T, usize>,
     offset: usize,
 ) -> Vec<T>
 where
-    T: Hash + Eq + Ord + TryInto<usize> + TryFrom<usize>,
+    T: Hash + Eq + Ord + TryInto<usize> + TryFrom<usize> + Add<T, Output = T>,
 {
     if offset == 0 {
         terms.collect()
@@ -213,23 +211,43 @@ where
     }
 }
 
-impl<T, S> GenericSolver<T, S>
+fn to_usize<T>(v: T) -> usize
+where
+    T: TryInto<usize>,
+{
+    v.try_into()
+        .map_err(|_| ())
+        .expect("Could not convert to usize")
+}
+
+fn from_usize<T>(v: usize) -> T
+where
+    T: TryFrom<usize>,
+{
+    v.try_into()
+        .map_err(|_| ())
+        .expect("Could not convert to usize")
+}
+
+impl<T, S> GenericSolver<T, S, S::Term>
 where
     T: Hash + Eq + Clone + Debug,
+    S: Solver,
+    S::Term: TryInto<usize> + TryFrom<usize> + Copy,
 {
-    fn term_to_usize(&self, term: &T) -> usize {
-        term_to_usize(&self.term_map, term)
+    fn term_to_t2(&self, term: &T) -> S::Term {
+        term_to_t2(&self.term_map, term)
     }
 
-    fn usize_to_term(&self, i: usize) -> T {
-        self.terms[i].clone()
+    fn t2_to_term(&self, i: S::Term) -> T {
+        self.terms[to_usize(i)].clone()
     }
 
-    fn translate_constraint(&self, c: Constraint<T>) -> Constraint<usize> {
+    fn translate_constraint(&self, c: Constraint<T>) -> Constraint<S::Term> {
         match c {
             Constraint::Inclusion { term, node } => {
-                let term = self.term_to_usize(&term);
-                let node = self.term_to_usize(&node);
+                let term = self.term_to_t2(&term);
+                let node = self.term_to_t2(&node);
                 cstr!(term in node)
             }
             Constraint::Subset {
@@ -237,8 +255,8 @@ where
                 right,
                 offset,
             } => {
-                let left = self.term_to_usize(&left);
-                let right = self.term_to_usize(&right);
+                let left = self.term_to_t2(&left);
+                let right = self.term_to_t2(&right);
                 cstr!(left + offset <= right)
             }
             Constraint::UnivCondSubsetLeft {
@@ -246,8 +264,8 @@ where
                 right,
                 offset,
             } => {
-                let cond_node = self.term_to_usize(&cond_node);
-                let right = self.term_to_usize(&right);
+                let cond_node = self.term_to_t2(&cond_node);
+                let right = self.term_to_t2(&right);
                 cstr!(c in cond_node + offset : c <= right)
             }
             Constraint::UnivCondSubsetRight {
@@ -255,19 +273,20 @@ where
                 left,
                 offset,
             } => {
-                let cond_node = self.term_to_usize(&cond_node);
-                let left = self.term_to_usize(&left);
+                let cond_node = self.term_to_t2(&cond_node);
+                let left = self.term_to_t2(&left);
                 cstr!(c in cond_node + offset : left <= c)
             }
         }
     }
 }
 
-impl<T, S> Solver for GenericSolver<T, S>
+impl<T, S> Solver for GenericSolver<T, S, S::Term>
 where
     T: Hash + Eq + Clone + Debug,
-    S: Solver<Term = usize>,
-    S::TermSet: IterableTermSet<usize>,
+    S: Solver,
+    S::TermSet: IterableTermSet<S::Term>,
+    S::Term: TryInto<usize> + TryFrom<usize> + Copy,
 {
     type Term = T;
     type TermSet = HashSet<T>;
@@ -278,13 +297,19 @@ where
             .iter()
             .cloned()
             .enumerate()
-            .map(|(i, t)| (t, i))
+            .map(|(i, t)| (t, from_usize(i)))
             .collect();
         let sub_solver = S::new(
-            (0..length).collect(),
+            (0..length)
+                .map(|v| {
+                    v.try_into()
+                        .map_err(|_| ())
+                        .expect("Could not convert to usize")
+                })
+                .collect(),
             allowed_offsets
                 .into_iter()
-                .map(|(term, offset)| (term_to_usize(&term_map, &term), offset))
+                .map(|(term, offset)| (term_to_t2(&term_map, &term), offset))
                 .collect(),
         );
         Self {
@@ -299,8 +324,8 @@ where
     }
 
     fn get_solution(&self, node: &T) -> HashSet<T> {
-        let sol = self.sub_solver.get_solution(&self.term_to_usize(node));
-        HashSet::from_iter(sol.iter_term_set().map(|i| self.usize_to_term(i)))
+        let sol = self.sub_solver.get_solution(&self.term_to_t2(node));
+        HashSet::from_iter(sol.iter_term_set().map(|i| self.t2_to_term(i)))
     }
 
     fn finalize(&mut self) {
