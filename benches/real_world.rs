@@ -31,13 +31,24 @@ fn bit_vec(c: &mut Criterion) {
     bench_template::<BasicBitVecSolver>("BitVec", c);
 }
 
-fn wave_prop(c: &mut Criterion) {
-    bench_template::<WavePropagationSolver>("WaveProp", c);
-}
-
 fn roaring(c: &mut Criterion) {
     bench_template::<RoaringSolver>("Roaring", c);
 }
 
-criterion_group!(benches, hash, bit_vec, wave_prop, roaring);
+fn hash_wave_prop(c: &mut Criterion) {
+    bench_template::<WavePropagationSolver>("HashWaveProp", c);
+}
+
+fn roaring_wave_prop(c: &mut Criterion) {
+    bench_template::<RoaringSolver>("RoaringWaveProp", c);
+}
+
+criterion_group!(
+    benches,
+    hash,
+    bit_vec,
+    roaring,
+    hash_wave_prop,
+    roaring_wave_prop
+);
 criterion_main!(benches);

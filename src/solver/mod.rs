@@ -9,6 +9,7 @@ use std::ops::Add;
 mod bit_vec;
 mod hash;
 mod roaring_solver;
+mod roaring_wave_propagation;
 mod stats;
 #[cfg(test)]
 mod tests;
@@ -17,6 +18,7 @@ mod wave_propagation;
 pub use bit_vec::BasicBitVecSolver;
 pub use hash::BasicHashSolver;
 pub use roaring_solver::RoaringSolver;
+pub use roaring_wave_propagation::RoaringWavePropagationSolver;
 pub use stats::StatSolver;
 pub use wave_propagation::WavePropagationSolver;
 

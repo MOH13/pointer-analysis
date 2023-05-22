@@ -43,8 +43,12 @@ macro_rules! solver_tests {
                     vars!($crate::solver::BasicBitVecSolver)
                 }
                 #[test]
-                fn wave_prop() {
+                fn hash_wave_prop() {
                     vars!($crate::solver::WavePropagationSolver)
+                }
+                #[test]
+                fn roaring_wave_prop() {
+                    vars!($crate::solver::RoaringWavePropagationSolver)
                 }
                 #[test]
                 fn roaring() {

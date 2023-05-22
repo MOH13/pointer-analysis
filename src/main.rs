@@ -3,6 +3,8 @@ use clap::ValueEnum;
 use hashbrown::HashMap;
 use llvm_ir::Module;
 use pointer_analysis::analysis::{cell_is_in_function, Cell, PointsToAnalysis, PointsToResult};
+use pointer_analysis::solver::RoaringWavePropagationSolver;
+use pointer_analysis::solver::WavePropagationSolver;
 use pointer_analysis::solver::{
     BasicBitVecSolver, BasicHashSolver, GenericSolver, RoaringSolver, StatSolver,
 };
@@ -44,6 +46,10 @@ enum SolverMode {
     Hash,
     /// Roaring bitmap based solver
     Roaring,
+    /// Hashset based wave propagation
+    HashWave,
+    /// Roaring bitmap based wave propagation
+    RoaringWave,
     /// Do not solve (used to test constraint generation speed)
     None,
 }
@@ -70,6 +76,13 @@ fn main() -> io::Result<()> {
             }
             Some(SolverMode::Roaring) => {
                 PointsToAnalysis::run::<GenericSolver<_, RoaringSolver, _>>(&module).0
+            }
+            Some(SolverMode::HashWave) => {
+                PointsToAnalysis::run::<GenericSolver<_, WavePropagationSolver, _>>(&module).0
+            }
+            Some(SolverMode::RoaringWave) => {
+                PointsToAnalysis::run::<GenericSolver<_, RoaringWavePropagationSolver, _>>(&module)
+                    .0
             }
             Some(SolverMode::BitVec) => {
                 PointsToAnalysis::run::<GenericSolver<_, BasicBitVecSolver, _>>(&module).0
