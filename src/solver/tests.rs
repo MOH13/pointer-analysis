@@ -44,7 +44,7 @@ macro_rules! solver_tests {
                 }
                 #[test]
                 fn hash_wave_prop() {
-                    vars!($crate::solver::WavePropagationSolver)
+                    vars!($crate::solver::HashWavePropagationSolver)
                 }
                 #[test]
                 fn roaring_wave_prop() {
@@ -52,7 +52,7 @@ macro_rules! solver_tests {
                 }
                 #[test]
                 fn roaring() {
-                    vars!($crate::solver::RoaringSolver)
+                    vars!($crate::solver::BasicRoaringSolver)
                 }
                 #[test]
                 fn generic() {

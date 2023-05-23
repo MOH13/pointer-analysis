@@ -1,12 +1,13 @@
-use core::panic;
+use core::{hash::Hash, panic};
 use std::cmp::max;
+use std::marker::PhantomData;
 use std::mem;
 
 use hashbrown::{HashMap, HashSet};
 use once_cell::unsync::Lazy;
 use roaring::RoaringBitmap;
 
-use super::{edges_between, offset_term, Constraint, Solver};
+use super::{edges_between, offset_term, Constraint, Solver, TermSetTrait};
 
 type Term = u32;
 
@@ -22,10 +23,10 @@ struct CondRightEntry {
     offset: usize,
 }
 
-pub struct RoaringWavePropagationSolver {
-    sols: Vec<RoaringBitmap>,
-    edges: Vec<HashMap<Term, RoaringBitmap>>,
-    rev_edges: Vec<RoaringBitmap>,
+pub struct WavePropagationSolver<T> {
+    sols: Vec<T>,
+    edges: Vec<HashMap<Term, T>>,
+    rev_edges: Vec<T>,
     left_conds: Vec<CondLeftEntry>,
     right_conds: Vec<CondRightEntry>,
     allowed_offsets: HashMap<Term, usize>,
@@ -33,7 +34,7 @@ pub struct RoaringWavePropagationSolver {
     top_order: Vec<Term>,
 }
 
-struct SCC {
+struct SCC<T> {
     iterative: bool,
     node_count: usize,
     iteration: usize,
@@ -42,10 +43,11 @@ struct SCC {
     c: HashSet<Term>,
     s: Vec<Term>,
     top_order: Vec<Term>,
+    term_set_type_phantom: PhantomData<T>,
 }
 
-impl SCC {
-    fn visit(&mut self, v: Term, solver: &RoaringWavePropagationSolver) {
+impl<T: TermSetTrait<Term = u32> + Default + Clone> SCC<T> {
+    fn visit(&mut self, v: Term, solver: &WavePropagationSolver<T>) {
         self.iteration += 1;
         self.d[v as usize] = Some(self.iteration);
         self.r[v as usize] = Some(v);
@@ -82,7 +84,7 @@ impl SCC {
         }
     }
 
-    fn init_result(iterative: bool, solver: &RoaringWavePropagationSolver) -> SCC {
+    fn init_result(iterative: bool, solver: &WavePropagationSolver<T>) -> Self {
         let node_count = solver.edges.len();
         Self {
             iterative,
@@ -93,10 +95,11 @@ impl SCC {
             c: HashSet::new(),
             s: vec![],
             top_order: vec![],
+            term_set_type_phantom: PhantomData,
         }
     }
 
-    fn run(solver: &mut RoaringWavePropagationSolver) -> Self {
+    fn run(solver: &mut WavePropagationSolver<T>) -> Self {
         let mut result = SCC::init_result(false, solver);
         for v in 0..result.node_count as u32 {
             if result.d[v as usize] == None {
@@ -107,7 +110,7 @@ impl SCC {
     }
 
     fn run_iteratively<I: Iterator<Item = Term>>(
-        solver: &mut RoaringWavePropagationSolver,
+        solver: &mut WavePropagationSolver<T>,
         nodes_to_search: I,
     ) -> Self {
         let mut result = SCC::init_result(true, solver);
@@ -119,26 +122,24 @@ impl SCC {
         result
     }
 
-    fn unify(&self, child: Term, parent: Term, solver: &mut RoaringWavePropagationSolver) {
+    fn unify(&self, child: Term, parent: Term, solver: &mut WavePropagationSolver<T>) {
         let child_sols = mem::take(&mut solver.sols[child as usize]);
-        solver.sols[parent as usize].extend(child_sols);
+        solver.sols[parent as usize].union_assign(&child_sols);
         for (other, offsets) in solver.edges[child as usize].clone() {
             solver.edges[parent as usize]
                 .entry(other)
                 .or_default()
-                .extend(&offsets);
-            // solver.rev_edges[other].remove(&child);
-            // solver.rev_edges[other].insert(parent);
+                .union_assign(&offsets);
         }
         let child_rev_edges = mem::take(&mut solver.rev_edges[child as usize]);
-        for i in &child_rev_edges {
+        for i in child_rev_edges.iter() {
             match solver.edges[i as usize].get_mut(&child) {
                 Some(orig_edges) => {
                     let orig_edges = mem::take(orig_edges);
                     solver.edges[i as usize]
                         .entry(parent)
                         .or_default()
-                        .extend(&orig_edges);
+                        .union_assign(&orig_edges);
                 }
                 None => {
                     if solver.parents.get(&i).is_none() {
@@ -147,7 +148,7 @@ impl SCC {
                 }
             }
         }
-        solver.rev_edges[parent as usize].extend(child_rev_edges);
+        solver.rev_edges[parent as usize].union_assign(&child_rev_edges);
         if solver.rev_edges[parent as usize].remove(child as u32) {
             solver.rev_edges[parent as usize].insert(parent as u32);
         }
@@ -167,7 +168,7 @@ impl SCC {
     }
 
     // Collapse cycles and update topological order
-    fn apply_to_graph(self, solver: &mut RoaringWavePropagationSolver) {
+    fn apply_to_graph(self, solver: &mut WavePropagationSolver<T>) {
         let mut removed = HashSet::new();
         for v in 0..self.node_count as u32 {
             if let Some(r_v) = self.r[v as usize] {
@@ -194,23 +195,20 @@ impl SCC {
     }
 }
 
-impl RoaringWavePropagationSolver {
+impl<T: TermSetTrait<Term = u32>> WavePropagationSolver<T> {
     fn run_wave_propagation(&mut self) {
-        let mut p_old = vec![RoaringBitmap::new(); self.sols.len()];
-        let mut p_cache_left = vec![RoaringBitmap::new(); self.left_conds.len()];
-        let mut p_cache_right = vec![RoaringBitmap::new(); self.right_conds.len()];
-        let mut nodes_with_new_outgoing = HashSet::new();
+        let mut p_old = vec![T::new(); self.sols.len()];
+        let mut p_cache_left = vec![T::new(); self.left_conds.len()];
+        let mut p_cache_right = vec![T::new(); self.right_conds.len()];
+        let mut nodes_with_new_outgoing = T::new();
 
         SCC::run(self).apply_to_graph(self);
 
         loop {
-            SCC::run_iteratively(self, nodes_with_new_outgoing.into_iter()).apply_to_graph(self);
-            nodes_with_new_outgoing = HashSet::new();
+            SCC::run_iteratively(self, nodes_with_new_outgoing.iter()).apply_to_graph(self);
+            nodes_with_new_outgoing = T::new();
 
-            let changed = self.wave_propagate_iteration(
-                &mut p_old,
-                //&mut added_since_last
-            );
+            let changed = self.wave_propagate_iteration(&mut p_old);
 
             if !changed {
                 break;
@@ -221,12 +219,11 @@ impl RoaringWavePropagationSolver {
                 &mut p_cache_right,
                 &mut p_old,
                 &mut nodes_with_new_outgoing,
-                //&mut added_since_last,
             );
         }
     }
 
-    fn wave_propagate_iteration(&mut self, p_old: &mut Vec<RoaringBitmap>) -> bool {
+    fn wave_propagate_iteration(&mut self, p_old: &mut Vec<T>) -> bool {
         let mut changed = false;
         for &v in self.top_order.iter().rev() {
             // Skip if no new terms in solution set
@@ -234,24 +231,22 @@ impl RoaringWavePropagationSolver {
                 continue;
             }
             changed = true;
-            let p_dif: Vec<Term> = (&(self.sols[v as usize]) - &p_old[v as usize])
-                .iter()
-                .collect();
+            let p_dif = self.sols[v as usize].difference(&p_old[v as usize]);
             p_old[v as usize] = self.sols[v as usize].clone();
 
             let allowed_offsets = Lazy::new(|| {
                 p_dif
                     .iter()
-                    .map(|t| self.allowed_offsets.get(t).copied().unwrap_or(0))
+                    .map(|t| self.allowed_offsets.get(&t).copied().unwrap_or(0))
                     .collect::<Vec<usize>>()
             });
             for (&w, offsets) in &self.edges[v as usize] {
-                for o in offsets {
+                for o in offsets.iter() {
                     if o == 0 {
-                        self.sols[w as usize].extend(&p_dif);
+                        self.sols[w as usize].union_assign(&p_dif);
                     } else {
-                        let to_add = p_dif.iter().enumerate().filter_map(|(i, &t)| {
-                            (o <= allowed_offsets[i as usize] as u32).then(|| t + o)
+                        let to_add = p_dif.iter().enumerate().filter_map(|(i, t)| {
+                            (o <= allowed_offsets[i as usize] as Term).then(|| t + o as Term)
                         });
                         self.sols[w as usize].extend(to_add);
                     }
@@ -263,10 +258,10 @@ impl RoaringWavePropagationSolver {
 
     fn add_edges_after_wave_prop(
         &mut self,
-        p_cache_left: &mut Vec<RoaringBitmap>,
-        p_cache_right: &mut Vec<RoaringBitmap>,
-        p_old: &mut Vec<RoaringBitmap>,
-        nodes_with_new_outgoing: &mut HashSet<Term>,
+        p_cache_left: &mut Vec<T>,
+        p_cache_right: &mut Vec<T>,
+        p_old: &mut Vec<T>,
+        nodes_with_new_outgoing: &mut T,
     ) -> bool {
         let mut changed = false;
         for (
@@ -278,18 +273,20 @@ impl RoaringWavePropagationSolver {
             },
         ) in self.left_conds.iter().enumerate()
         {
-            let p_new: Vec<_> = (&(self.sols[*cond_node as usize]) - &p_cache_left[i])
-                .iter()
-                .collect();
-            p_cache_left[i].extend(&p_new);
-            for t in p_new {
+            let cond_node = get_representative(&mut self.parents, *cond_node);
+            let right = get_representative(&mut self.parents, *right);
+
+            let p_new = self.sols[cond_node as usize].difference(&p_cache_left[i]);
+            p_cache_left[i].union_assign(&p_new);
+            for t in p_new.iter() {
                 if let Some(t) = offset_term(t, &self.allowed_offsets, *offset) {
-                    if t == *right {
+                    let t = get_representative(&mut self.parents, t);
+                    if t == right {
                         continue;
                     }
-                    if edges_between(&mut self.edges, t, *right).insert(0) {
-                        self.sols[*right as usize].extend(&p_old[t as usize]);
-                        self.rev_edges[*right as usize].insert(t);
+                    if edges_between(&mut self.edges, t, right).insert(0) {
+                        self.sols[right as usize].union_assign(&p_old[t as usize]);
+                        self.rev_edges[right as usize].insert(t);
                         changed = true;
                         nodes_with_new_outgoing.insert(t);
                     }
@@ -305,18 +302,20 @@ impl RoaringWavePropagationSolver {
             },
         ) in self.right_conds.iter().enumerate()
         {
-            let p_new: Vec<_> = (&(self.sols[*cond_node as usize]) - &p_cache_right[i])
-                .iter()
-                .collect();
-            p_cache_right[i].extend(&p_new);
-            for t in p_new {
+            let cond_node = get_representative(&mut self.parents, *cond_node);
+            let left = get_representative(&mut self.parents, *left);
+
+            let p_new = self.sols[cond_node as usize].difference(&p_cache_right[i]);
+            p_cache_right[i].union_assign(&p_new);
+            for t in p_new.iter() {
                 if let Some(t) = offset_term(t, &self.allowed_offsets, *offset) {
-                    if t == *left {
+                    let t = get_representative(&mut self.parents, t);
+                    if t == left {
                         continue;
                     }
-                    if edges_between(&mut self.edges, *left, t).insert(0) {
-                        self.sols[t as usize].extend(&p_old[*left as usize]);
-                        self.rev_edges[t as usize].insert(*left);
+                    if edges_between(&mut self.edges, left, t).insert(0) {
+                        self.sols[t as usize].union_assign(&p_old[left as usize]);
+                        self.rev_edges[t as usize].insert(left);
                         changed = true;
                         nodes_with_new_outgoing.insert(t);
                     }
@@ -326,20 +325,20 @@ impl RoaringWavePropagationSolver {
         changed
     }
 
-    fn add_edge(&mut self, left: Term, right: Term, offset: usize) -> bool {
-        edges_between(&mut self.edges, left, right).insert(offset as u32)
+    fn add_edge(&mut self, left: Term, right: Term, offset: Term) -> bool {
+        edges_between(&mut self.edges, left, right).insert(offset)
     }
 }
 
-impl Solver for RoaringWavePropagationSolver {
+impl<T: TermSetTrait<Term = u32>> Solver for WavePropagationSolver<T> {
     type Term = Term;
-    type TermSet = RoaringBitmap;
+    type TermSet = T;
 
     fn new(terms: Vec<Term>, allowed_offsets: Vec<(Term, usize)>) -> Self {
         Self {
-            sols: vec![RoaringBitmap::new(); terms.len()],
+            sols: vec![T::new(); terms.len()],
             edges: vec![HashMap::new(); terms.len()],
-            rev_edges: vec![RoaringBitmap::new(); terms.len()],
+            rev_edges: vec![T::new(); terms.len()],
             left_conds: vec![],
             right_conds: vec![],
             allowed_offsets: allowed_offsets.into_iter().collect(),
@@ -358,7 +357,7 @@ impl Solver for RoaringWavePropagationSolver {
                 right,
                 offset,
             } => {
-                self.add_edge(left, right, offset);
+                self.add_edge(left, right, offset as Term);
                 self.rev_edges[right as usize].insert(left);
             }
             Constraint::UnivCondSubsetLeft {
@@ -390,12 +389,32 @@ impl Solver for RoaringWavePropagationSolver {
         self.run_wave_propagation();
     }
 
-    fn get_solution(&self, node: &Term) -> RoaringBitmap {
-        let mut node = node;
-        // Iteratively search for representative
-        while let Some(parent) = self.parents.get(node) {
-            node = parent;
-        }
-        self.sols[*node as usize].clone()
+    fn get_solution(&self, node: &Term) -> Self::TermSet {
+        let representative = get_representative_no_mutation(&self.parents, *node);
+        self.sols[representative as usize].clone()
     }
 }
+
+fn get_representative_no_mutation<T: Eq + PartialEq + Hash + Copy>(
+    parents: &HashMap<T, T>,
+    child: T,
+) -> T {
+    let mut node = child;
+    while let Some(&parent) = parents.get(&node) {
+        node = parent;
+    }
+    node
+}
+
+fn get_representative<T: Eq + PartialEq + Hash + Copy>(parents: &mut HashMap<T, T>, child: T) -> T {
+    if let Some(&parent) = parents.get(&child) {
+        let representative = get_representative(parents, parent);
+        parents.insert(child, parent);
+        representative
+    } else {
+        child
+    }
+}
+
+pub type HashWavePropagationSolver = WavePropagationSolver<HashSet<Term>>;
+pub type RoaringWavePropagationSolver = WavePropagationSolver<RoaringBitmap>;

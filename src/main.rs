@@ -3,10 +3,10 @@ use clap::ValueEnum;
 use hashbrown::HashMap;
 use llvm_ir::Module;
 use pointer_analysis::analysis::{cell_is_in_function, Cell, PointsToAnalysis, PointsToResult};
+use pointer_analysis::solver::HashWavePropagationSolver;
 use pointer_analysis::solver::RoaringWavePropagationSolver;
-use pointer_analysis::solver::WavePropagationSolver;
 use pointer_analysis::solver::{
-    BasicBitVecSolver, BasicHashSolver, GenericSolver, RoaringSolver, StatSolver,
+    BasicBitVecSolver, BasicHashSolver, BasicRoaringSolver, GenericSolver, StatSolver,
 };
 use std::io;
 use std::io::Write;
@@ -75,10 +75,10 @@ fn main() -> io::Result<()> {
                 PointsToAnalysis::run::<GenericSolver<_, BasicHashSolver, _>>(&module).0
             }
             Some(SolverMode::Roaring) => {
-                PointsToAnalysis::run::<GenericSolver<_, RoaringSolver, _>>(&module).0
+                PointsToAnalysis::run::<GenericSolver<_, BasicRoaringSolver, _>>(&module).0
             }
             Some(SolverMode::HashWave) => {
-                PointsToAnalysis::run::<GenericSolver<_, WavePropagationSolver, _>>(&module).0
+                PointsToAnalysis::run::<GenericSolver<_, HashWavePropagationSolver, _>>(&module).0
             }
             Some(SolverMode::RoaringWave) => {
                 PointsToAnalysis::run::<GenericSolver<_, RoaringWavePropagationSolver, _>>(&module)

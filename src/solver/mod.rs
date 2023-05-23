@@ -6,21 +6,17 @@ use std::hash::Hash;
 use std::iter::Copied;
 use std::ops::Add;
 
+mod basic;
 mod bit_vec;
-mod hash;
-mod roaring_solver;
-mod roaring_wave_propagation;
 mod stats;
 #[cfg(test)]
 mod tests;
-mod wave_propagation;
+mod wave_prop;
 
+pub use basic::{BasicHashSolver, BasicRoaringSolver};
 pub use bit_vec::BasicBitVecSolver;
-pub use hash::BasicHashSolver;
-pub use roaring_solver::RoaringSolver;
-pub use roaring_wave_propagation::RoaringWavePropagationSolver;
 pub use stats::StatSolver;
-pub use wave_propagation::WavePropagationSolver;
+pub use wave_prop::{HashWavePropagationSolver, RoaringWavePropagationSolver};
 
 #[derive(Debug)]
 pub enum Constraint<T> {
@@ -101,6 +97,126 @@ macro_rules! cstr {
 enum UnivCond<T: Clone> {
     SubsetLeft { right: T, offset: usize },
     SubsetRight { left: T, offset: usize },
+}
+
+pub trait TermSetTrait: Default + Clone {
+    type Term;
+
+    type Iterator<'a>: Iterator<Item = Self::Term>
+    where
+        Self: 'a;
+
+    fn new() -> Self;
+    fn len(&self) -> usize;
+    fn contains(&self, term: Self::Term) -> bool;
+    fn remove(&mut self, term: Self::Term) -> bool;
+    fn insert(&mut self, term: Self::Term) -> bool;
+    fn union_assign(&mut self, other: &Self);
+    fn extend<T: Iterator<Item = Self::Term>>(&mut self, other: T);
+    fn difference(&self, other: &Self) -> Self;
+    fn iter<'a>(&'a self) -> Self::Iterator<'a>;
+}
+
+impl<T: Eq + PartialEq + Hash + Copy + 'static> TermSetTrait for HashSet<T> {
+    type Term = T;
+
+    type Iterator<'a> = Copied<hashbrown::hash_set::Iter<'a, T>>;
+
+    #[inline(always)]
+    fn new() -> Self {
+        HashSet::new()
+    }
+
+    #[inline(always)]
+    fn len(&self) -> usize {
+        HashSet::len(&self)
+    }
+
+    #[inline(always)]
+    fn contains(&self, term: Self::Term) -> bool {
+        HashSet::contains(self, &term)
+    }
+
+    #[inline(always)]
+    fn remove(&mut self, term: Self::Term) -> bool {
+        HashSet::remove(self, &term)
+    }
+
+    #[inline(always)]
+    fn insert(&mut self, term: Self::Term) -> bool {
+        HashSet::insert(self, term)
+    }
+
+    #[inline(always)]
+    fn union_assign(&mut self, other: &Self) {
+        Extend::extend(self, other);
+    }
+
+    #[inline(always)]
+    fn extend<U: Iterator<Item = Self::Term>>(&mut self, other: U) {
+        Extend::extend(self, other);
+    }
+
+    #[inline(always)]
+    fn difference(&self, other: &Self) -> Self {
+        HashSet::difference(self, other).copied().collect()
+    }
+
+    #[inline(always)]
+    fn iter<'a>(&'a self) -> Self::Iterator<'a> {
+        HashSet::iter(self).copied()
+    }
+}
+
+impl TermSetTrait for RoaringBitmap {
+    type Term = u32;
+
+    type Iterator<'a> = roaring::bitmap::Iter<'a>;
+
+    #[inline(always)]
+    fn new() -> Self {
+        RoaringBitmap::new()
+    }
+
+    #[inline(always)]
+    fn len(&self) -> usize {
+        RoaringBitmap::len(self) as usize
+    }
+
+    #[inline(always)]
+    fn contains(&self, term: Self::Term) -> bool {
+        RoaringBitmap::contains(&self, term)
+    }
+
+    #[inline(always)]
+    fn remove(&mut self, term: Self::Term) -> bool {
+        RoaringBitmap::remove(self, term)
+    }
+
+    #[inline(always)]
+    fn insert(&mut self, term: Self::Term) -> bool {
+        RoaringBitmap::insert(self, term)
+    }
+
+    #[inline(always)]
+    fn union_assign(&mut self, other: &Self) {
+        *self |= other;
+    }
+
+    #[inline(always)]
+    fn extend<T: Iterator<Item = Self::Term>>(&mut self, other: T) {
+        Extend::extend(self, other)
+    }
+
+    #[inline(always)]
+    fn difference(&self, other: &Self) -> Self {
+        self - other
+    }
+
+    #[inline(always)]
+    fn iter<'a>(&'a self) -> Self::Iterator<'a> {
+        RoaringBitmap::iter(&self)
+    }
 }
 
 pub trait Solver {

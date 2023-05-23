@@ -1,17 +1,16 @@
 use std::collections::VecDeque;
 
 use hashbrown::{HashMap, HashSet};
+use roaring::RoaringBitmap;
 
-use super::{edges_between, offset_term, offset_terms, Constraint, Solver, UnivCond};
+use super::{edges_between, offset_term, offset_terms, Constraint, Solver, TermSetTrait, UnivCond};
 
-type Term = u32;
-
-pub struct BasicHashSolver {
-    worklist: VecDeque<(Term, Term)>,
-    sols: Vec<HashSet<Term>>,
-    edges: Vec<HashMap<Term, HashSet<Term>>>,
-    conds: Vec<Vec<UnivCond<Term>>>,
-    allowed_offsets: HashMap<Term, usize>,
+pub struct BasicSolver<T: Clone, U> {
+    worklist: VecDeque<(T, T)>,
+    sols: Vec<U>,
+    edges: Vec<HashMap<T, U>>,
+    conds: Vec<Vec<UnivCond<T>>>,
+    allowed_offsets: HashMap<T, usize>,
 }
 
 macro_rules! add_token {
@@ -22,7 +21,7 @@ macro_rules! add_token {
     };
 }
 
-impl BasicHashSolver {
+impl<T: TermSetTrait<Term = u32>> BasicSolver<u32, T> {
     fn propagate(&mut self) {
         while let Some((term, node)) = self.worklist.pop_front() {
             for cond in &self.conds[node as usize].clone() {
@@ -41,7 +40,7 @@ impl BasicHashSolver {
             }
 
             for (&n2, edges) in &self.edges[node as usize] {
-                for &offset in edges {
+                for offset in edges.iter() {
                     if let Some(t) = offset_term(term, &self.allowed_offsets, offset as usize) {
                         add_token!(self, t, n2);
                     }
@@ -50,11 +49,11 @@ impl BasicHashSolver {
         }
     }
 
-    fn add_edge(&mut self, left: Term, right: Term, offset: usize) {
+    fn add_edge(&mut self, left: u32, right: u32, offset: usize) {
         let edges = edges_between(&mut self.edges, left, right);
-        if edges.insert(offset as Term) {
+        if edges.insert(offset as u32) {
             for t in offset_terms(
-                self.sols[left as usize].iter().copied(),
+                self.sols[left as usize].iter(),
                 &self.allowed_offsets,
                 offset,
             ) {
@@ -64,21 +63,21 @@ impl BasicHashSolver {
     }
 }
 
-impl Solver for BasicHashSolver {
-    type Term = Term;
-    type TermSet = HashSet<Term>;
+impl<T: TermSetTrait<Term = u32>> Solver for BasicSolver<u32, T> {
+    type Term = u32;
+    type TermSet = T;
 
-    fn new(terms: Vec<Term>, allowed_offsets: Vec<(Term, usize)>) -> Self {
+    fn new(terms: Vec<Self::Term>, allowed_offsets: Vec<(Self::Term, usize)>) -> Self {
         Self {
             worklist: VecDeque::new(),
-            sols: vec![HashSet::new(); terms.len()],
+            sols: vec![T::new(); terms.len()],
             edges: vec![HashMap::new(); terms.len()],
             conds: vec![vec![]; terms.len()],
             allowed_offsets: allowed_offsets.into_iter().collect(),
         }
     }
 
-    fn add_constraint(&mut self, c: Constraint<Term>) {
+    fn add_constraint(&mut self, c: Constraint<Self::Term>) {
         match c {
             Constraint::Inclusion { term, node } => {
                 add_token!(self, term, node);
@@ -97,7 +96,7 @@ impl Solver for BasicHashSolver {
             } => {
                 self.conds[cond_node as usize].push(UnivCond::SubsetLeft { right, offset });
                 let terms = offset_terms(
-                    self.sols[cond_node as usize].iter().copied(),
+                    self.sols[cond_node as usize].iter(),
                     &self.allowed_offsets,
                     offset,
                 );
@@ -113,7 +112,7 @@ impl Solver for BasicHashSolver {
             } => {
                 self.conds[cond_node as usize].push(UnivCond::SubsetRight { left, offset });
                 let terms = offset_terms(
-                    self.sols[cond_node as usize].iter().copied(),
+                    self.sols[cond_node as usize].iter(),
                     &self.allowed_offsets,
                     offset,
                 );
@@ -126,9 +125,12 @@ impl Solver for BasicHashSolver {
         self.propagate();
     }
 
-    fn get_solution(&self, node: &Term) -> HashSet<Term> {
+    fn get_solution(&self, node: &Self::Term) -> Self::TermSet {
         self.sols[*node as usize].clone()
     }
 
     fn finalize(&mut self) {}
 }
+
+pub type BasicHashSolver = BasicSolver<u32, HashSet<u32>>;
+pub type BasicRoaringSolver = BasicSolver<u32, RoaringBitmap>;

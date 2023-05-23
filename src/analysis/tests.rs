@@ -12,8 +12,8 @@ use test_generator::test_resources;
 
 use crate::analysis::{PointsToAnalysis, PointsToResult};
 use crate::solver::{
-    BasicBitVecSolver, BasicHashSolver, GenericSolver, IterableTermSet, RoaringSolver, Solver,
-    WavePropagationSolver,
+    BasicBitVecSolver, BasicHashSolver, BasicRoaringSolver, GenericSolver,
+    HashWavePropagationSolver, IterableTermSet, Solver,
 };
 
 use super::Cell;
@@ -142,10 +142,10 @@ fn bit_vec(resource: &str) {
 
 #[test_resources("res/**/test_config.json")]
 fn roaring(resource: &str) {
-    run_test_template::<RoaringSolver>(resource)
+    run_test_template::<BasicRoaringSolver>(resource)
 }
 
 #[test_resources("res/**/test_config.json")]
 fn wave_prop(resource: &str) {
-    run_test_template::<WavePropagationSolver>(resource)
+    run_test_template::<HashWavePropagationSolver>(resource)
 }

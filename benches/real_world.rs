@@ -1,8 +1,8 @@
 use llvm_ir::Module;
 use pointer_analysis::analysis::PointsToAnalysis;
 use pointer_analysis::solver::{
-    BasicBitVecSolver, BasicHashSolver, GenericSolver, IterableTermSet, RoaringSolver, Solver,
-    WavePropagationSolver,
+    BasicBitVecSolver, BasicHashSolver, BasicRoaringSolver, GenericSolver,
+    HashWavePropagationSolver, IterableTermSet, RoaringWavePropagationSolver, Solver,
 };
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
@@ -24,7 +24,7 @@ where
 }
 
 fn hash(c: &mut Criterion) {
-    bench_template::<BasicHashSolver>("Hash", c);
+    bench_template::<BasicHashSolver>("BasicHash", c);
 }
 
 fn bit_vec(c: &mut Criterion) {
@@ -32,15 +32,15 @@ fn bit_vec(c: &mut Criterion) {
 }
 
 fn roaring(c: &mut Criterion) {
-    bench_template::<RoaringSolver>("Roaring", c);
+    bench_template::<BasicRoaringSolver>("BasicRoaring", c);
 }
 
 fn hash_wave_prop(c: &mut Criterion) {
-    bench_template::<WavePropagationSolver>("HashWaveProp", c);
+    bench_template::<HashWavePropagationSolver>("HashWaveProp", c);
 }
 
 fn roaring_wave_prop(c: &mut Criterion) {
-    bench_template::<RoaringSolver>("RoaringWaveProp", c);
+    bench_template::<RoaringWavePropagationSolver>("RoaringWaveProp", c);
 }
 
 criterion_group!(
