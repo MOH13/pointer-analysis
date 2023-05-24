@@ -1,4 +1,9 @@
-use super::{Constraint, Solver};
+use hashbrown::HashSet;
+
+use std::hash::Hash;
+use std::marker::PhantomData;
+
+use super::{Constraint, Solver, TermSetTrait};
 
 pub struct StatSolver<T> {
     terms: Vec<T>,
@@ -9,9 +14,63 @@ pub struct StatSolver<T> {
     num_offset_univ_cond: u64,
 }
 
-impl<T> Solver for StatSolver<T> {
+#[derive(PartialEq, Eq, Clone, Hash)]
+struct DummyTermSet<T> {
+    phantom: PhantomData<T>,
+}
+
+impl<T> Default for DummyTermSet<T> {
+    fn default() -> Self {
+        Self {
+            phantom: Default::default(),
+        }
+    }
+}
+
+impl<T: Hash + Eq + Clone> TermSetTrait for DummyTermSet<T> {
     type Term = T;
-    type TermSet = ();
+
+    type Iterator<'a> = std::vec::IntoIter<T>
+    where
+        Self: 'a,
+    ;
+
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn len(&self) -> usize {
+        0
+    }
+
+    fn contains(&self, _term: Self::Term) -> bool {
+        false
+    }
+
+    fn remove(&mut self, _term: Self::Term) -> bool {
+        false
+    }
+
+    fn insert(&mut self, _term: Self::Term) -> bool {
+        true
+    }
+
+    fn union_assign(&mut self, _other: &Self) {}
+
+    fn extend<U: Iterator<Item = Self::Term>>(&mut self, _other: U) {}
+
+    fn difference(&self, _other: &Self) -> Self {
+        Self::default()
+    }
+
+    fn iter<'a>(&'a self) -> Self::Iterator<'a> {
+        vec![].into_iter()
+    }
+}
+
+impl<T: Eq + PartialEq + Hash + Clone> Solver for StatSolver<T> {
+    type Term = T;
+    type TermSet = HashSet<T>;
 
     fn new(terms: Vec<Self::Term>, _allowed_offsets: Vec<(Self::Term, usize)>) -> Self {
         Self {
@@ -43,7 +102,9 @@ impl<T> Solver for StatSolver<T> {
         }
     }
 
-    fn get_solution(&self, _node: &Self::Term) -> Self::TermSet {}
+    fn get_solution(&self, _node: &Self::Term) -> Self::TermSet {
+        HashSet::new()
+    }
 
     fn finalize(&mut self) {
         let total = self.num_inclusion + self.num_subset + self.num_univ_cond;

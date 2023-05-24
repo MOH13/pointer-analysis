@@ -2,8 +2,9 @@ use core::hash::Hash;
 use hashbrown::{HashMap, HashSet};
 use std::fmt::Debug;
 
-use super::{Constraint, IterableTermSet, Solver};
+use super::{Constraint, Solver};
 use crate::cstr;
+use crate::solver::TermSetTrait;
 
 macro_rules! output {
     [ $( $ptr:tt -> { $($target:tt),* } ),* ] => {
@@ -78,7 +79,6 @@ fn solver_test_template<T, S>(
 ) where
     T: Eq + Hash + Copy + Debug,
     S: Solver<Term = T>,
-    S::TermSet: IterableTermSet<T>,
 {
     let mut solver = S::new(terms.clone(), allowed_offsets);
     for c in constraints {
@@ -88,7 +88,7 @@ fn solver_test_template<T, S>(
 
     let actual_output: HashMap<T, HashSet<T>> = terms
         .into_iter()
-        .map(|t| (t, solver.get_solution(&t).iter_term_set().collect()))
+        .map(|t| (t, solver.get_solution(&t).iter().collect()))
         .collect();
 
     assert_eq!(expected_output, actual_output);
