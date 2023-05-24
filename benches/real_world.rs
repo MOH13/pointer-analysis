@@ -15,9 +15,16 @@ where
 {
     for entry in glob::glob("benchmarks/*/bench.bc").unwrap() {
         let entry = entry.expect("Error in path");
-        let module = Module::from_bc_path(&entry).expect("Error parsing bc file");
-        let bench_name = format!("{} {name}", entry.display());
+        let bench_name = format!(
+            "{} {name}",
+            entry
+                .parent()
+                .and_then(|f| f.file_name())
+                .unwrap()
+                .to_string_lossy()
+        );
         c.bench_function(&bench_name, |b| {
+            let module = Module::from_bc_path(&entry).expect("Error parsing bc file");
             b.iter(|| black_box(PointsToAnalysis::run::<GenericSolver<_, S, _>>(&module)));
         });
     }
