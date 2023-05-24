@@ -1,5 +1,4 @@
 use core::{hash::Hash, panic};
-use std::cmp::max;
 use std::marker::PhantomData;
 use std::mem;
 
@@ -125,7 +124,10 @@ impl<T: TermSetTrait<Term = u32> + Default + Clone> SCC<T> {
     fn unify(&self, child: Term, parent: Term, solver: &mut WavePropagationSolver<T>) {
         let child_sols = mem::take(&mut solver.sols[child as usize]);
         solver.sols[parent as usize].union_assign(&child_sols);
-        for (other, offsets) in solver.edges[child as usize].clone() {
+
+        let child_edges = mem::take(&mut solver.edges[child as usize]);
+
+        for (&other, offsets) in &child_edges {
             solver.edges[parent as usize]
                 .entry(other)
                 .or_default()
@@ -133,6 +135,12 @@ impl<T: TermSetTrait<Term = u32> + Default + Clone> SCC<T> {
         }
         let child_rev_edges = mem::take(&mut solver.rev_edges[child as usize]);
         for i in child_rev_edges.iter() {
+            if i == child {
+                solver.edges[parent as usize]
+                    .entry(parent)
+                    .or_default()
+                    .union_assign(&child_edges[&child])
+            }
             match solver.edges[i as usize].get_mut(&child) {
                 Some(orig_edges) => {
                     let orig_edges = mem::take(orig_edges);
@@ -148,22 +156,12 @@ impl<T: TermSetTrait<Term = u32> + Default + Clone> SCC<T> {
                 }
             }
         }
+
         solver.rev_edges[parent as usize].union_assign(&child_rev_edges);
         if solver.rev_edges[parent as usize].remove(child as u32) {
             solver.rev_edges[parent as usize].insert(parent as u32);
         }
 
-        solver.edges[child as usize] = HashMap::new();
-
-        // Required to be sound
-        let child_allowed_offset = solver.allowed_offsets.get(&(child as u32));
-        if let Some(&o1) = child_allowed_offset {
-            solver
-                .allowed_offsets
-                .entry(parent)
-                .and_modify(|o2| *o2 = max(o1, *o2))
-                .or_insert(o1);
-        }
         solver.parents.insert(child, parent);
     }
 
@@ -407,12 +405,13 @@ fn get_representative_no_mutation<T: Eq + PartialEq + Hash + Copy>(
 }
 
 fn get_representative<T: Eq + PartialEq + Hash + Copy>(parents: &mut HashMap<T, T>, child: T) -> T {
-    if let Some(&parent) = parents.get(&child) {
-        let representative = get_representative(parents, parent);
-        parents.insert(child, parent);
-        representative
-    } else {
-        child
+    match parents.get(&child) {
+        Some(&parent) => {
+            let representative = get_representative(parents, parent);
+            parents.insert(child, parent);
+            representative
+        }
+        None => child,
     }
 }
 
