@@ -2,7 +2,7 @@ use llvm_ir::Module;
 use pointer_analysis::analysis::PointsToAnalysis;
 use pointer_analysis::solver::{
     BasicBitVecSolver, BasicHashSolver, BasicRoaringSolver, GenericSolver,
-    HashWavePropagationSolver, IterableTermSet, RoaringWavePropagationSolver, Solver,
+    HashWavePropagationSolver, RoaringWavePropagationSolver, Solver,
 };
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
@@ -11,7 +11,6 @@ fn bench_template<S>(name: &str, c: &mut Criterion)
 where
     S: Solver,
     S::Term: TryInto<usize> + TryFrom<usize> + Copy,
-    S::TermSet: IterableTermSet<S::Term>,
 {
     for entry in glob::glob("benchmarks/*/bench.bc").unwrap() {
         let entry = entry.expect("Error in path");

@@ -13,7 +13,7 @@ use test_generator::test_resources;
 use crate::analysis::{PointsToAnalysis, PointsToResult};
 use crate::solver::{
     BasicBitVecSolver, BasicHashSolver, BasicRoaringSolver, GenericSolver,
-    HashWavePropagationSolver, IterableTermSet, Solver,
+    HashWavePropagationSolver, Solver,
 };
 
 use super::Cell;
@@ -89,7 +89,6 @@ fn parse_points_to<'a>(
 fn run_test_template<S>(resource: &str)
 where
     S: Solver,
-    S::TermSet: IterableTermSet<S::Term>,
     S::Term: TryInto<usize> + TryFrom<usize> + Copy,
 {
     dbg!(resource);
