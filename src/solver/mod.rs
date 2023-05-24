@@ -1,12 +1,12 @@
-use bitvec::prelude::*;
-use hashbrown::{hash_set, HashMap, HashSet};
+use hashbrown::{HashMap, HashSet};
 use roaring::RoaringBitmap;
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::iter::Copied;
+use std::iter::Cloned;
 use std::ops::Add;
 
 mod basic;
+mod better_bitvec;
 mod bit_vec;
 mod stats;
 #[cfg(test)]
@@ -99,7 +99,7 @@ enum UnivCond<T: Clone> {
     SubsetRight { left: T, offset: usize },
 }
 
-pub trait TermSetTrait: Default + Clone {
+pub trait TermSetTrait: Clone + Default {
     type Term;
 
     type Iterator<'a>: Iterator<Item = Self::Term>
@@ -117,10 +117,10 @@ pub trait TermSetTrait: Default + Clone {
     fn iter<'a>(&'a self) -> Self::Iterator<'a>;
 }
 
-impl<T: Eq + PartialEq + Hash + Copy + 'static> TermSetTrait for HashSet<T> {
+impl<T: Eq + PartialEq + Hash + Clone> TermSetTrait for HashSet<T> {
     type Term = T;
 
-    type Iterator<'a> = Copied<hashbrown::hash_set::Iter<'a, T>>;
+    type Iterator<'a> = Cloned<hashbrown::hash_set::Iter<'a, T>> where T: 'a;
 
     #[inline(always)]
     fn new() -> Self {
@@ -149,7 +149,7 @@ impl<T: Eq + PartialEq + Hash + Copy + 'static> TermSetTrait for HashSet<T> {
 
     #[inline(always)]
     fn union_assign(&mut self, other: &Self) {
-        Extend::extend(self, other);
+        Extend::extend(self, other.iter().cloned());
     }
 
     #[inline(always)]
@@ -159,12 +159,12 @@ impl<T: Eq + PartialEq + Hash + Copy + 'static> TermSetTrait for HashSet<T> {
 
     #[inline(always)]
     fn difference(&self, other: &Self) -> Self {
-        HashSet::difference(self, other).copied().collect()
+        HashSet::difference(self, other).cloned().collect()
     }
 
     #[inline(always)]
     fn iter<'a>(&'a self) -> Self::Iterator<'a> {
-        HashSet::iter(self).copied()
+        HashSet::iter(self).cloned()
     }
 }
 
@@ -221,7 +221,7 @@ impl TermSetTrait for RoaringBitmap {
 
 pub trait Solver {
     type Term;
-    type TermSet;
+    type TermSet: TermSetTrait<Term = Self::Term>;
 
     fn new(terms: Vec<Self::Term>, allowed_offsets: Vec<(Self::Term, usize)>) -> Self;
 
@@ -229,40 +229,6 @@ pub trait Solver {
     fn get_solution(&self, node: &Self::Term) -> Self::TermSet;
 
     fn finalize(&mut self);
-}
-
-pub trait IterableTermSet<T> {
-    type Iter<'a>: Iterator<Item = T>
-    where
-        Self: 'a;
-    fn iter_term_set<'a>(&'a self) -> Self::Iter<'a>;
-}
-
-impl<T> IterableTermSet<T> for HashSet<T>
-where
-    T: Copy,
-{
-    type Iter<'a> = Copied<hash_set::Iter<'a, T>> where T: 'a;
-
-    fn iter_term_set<'a>(&'a self) -> Self::Iter<'a> {
-        self.iter().copied()
-    }
-}
-
-impl IterableTermSet<usize> for BitVec {
-    type Iter<'a> = bitvec::slice::IterOnes<'a, usize, Lsb0>;
-
-    fn iter_term_set<'a>(&'a self) -> Self::Iter<'a> {
-        self.iter_ones()
-    }
-}
-
-impl IterableTermSet<u32> for RoaringBitmap {
-    type Iter<'a> = roaring::bitmap::Iter<'a>;
-
-    fn iter_term_set<'a>(&'a self) -> Self::Iter<'a> {
-        self.iter()
-    }
 }
 
 pub struct GenericSolver<T, S, T2> {
@@ -403,7 +369,6 @@ impl<T, S> Solver for GenericSolver<T, S, S::Term>
 where
     T: Hash + Eq + Clone + Debug,
     S: Solver,
-    S::TermSet: IterableTermSet<S::Term>,
     S::Term: TryInto<usize> + TryFrom<usize> + Copy,
 {
     type Term = T;
@@ -443,7 +408,7 @@ where
 
     fn get_solution(&self, node: &T) -> HashSet<T> {
         let sol = self.sub_solver.get_solution(&self.term_to_t2(node));
-        HashSet::from_iter(sol.iter_term_set().map(|i| self.t2_to_term(i)))
+        HashSet::from_iter(sol.iter().map(|i| self.t2_to_term(i)))
     }
 
     fn finalize(&mut self) {
