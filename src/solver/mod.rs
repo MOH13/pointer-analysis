@@ -6,7 +6,6 @@ use std::iter::Cloned;
 use std::ops::Add;
 
 mod basic;
-mod better_bitvec;
 mod bit_vec;
 mod stats;
 #[cfg(test)]
@@ -17,6 +16,8 @@ pub use basic::{BasicHashSolver, BasicRoaringSolver};
 pub use bit_vec::BasicBitVecSolver;
 pub use stats::StatSolver;
 pub use wave_prop::{HashWavePropagationSolver, RoaringWavePropagationSolver};
+
+use crate::visualizer::Node;
 
 #[derive(Debug)]
 pub enum Constraint<T> {
@@ -311,6 +312,19 @@ where
     v.try_into()
         .map_err(|_| ())
         .expect("Could not convert to usize")
+}
+
+impl<T: Clone, S, T2> GenericSolver<T, S, T2> {
+    fn terms_as_nodes(&self) -> Vec<Node<T>> {
+        self.terms
+            .iter()
+            .enumerate()
+            .map(|(n, t)| Node {
+                inner: t.clone(),
+                id: n,
+            })
+            .collect()
+    }
 }
 
 impl<T, S> GenericSolver<T, S, S::Term>

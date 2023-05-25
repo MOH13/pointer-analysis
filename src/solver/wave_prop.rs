@@ -1,4 +1,5 @@
-use core::{hash::Hash, panic};
+use std::fmt::{self, Debug, Display, Formatter};
+use std::hash::Hash;
 use std::marker::PhantomData;
 use std::mem;
 
@@ -6,7 +7,9 @@ use hashbrown::{HashMap, HashSet};
 use once_cell::unsync::Lazy;
 use roaring::RoaringBitmap;
 
-use super::{edges_between, offset_term, Constraint, Solver, TermSetTrait};
+use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
+
+use super::{edges_between, offset_term, Constraint, GenericSolver, Solver, TermSetTrait};
 
 type Term = u32;
 
@@ -417,3 +420,116 @@ fn get_representative<T: Eq + PartialEq + Hash + Copy>(parents: &mut HashMap<T, 
 
 pub type HashWavePropagationSolver = WavePropagationSolver<HashSet<Term>>;
 pub type RoaringWavePropagationSolver = WavePropagationSolver<RoaringBitmap>;
+
+#[derive(Clone)]
+pub struct WavePropagationNode<T> {
+    term: T,
+    count: usize,
+}
+
+impl<T: Display> Display for WavePropagationNode<T> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "{} ({})", self.term, self.count)
+    }
+}
+
+impl<T, S> GenericSolver<T, WavePropagationSolver<S>, Term>
+where
+    T: Display + Debug + Clone + PartialEq + Eq + Hash,
+    S: TermSetTrait<Term = Term>,
+{
+    fn get_representative_counts(&self) -> HashMap<Term, Node<usize>> {
+        let mut reps = HashMap::new();
+        for n in 0..self.terms.len() {
+            let rep = get_representative_no_mutation(&self.sub_solver.parents, n as u32);
+            reps.entry(rep).or_insert(Node { inner: 0, id: n }).inner += 1;
+        }
+        reps
+    }
+}
+
+impl<T, S> Graph for GenericSolver<T, WavePropagationSolver<S>, Term>
+where
+    T: Display + Debug + Clone + PartialEq + Eq + Hash,
+    S: TermSetTrait<Term = Term>,
+{
+    type Node = WavePropagationNode<T>;
+    type Weight = OffsetWeight;
+
+    fn nodes(&self) -> Vec<Node<Self::Node>> {
+        let reps = self.get_representative_counts();
+        reps.into_iter()
+            .map(|(t, node)| {
+                let inner = WavePropagationNode {
+                    term: self.t2_to_term(t),
+                    count: node.inner,
+                };
+                Node { inner, id: node.id }
+            })
+            .collect()
+    }
+
+    fn edges(&self) -> Vec<Edge<Self::Node, Self::Weight>> {
+        let mut edges = vec![];
+
+        let reps = self.get_representative_counts();
+        for (from, outgoing) in self.sub_solver.edges.iter().enumerate() {
+            let inner = WavePropagationNode {
+                term: self.t2_to_term(from as u32),
+                count: reps.get(&(from as u32)).unwrap().inner,
+            };
+            let from_node = Node { inner, id: from };
+
+            for (to, weights) in outgoing {
+                let inner = WavePropagationNode {
+                    term: self.t2_to_term(*to),
+                    count: reps.get(to).unwrap().inner,
+                };
+                let to_node = Node {
+                    inner,
+                    id: *to as usize,
+                };
+
+                for weight in weights.iter() {
+                    let edge = Edge {
+                        from: from_node.clone(),
+                        to: to_node.clone(),
+                        weight: OffsetWeight(weight),
+                        kind: EdgeKind::Subset,
+                    };
+                    edges.push(edge);
+                }
+            }
+        }
+
+        for from in reps.keys().copied() {
+            let inner = WavePropagationNode {
+                term: self.t2_to_term(from),
+                count: reps.get(&from).unwrap().inner,
+            };
+            let from_node = Node {
+                inner,
+                id: from as usize,
+            };
+            for to in self.sub_solver.get_solution(&from).iter() {
+                let inner = WavePropagationNode {
+                    term: self.t2_to_term(to),
+                    count: reps.get(&to).unwrap().inner,
+                };
+                let to_node = Node {
+                    inner,
+                    id: to as usize,
+                };
+                let edge = Edge {
+                    from: from_node.clone(),
+                    to: to_node.clone(),
+                    weight: OffsetWeight(0),
+                    kind: EdgeKind::Inclusion,
+                };
+                edges.push(edge);
+            }
+        }
+
+        edges
+    }
+}

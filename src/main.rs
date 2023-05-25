@@ -2,14 +2,15 @@ use clap::Parser;
 use clap::ValueEnum;
 use hashbrown::HashMap;
 use llvm_ir::Module;
+use log::error;
 use pointer_analysis::analysis::{cell_is_in_function, Cell, PointsToAnalysis, PointsToResult};
 use pointer_analysis::solver::HashWavePropagationSolver;
 use pointer_analysis::solver::RoaringWavePropagationSolver;
 use pointer_analysis::solver::{
     BasicBitVecSolver, BasicHashSolver, BasicRoaringSolver, GenericSolver, StatSolver,
 };
-use std::io;
 use std::io::Write;
+use std::{io, process};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -36,6 +37,9 @@ struct Args {
     /// Don't print warnings
     #[arg(short = 'q', long, default_value_t = false)]
     quiet: bool,
+    /// Visualize constraint graph after solving (creates a Graphviz DOT file at given path)
+    #[arg(short = 'v', long)]
+    visualize: Option<String>,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
@@ -51,7 +55,7 @@ enum SolverMode {
     /// Roaring bitmap based wave propagation
     RoaringWave,
     /// Do not solve (used to test constraint generation speed)
-    None,
+    DryRun,
 }
 
 const STRING_FILTER: &'static str = ".str.";
@@ -70,28 +74,57 @@ fn main() -> io::Result<()> {
     let module = Module::from_bc_path(&file_path).expect("Error parsing bc file");
 
     let result: PointsToResult<GenericSolver<_, BasicHashSolver, _>> =
-        PointsToResult(match args.solver {
-            Some(SolverMode::Hash) => {
+        PointsToResult(match (args.solver, args.visualize) {
+            (Some(SolverMode::Hash), Some(path)) => {
+                PointsToAnalysis::run_and_visualize::<GenericSolver<_, BasicHashSolver, _>>(
+                    &module, &path,
+                )
+                .0
+            }
+            (Some(SolverMode::Roaring), Some(path)) => {
+                PointsToAnalysis::run_and_visualize::<GenericSolver<_, BasicRoaringSolver, _>>(
+                    &module, &path,
+                )
+                .0
+            }
+            (Some(SolverMode::Hash), None) => {
                 PointsToAnalysis::run::<GenericSolver<_, BasicHashSolver, _>>(&module).0
             }
-            Some(SolverMode::Roaring) => {
+            (Some(SolverMode::Roaring), None) => {
                 PointsToAnalysis::run::<GenericSolver<_, BasicRoaringSolver, _>>(&module).0
             }
-            Some(SolverMode::HashWave) => {
+            (Some(SolverMode::HashWave), Some(path)) => PointsToAnalysis::run_and_visualize::<
+                GenericSolver<_, HashWavePropagationSolver, _>,
+            >(&module, &path)
+            .0,
+            (Some(SolverMode::RoaringWave), Some(path)) | (None, Some(path)) => {
+                PointsToAnalysis::run_and_visualize::<
+                    GenericSolver<_, RoaringWavePropagationSolver, _>,
+                >(&module, &path)
+                .0
+            }
+            (Some(SolverMode::HashWave), None) => {
                 PointsToAnalysis::run::<GenericSolver<_, HashWavePropagationSolver, _>>(&module).0
             }
-            Some(SolverMode::RoaringWave) => {
+            (Some(SolverMode::RoaringWave), None) | (None, None) => {
                 PointsToAnalysis::run::<GenericSolver<_, RoaringWavePropagationSolver, _>>(&module)
                     .0
             }
-            Some(SolverMode::BitVec) => {
+            (Some(SolverMode::BitVec), None) => {
                 PointsToAnalysis::run::<GenericSolver<_, BasicBitVecSolver, _>>(&module).0
             }
-            Some(SolverMode::None) => {
+            (Some(SolverMode::DryRun), Some(path)) => {
+                PointsToAnalysis::run_and_visualize::<StatSolver<_>>(&module, &path);
+                HashMap::new()
+            }
+            (Some(SolverMode::DryRun), None) => {
                 PointsToAnalysis::run::<StatSolver<_>>(&module);
                 HashMap::new()
             }
-            None => PointsToAnalysis::run::<GenericSolver<_, BasicHashSolver, _>>(&module).0,
+            _ => {
+                error!("Cannot visualize with chosen Solver Mode");
+                process::exit(1)
+            }
         });
 
     let filtered_result = result.get_filtered_entries(
