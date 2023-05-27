@@ -30,6 +30,9 @@ pub struct Args {
     /// Don't print warnings
     #[arg(short = 'q', long, default_value_t = false)]
     pub quiet: bool,
+    /// Visualize constraint graph after solving (creates a Graphviz DOT file at given path)
+    #[arg(short = 'v', long)]
+    pub visualize: Option<String>,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
@@ -39,7 +42,7 @@ pub enum SolverMode {
     /// Wave propagation based solver
     Wave,
     /// Do not solve (used to test constraint generation speed)
-    None,
+    DryRun,
 }
 
 impl Display for SolverMode {
@@ -47,7 +50,7 @@ impl Display for SolverMode {
         match self {
             SolverMode::Basic => write!(f, "basic"),
             SolverMode::Wave => write!(f, "wave"),
-            SolverMode::None => write!(f, "none"),
+            SolverMode::DryRun => write!(f, "dry-run"),
         }
     }
 }

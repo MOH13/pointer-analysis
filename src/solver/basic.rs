@@ -1,12 +1,15 @@
 use std::collections::VecDeque;
+use std::fmt::{Debug, Display};
+use std::hash::Hash;
 
 use hashbrown::{HashMap, HashSet};
 use roaring::RoaringBitmap;
 
 use super::{
-    edges_between, offset_term, offset_terms, BetterBitVec, Constraint, Solver, TermSetTrait,
-    UnivCond,
+    edges_between, offset_term, offset_terms, BetterBitVec, Constraint, GenericSolver, Solver,
+    TermSetTrait, UnivCond,
 };
+use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
 
 pub struct BasicSolver<T: Clone, U> {
     worklist: VecDeque<(T, T)>,
@@ -138,3 +141,64 @@ impl<T: TermSetTrait<Term = u32>> Solver for BasicSolver<u32, T> {
 pub type BasicHashSolver = BasicSolver<u32, HashSet<u32>>;
 pub type BasicRoaringSolver = BasicSolver<u32, RoaringBitmap>;
 pub type BasicBetterBitVecSolver = BasicSolver<u32, BetterBitVec>;
+
+impl<T, S> Graph for GenericSolver<T, BasicSolver<u32, S>, u32>
+where
+    T: Display + Debug + Clone + PartialEq + Eq + Hash,
+    S: TermSetTrait<Term = u32>,
+{
+    type Node = T;
+    type Weight = OffsetWeight;
+
+    fn nodes(&self) -> Vec<Node<Self::Node>> {
+        self.terms_as_nodes()
+    }
+
+    fn edges(&self) -> Vec<Edge<Self::Node, Self::Weight>> {
+        let mut edges = vec![];
+
+        for (from, outgoing) in self.sub_solver.edges.iter().enumerate() {
+            let from = Node {
+                inner: self.t2_to_term(from as u32),
+                id: from,
+            };
+            for (&to, weights) in outgoing {
+                let to = Node {
+                    inner: self.t2_to_term(to as u32),
+                    id: to as usize,
+                };
+                for weight in weights.iter() {
+                    let edge = Edge {
+                        from: from.clone(),
+                        to: to.clone(),
+                        weight: OffsetWeight(weight),
+                        kind: EdgeKind::Subset,
+                    };
+                    edges.push(edge);
+                }
+            }
+        }
+
+        for from in 0..self.terms.len() {
+            let from_node = Node {
+                inner: self.t2_to_term(from as u32),
+                id: from,
+            };
+            for to in self.sub_solver.get_solution(&(from as u32)).iter() {
+                let to_node = Node {
+                    inner: self.t2_to_term(to),
+                    id: to as usize,
+                };
+                let edge = Edge {
+                    from: from_node.clone(),
+                    to: to_node.clone(),
+                    weight: OffsetWeight(0),
+                    kind: EdgeKind::Inclusion,
+                };
+                edges.push(edge);
+            }
+        }
+
+        edges
+    }
+}
