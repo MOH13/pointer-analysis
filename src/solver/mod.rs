@@ -13,10 +13,13 @@ mod stats;
 mod tests;
 mod wave_prop;
 
-pub use basic::{BasicHashSolver, BasicRoaringSolver};
+pub use basic::{BasicBetterBitVecSolver, BasicHashSolver, BasicRoaringSolver};
+pub use better_bitvec::BetterBitVec;
 pub use bit_vec::BasicBitVecSolver;
 pub use stats::StatSolver;
-pub use wave_prop::{HashWavePropagationSolver, RoaringWavePropagationSolver};
+pub use wave_prop::{
+    BetterBitVecWavePropagationSolver, HashWavePropagationSolver, RoaringWavePropagationSolver,
+};
 
 #[derive(Debug)]
 pub enum Constraint<T> {
@@ -109,7 +112,9 @@ pub trait TermSetTrait: Clone + Default {
     fn new() -> Self;
     fn len(&self) -> usize;
     fn contains(&self, term: Self::Term) -> bool;
+    // Returns true if the term was present before removal
     fn remove(&mut self, term: Self::Term) -> bool;
+    // Returns true if the term was not present before insertion
     fn insert(&mut self, term: Self::Term) -> bool;
     fn union_assign(&mut self, other: &Self);
     fn extend<T: Iterator<Item = Self::Term>>(&mut self, other: T);

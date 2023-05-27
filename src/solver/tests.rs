@@ -44,6 +44,10 @@ macro_rules! solver_tests {
                     vars!($crate::solver::BasicBitVecSolver)
                 }
                 #[test]
+                fn better_bit_vec() {
+                    vars!($crate::solver::BasicBetterBitVecSolver)
+                }
+                #[test]
                 fn hash_wave_prop() {
                     vars!($crate::solver::HashWavePropagationSolver)
                 }
