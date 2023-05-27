@@ -1,8 +1,9 @@
 use llvm_ir::Module;
 use pointer_analysis::analysis::PointsToAnalysis;
 use pointer_analysis::solver::{
-    BasicBitVecSolver, BasicHashSolver, BasicRoaringSolver, GenericSolver,
-    HashWavePropagationSolver, RoaringWavePropagationSolver, Solver,
+    BasicBetterBitVecSolver, BasicBitVecSolver, BasicHashSolver, BasicRoaringSolver,
+    BetterBitVecWavePropagationSolver, GenericSolver, HashWavePropagationSolver,
+    RoaringWavePropagationSolver, Solver,
 };
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
@@ -37,6 +38,10 @@ fn bit_vec(c: &mut Criterion) {
     bench_template::<BasicBitVecSolver>("BitVec", c);
 }
 
+fn better_bit_vec(c: &mut Criterion) {
+    bench_template::<BasicBetterBitVecSolver>("BetterBitVec", c);
+}
+
 fn roaring(c: &mut Criterion) {
     bench_template::<BasicRoaringSolver>("BasicRoaring", c);
 }
@@ -49,12 +54,18 @@ fn roaring_wave_prop(c: &mut Criterion) {
     bench_template::<RoaringWavePropagationSolver>("RoaringWaveProp", c);
 }
 
+fn better_bitvec_wave_prop(c: &mut Criterion) {
+    bench_template::<BetterBitVecWavePropagationSolver>("BetterBitVecWaveProp", c);
+}
+
 criterion_group!(
     benches,
     hash,
     bit_vec,
+    better_bit_vec,
     roaring,
     hash_wave_prop,
-    roaring_wave_prop
+    roaring_wave_prop,
+    better_bitvec_wave_prop
 );
 criterion_main!(benches);

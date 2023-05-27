@@ -1,58 +1,19 @@
+#![feature(trace_macros)]
+
+mod macros;
+
 use clap::Parser;
-use clap::ValueEnum;
 use hashbrown::HashMap;
 use llvm_ir::Module;
 use pointer_analysis::analysis::{cell_is_in_function, Cell, PointsToAnalysis, PointsToResult};
-use pointer_analysis::solver::HashWavePropagationSolver;
+use pointer_analysis::cli::{Args, SolverMode, TermSet};
 use pointer_analysis::solver::RoaringWavePropagationSolver;
 use pointer_analysis::solver::{
     BasicBitVecSolver, BasicHashSolver, BasicRoaringSolver, GenericSolver, StatSolver,
 };
+use pointer_analysis::solver::{BetterBitVecWavePropagationSolver, HashWavePropagationSolver};
 use std::io;
 use std::io::Write;
-
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct Args {
-    /// Path to .bc file
-    file_path: String,
-    // Select used solver
-    #[arg(short, long)]
-    solver: Option<SolverMode>,
-    /// List of keywords that must present to be included in output
-    #[arg(short, long)]
-    include_keywords: Vec<String>,
-    /// List of keywords to exclude from output
-    #[arg(short, long)]
-    exclude_keywords: Vec<String>,
-    /// Include empty points-to sets in output
-    #[arg(short = 'E', long, default_value_t = false)]
-    include_empty: bool,
-    /// Exclude strings from points-to set output
-    #[arg(short = 'S', long, default_value_t = false)]
-    exclude_strings: bool,
-    #[arg(short = 'I', long, default_value_t = false)]
-    interactive_output: bool,
-    /// Don't print warnings
-    #[arg(short = 'q', long, default_value_t = false)]
-    quiet: bool,
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
-enum SolverMode {
-    /// Bitvec based solver
-    BitVec,
-    /// Hashset based solver
-    Hash,
-    /// Roaring bitmap based solver
-    Roaring,
-    /// Hashset based wave propagation
-    HashWave,
-    /// Roaring bitmap based wave propagation
-    RoaringWave,
-    /// Do not solve (used to test constraint generation speed)
-    None,
-}
 
 const STRING_FILTER: &'static str = ".str.";
 
@@ -70,28 +31,36 @@ fn main() -> io::Result<()> {
     let module = Module::from_bc_path(&file_path).expect("Error parsing bc file");
 
     let result: PointsToResult<GenericSolver<_, BasicHashSolver, _>> =
-        PointsToResult(match args.solver {
-            Some(SolverMode::Hash) => {
+        PointsToResult(match (args.solver, args.termset) {
+            // Basic solver
+            (SolverMode::Basic, TermSet::Hash) => {
                 PointsToAnalysis::run::<GenericSolver<_, BasicHashSolver, _>>(&module).0
             }
-            Some(SolverMode::Roaring) => {
+            (SolverMode::Basic, TermSet::Roaring) => {
                 PointsToAnalysis::run::<GenericSolver<_, BasicRoaringSolver, _>>(&module).0
             }
-            Some(SolverMode::HashWave) => {
+            (SolverMode::Basic, TermSet::BitVec) => {
+                PointsToAnalysis::run::<GenericSolver<_, BasicBitVecSolver, _>>(&module).0
+            }
+            // Wave prop solver
+            // Basic solver
+            (SolverMode::Wave, TermSet::Hash) => {
                 PointsToAnalysis::run::<GenericSolver<_, HashWavePropagationSolver, _>>(&module).0
             }
-            Some(SolverMode::RoaringWave) => {
+            (SolverMode::Wave, TermSet::Roaring) => {
                 PointsToAnalysis::run::<GenericSolver<_, RoaringWavePropagationSolver, _>>(&module)
                     .0
             }
-            Some(SolverMode::BitVec) => {
-                PointsToAnalysis::run::<GenericSolver<_, BasicBitVecSolver, _>>(&module).0
+            (SolverMode::Wave, TermSet::BitVec) => {
+                PointsToAnalysis::run::<GenericSolver<_, BetterBitVecWavePropagationSolver, _>>(
+                    &module,
+                )
+                .0
             }
-            Some(SolverMode::None) => {
+            (SolverMode::None, _) => {
                 PointsToAnalysis::run::<StatSolver<_>>(&module);
                 HashMap::new()
             }
-            None => PointsToAnalysis::run::<GenericSolver<_, BasicHashSolver, _>>(&module).0,
         });
 
     let filtered_result = result.get_filtered_entries(

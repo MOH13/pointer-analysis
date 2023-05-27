@@ -6,7 +6,7 @@ use hashbrown::{HashMap, HashSet};
 use once_cell::unsync::Lazy;
 use roaring::RoaringBitmap;
 
-use super::{edges_between, offset_term, Constraint, Solver, TermSetTrait};
+use super::{edges_between, offset_term, BetterBitVec, Constraint, Solver, TermSetTrait};
 
 type Term = u32;
 
@@ -132,14 +132,13 @@ impl<T: TermSetTrait<Term = u32> + Default + Clone> SCC<T> {
                 .entry(other)
                 .or_default()
                 .union_assign(&offsets);
+            solver.rev_edges[other as usize].remove(child);
+            solver.rev_edges[other as usize].insert(parent);
         }
         let child_rev_edges = mem::take(&mut solver.rev_edges[child as usize]);
         for i in child_rev_edges.iter() {
             if i == child {
-                solver.edges[parent as usize]
-                    .entry(parent)
-                    .or_default()
-                    .union_assign(&child_edges[&child])
+                continue;
             }
             match solver.edges[i as usize].get_mut(&child) {
                 Some(orig_edges) => {
@@ -150,9 +149,7 @@ impl<T: TermSetTrait<Term = u32> + Default + Clone> SCC<T> {
                         .union_assign(&orig_edges);
                 }
                 None => {
-                    if solver.parents.get(&i).is_none() {
-                        panic!("Expected edges from {i} to {child}");
-                    }
+                    panic!("Expected edges from {i} to {child}");
                 }
             }
         }
@@ -172,6 +169,16 @@ impl<T: TermSetTrait<Term = u32> + Default + Clone> SCC<T> {
             if let Some(r_v) = self.r[v as usize] {
                 if r_v != v {
                     self.unify(v, r_v, solver);
+                    // if cfg!(debug_assertions) {
+                    //     for i in 0..self.node_count as u32 {
+                    //         if solver.edges[v as usize].contains_key(&i) {
+                    //             assert!(solver.rev_edges[i as usize].contains(v))
+                    //         }
+                    //         if solver.rev_edges[v as usize].contains(i) {
+                    //             assert!(solver.edges[i as usize].contains_key(&v))
+                    //         }
+                    //     }
+                    // }
                     if self.iterative {
                         removed.insert(v);
                     }
@@ -408,7 +415,7 @@ fn get_representative<T: Eq + PartialEq + Hash + Copy>(parents: &mut HashMap<T, 
     match parents.get(&child) {
         Some(&parent) => {
             let representative = get_representative(parents, parent);
-            parents.insert(child, parent);
+            parents.insert(child, representative);
             representative
         }
         None => child,
@@ -417,3 +424,4 @@ fn get_representative<T: Eq + PartialEq + Hash + Copy>(parents: &mut HashMap<T, 
 
 pub type HashWavePropagationSolver = WavePropagationSolver<HashSet<Term>>;
 pub type RoaringWavePropagationSolver = WavePropagationSolver<RoaringBitmap>;
+pub type BetterBitVecWavePropagationSolver = WavePropagationSolver<BetterBitVec>;

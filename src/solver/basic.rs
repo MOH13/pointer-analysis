@@ -3,7 +3,10 @@ use std::collections::VecDeque;
 use hashbrown::{HashMap, HashSet};
 use roaring::RoaringBitmap;
 
-use super::{edges_between, offset_term, offset_terms, Constraint, Solver, TermSetTrait, UnivCond};
+use super::{
+    edges_between, offset_term, offset_terms, BetterBitVec, Constraint, Solver, TermSetTrait,
+    UnivCond,
+};
 
 pub struct BasicSolver<T: Clone, U> {
     worklist: VecDeque<(T, T)>,
@@ -134,3 +137,4 @@ impl<T: TermSetTrait<Term = u32>> Solver for BasicSolver<u32, T> {
 
 pub type BasicHashSolver = BasicSolver<u32, HashSet<u32>>;
 pub type BasicRoaringSolver = BasicSolver<u32, RoaringBitmap>;
+pub type BasicBetterBitVecSolver = BasicSolver<u32, BetterBitVec>;
