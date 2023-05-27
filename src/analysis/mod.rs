@@ -5,6 +5,7 @@ use std::str::FromStr;
 
 use hashbrown::HashMap;
 use llvm_ir::{Module, Name};
+use log::error;
 
 use crate::cstr;
 use crate::module_visitor::pointer::{
@@ -13,6 +14,7 @@ use crate::module_visitor::pointer::{
 use crate::module_visitor::structs::{StructMap, StructType};
 use crate::module_visitor::{ModuleVisitor, VarIdent};
 use crate::solver::Solver;
+use crate::visualizer::{visualize, Graph};
 
 #[cfg(test)]
 mod tests;
@@ -20,8 +22,7 @@ mod tests;
 pub struct PointsToAnalysis;
 
 impl PointsToAnalysis {
-    /// Runs the points-to analysis on LLVM module `module` using `solver`.
-    pub fn run<'a, S>(module: &'a Module) -> PointsToResult<S>
+    fn solve_module<'a, S>(module: &'a Module) -> (S, Vec<Cell<'a>>)
     where
         S: Solver<Term = Cell<'a>> + 'a,
     {
@@ -34,14 +35,52 @@ impl PointsToAnalysis {
         PointerModuleVisitor::new(&mut points_to_solver).visit_module(module);
         points_to_solver.solver.finalize();
 
-        let result_map = cells_copy
+        (points_to_solver.solver, cells_copy)
+    }
+
+    fn get_result_map<'a, S>(solver: &S, cells: Vec<Cell<'a>>) -> PointsToResult<'a, S>
+    where
+        S: Solver<Term = Cell<'a>> + 'a,
+    {
+        let result_map = cells
             .into_iter()
             .map(|c| {
-                let sol = points_to_solver.solver.get_solution(&c);
+                let sol = solver.get_solution(&c);
                 (c, sol)
             })
             .collect();
         PointsToResult(result_map)
+    }
+
+    /// Runs the points-to analysis on LLVM module `module` using `solver`.
+    pub fn run<'a, S>(module: &'a Module) -> PointsToResult<S>
+    where
+        S: Solver<Term = Cell<'a>> + 'a,
+    {
+        let (solver, cells) = Self::solve_module::<S>(module);
+
+        let result_map = cells
+            .into_iter()
+            .map(|c| {
+                let sol = solver.get_solution(&c);
+                (c, sol)
+            })
+            .collect();
+        PointsToResult(result_map)
+    }
+
+    pub fn run_and_visualize<'a, S>(
+        module: &'a Module,
+        dot_output_path: &str,
+    ) -> PointsToResult<'a, S>
+    where
+        S: Solver<Term = Cell<'a>> + Graph + 'a,
+    {
+        let (solver, cells) = Self::solve_module::<S>(module);
+        if let Err(e) = visualize(&solver, dot_output_path) {
+            error!("Error visualizing graph: {e}");
+        }
+        Self::get_result_map(&solver, cells)
     }
 }
 

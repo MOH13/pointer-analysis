@@ -3,14 +3,11 @@
 mod macros;
 
 use clap::Parser;
-use hashbrown::HashMap;
 use llvm_ir::Module;
 use pointer_analysis::analysis::{cell_is_in_function, Cell, PointsToAnalysis, PointsToResult};
 use pointer_analysis::cli::{Args, SolverMode, TermSet};
-use pointer_analysis::solver::RoaringWavePropagationSolver;
-use pointer_analysis::solver::{
-    BasicBitVecSolver, BasicHashSolver, BasicRoaringSolver, GenericSolver, StatSolver,
-};
+use pointer_analysis::solver::{BasicBetterBitVecSolver, RoaringWavePropagationSolver};
+use pointer_analysis::solver::{BasicHashSolver, BasicRoaringSolver, GenericSolver, StatSolver};
 use pointer_analysis::solver::{BetterBitVecWavePropagationSolver, HashWavePropagationSolver};
 use std::io;
 use std::io::Write;
@@ -31,36 +28,85 @@ fn main() -> io::Result<()> {
     let module = Module::from_bc_path(&file_path).expect("Error parsing bc file");
 
     let result: PointsToResult<GenericSolver<_, BasicHashSolver, _>> =
-        PointsToResult(match (args.solver, args.termset) {
+        PointsToResult(match (args.solver, args.termset, args.visualize) {
             // Basic solver
-            (SolverMode::Basic, TermSet::Hash) => {
-                PointsToAnalysis::run::<GenericSolver<_, BasicHashSolver, _>>(&module).0
-            }
-            (SolverMode::Basic, TermSet::Roaring) => {
-                PointsToAnalysis::run::<GenericSolver<_, BasicRoaringSolver, _>>(&module).0
-            }
-            (SolverMode::Basic, TermSet::BitVec) => {
-                PointsToAnalysis::run::<GenericSolver<_, BasicBitVecSolver, _>>(&module).0
-            }
+            (SolverMode::Basic, TermSet::Hash, visualize) => match visualize {
+                Some(path) => {
+                    PointsToAnalysis::run_and_visualize::<GenericSolver<_, BasicHashSolver, _>>(
+                        &module, &path,
+                    )
+                    .0
+                }
+                None => PointsToAnalysis::run::<GenericSolver<_, BasicHashSolver, _>>(&module).0,
+            },
+            (SolverMode::Basic, TermSet::Roaring, visualize) => match visualize {
+                Some(path) => {
+                    PointsToAnalysis::run_and_visualize::<GenericSolver<_, BasicRoaringSolver, _>>(
+                        &module, &path,
+                    )
+                    .0
+                }
+                None => PointsToAnalysis::run::<GenericSolver<_, BasicRoaringSolver, _>>(&module).0,
+            },
+            (SolverMode::Basic, TermSet::BitVec, visualize) => match visualize {
+                Some(path) => {
+                    PointsToAnalysis::run_and_visualize::<
+                        GenericSolver<_, BasicBetterBitVecSolver, _>,
+                    >(&module, &path)
+                    .0
+                }
+                None => {
+                    PointsToAnalysis::run::<GenericSolver<_, BasicBetterBitVecSolver, _>>(&module).0
+                }
+            },
             // Wave prop solver
             // Basic solver
-            (SolverMode::Wave, TermSet::Hash) => {
-                PointsToAnalysis::run::<GenericSolver<_, HashWavePropagationSolver, _>>(&module).0
-            }
-            (SolverMode::Wave, TermSet::Roaring) => {
-                PointsToAnalysis::run::<GenericSolver<_, RoaringWavePropagationSolver, _>>(&module)
+            (SolverMode::Wave, TermSet::Hash, visualize) => match visualize {
+                Some(path) => {
+                    PointsToAnalysis::run_and_visualize::<
+                        GenericSolver<_, HashWavePropagationSolver, _>,
+                    >(&module, &path)
                     .0
-            }
-            (SolverMode::Wave, TermSet::BitVec) => {
-                PointsToAnalysis::run::<GenericSolver<_, BetterBitVecWavePropagationSolver, _>>(
-                    &module,
-                )
-                .0
-            }
-            (SolverMode::None, _) => {
-                PointsToAnalysis::run::<StatSolver<_>>(&module);
-                HashMap::new()
-            }
+                }
+                None => {
+                    PointsToAnalysis::run::<GenericSolver<_, HashWavePropagationSolver, _>>(&module)
+                        .0
+                }
+            },
+            (SolverMode::Wave, TermSet::Roaring, visualize) => match visualize {
+                Some(path) => {
+                    PointsToAnalysis::run_and_visualize::<
+                        GenericSolver<_, RoaringWavePropagationSolver, _>,
+                    >(&module, &path)
+                    .0
+                }
+                None => {
+                    PointsToAnalysis::run::<GenericSolver<_, RoaringWavePropagationSolver, _>>(
+                        &module,
+                    )
+                    .0
+                }
+            },
+            (SolverMode::Wave, TermSet::BitVec, visualize) => match visualize {
+                Some(path) => {
+                    PointsToAnalysis::run_and_visualize::<
+                        GenericSolver<_, BetterBitVecWavePropagationSolver, _>,
+                    >(&module, &path)
+                    .0
+                }
+                None => {
+                    PointsToAnalysis::run::<GenericSolver<_, BetterBitVecWavePropagationSolver, _>>(
+                        &module,
+                    )
+                    .0
+                }
+            },
+            (SolverMode::DryRun, _, visualize) => match visualize {
+                Some(path) => {
+                    PointsToAnalysis::run_and_visualize::<StatSolver<_>>(&module, &path).0
+                }
+                None => PointsToAnalysis::run::<StatSolver<_>>(&module).0,
+            },
         });
 
     let filtered_result = result.get_filtered_entries(
