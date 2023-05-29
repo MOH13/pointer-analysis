@@ -1,5 +1,3 @@
-#![feature(trace_macros)]
-
 mod macros;
 
 use clap::Parser;
