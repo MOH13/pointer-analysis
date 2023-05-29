@@ -132,6 +132,8 @@ impl<T: TermSetTrait<Term = u32> + Default + Clone> SCC<T> {
         let child_edges = mem::take(&mut solver.edges[child as usize]);
 
         for (&other, offsets) in &child_edges {
+            debug_assert_ne!(0, offsets.len());
+
             solver.edges[parent as usize]
                 .entry(other)
                 .or_default()
@@ -144,9 +146,8 @@ impl<T: TermSetTrait<Term = u32> + Default + Clone> SCC<T> {
             if i == child {
                 continue;
             }
-            match solver.edges[i as usize].get_mut(&child) {
+            match solver.edges[i as usize].remove(&child) {
                 Some(orig_edges) => {
-                    let orig_edges = mem::take(orig_edges);
                     solver.edges[i as usize]
                         .entry(parent)
                         .or_default()
@@ -173,16 +174,6 @@ impl<T: TermSetTrait<Term = u32> + Default + Clone> SCC<T> {
             if let Some(r_v) = self.r[v as usize] {
                 if r_v != v {
                     self.unify(v, r_v, solver);
-                    // if cfg!(debug_assertions) {
-                    //     for i in 0..self.node_count as u32 {
-                    //         if solver.edges[v as usize].contains_key(&i) {
-                    //             assert!(solver.rev_edges[i as usize].contains(v))
-                    //         }
-                    //         if solver.rev_edges[v as usize].contains(i) {
-                    //             assert!(solver.edges[i as usize].contains_key(&v))
-                    //         }
-                    //     }
-                    // }
                     if self.iterative {
                         removed.insert(v);
                     }
@@ -451,7 +442,12 @@ where
         let mut reps = HashMap::new();
         for n in 0..self.terms.len() {
             let rep = get_representative_no_mutation(&self.sub_solver.parents, n as u32);
-            reps.entry(rep).or_insert(Node { inner: 0, id: n }).inner += 1;
+            reps.entry(rep)
+                .or_insert(Node {
+                    inner: 0,
+                    id: rep as usize,
+                })
+                .inner += 1;
         }
         reps
     }
@@ -483,6 +479,10 @@ where
 
         let reps = self.get_representative_counts();
         for (from, outgoing) in self.sub_solver.edges.iter().enumerate() {
+            if outgoing.is_empty() {
+                continue;
+            }
+
             let inner = WavePropagationNode {
                 term: self.t2_to_term(from as u32),
                 count: reps.get(&(from as u32)).unwrap().inner,
@@ -511,33 +511,36 @@ where
             }
         }
 
-        for from in reps.keys().copied() {
-            let inner = WavePropagationNode {
-                term: self.t2_to_term(from),
-                count: reps.get(&from).unwrap().inner,
-            };
-            let from_node = Node {
-                inner,
-                id: from as usize,
-            };
-            for to in self.sub_solver.get_solution(&from).iter() {
-                let inner = WavePropagationNode {
-                    term: self.t2_to_term(to),
-                    count: reps.get(&to).unwrap().inner,
-                };
-                let to_node = Node {
-                    inner,
-                    id: to as usize,
-                };
-                let edge = Edge {
-                    from: from_node.clone(),
-                    to: to_node.clone(),
-                    weight: OffsetWeight(0),
-                    kind: EdgeKind::Inclusion,
-                };
-                edges.push(edge);
-            }
-        }
+        // for from in reps.keys().copied() {
+        //     let inner = WavePropagationNode {
+        //         term: self.t2_to_term(from),
+        //         count: reps.get(&from).unwrap().inner,
+        //     };
+        //     let from_node = Node {
+        //         inner,
+        //         id: from as usize,
+        //     };
+        //     for to in self.sub_solver.get_solution(&from).iter() {
+        //         if get_representative_no_mutation(&self.sub_solver.parents, to) != to {
+        //             continue;
+        //         }
+        //         let inner = WavePropagationNode {
+        //             term: self.t2_to_term(to),
+        //             count: reps.get(&to).unwrap().inner,
+        //         };
+        //         let to_node = Node {
+        //             inner,
+        //             id: to as usize,
+        //         };
+        //         let edge = Edge {
+        //             from: from_node.clone(),
+        //             to: to_node.clone(),
+        //             weight: OffsetWeight(0),
+        //             kind: EdgeKind::Inclusion,
+        //         };
+        //         edges.push(edge);
+        //     }
+        // }
 
         edges
     }
