@@ -550,14 +550,14 @@ where
 
             // TODO: What if someone defines their own function called malloc?
             //       Maybe look at function signature?
-            "malloc" | "calloc" => {
+            "malloc" | "calloc" | "strdup" | "strndup" => {
                 let instr = PointerInstruction::Malloc {
                     dest: dest.expect("malloc should have a destination"),
                 };
                 self.observer.handle_ptr_instruction(instr, pointer_context);
             }
 
-            "llvm.memmove.p0i8.p0i8.i64" | "realloc" | "memchr" | "strdup" => {
+            "llvm.memmove.p0i8.p0i8.i64" | "realloc" | "memchr" => {
                 if let Some(dest) = dest {
                     let src = argument_idents
                         .get(0)

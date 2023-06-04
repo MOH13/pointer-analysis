@@ -5,3 +5,4 @@ source.ll
 /benchmarks/**
 *.bc
 *.dot
+*.svg
