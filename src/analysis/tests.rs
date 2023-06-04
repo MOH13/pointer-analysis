@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use test_generator::test_resources;
 
-use crate::analysis::{PointsToAnalysis, PointsToResult};
+use crate::analysis::PointsToAnalysis;
 use crate::solver::{
     BasicBetterBitVecSolver, BasicBitVecSolver, BasicHashSolver, BasicRoaringSolver,
     BetterBitVecWavePropagationSolver, GenericSolver, HashWavePropagationSolver,
@@ -115,7 +115,10 @@ where
 
     dbg!(&expected_points_to);
 
-    let PointsToResult(actual_points_to) = PointsToAnalysis::run::<GenericSolver<_, S, _>>(&module);
+    let result = PointsToAnalysis::run::<GenericSolver<_, S, _>>(&module);
+
+    let actual_points_to: HashMap<Cell, HashSet<Cell>> =
+        result.get_all_entries().iter_solutions().collect();
 
     dbg!(&actual_points_to);
 

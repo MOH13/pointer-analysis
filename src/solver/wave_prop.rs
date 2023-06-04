@@ -276,6 +276,9 @@ impl<T: TermSetTrait<Term = u32>> WavePropagationSolver<T> {
             let cond_node = get_representative(&mut self.parents, *cond_node);
             let right = get_representative(&mut self.parents, *right);
 
+            if self.sols[cond_node as usize].len() == p_cache_left[i].len() {
+                continue;
+            }
             let p_new = self.sols[cond_node as usize].difference(&p_cache_left[i]);
             p_cache_left[i].union_assign(&p_new);
             for t in p_new.iter() {
@@ -305,6 +308,9 @@ impl<T: TermSetTrait<Term = u32>> WavePropagationSolver<T> {
             let cond_node = get_representative(&mut self.parents, *cond_node);
             let left = get_representative(&mut self.parents, *left);
 
+            if self.sols[cond_node as usize].len() == p_cache_right[i].len() {
+                continue;
+            }
             let p_new = self.sols[cond_node as usize].difference(&p_cache_right[i]);
             p_cache_right[i].union_assign(&p_new);
             for t in p_new.iter() {

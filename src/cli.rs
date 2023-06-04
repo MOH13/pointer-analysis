@@ -19,6 +19,9 @@ pub struct Args {
     /// List of keywords to exclude from output
     #[arg(short, long)]
     pub exclude_keywords: Vec<String>,
+    /// Don't print any output
+    #[arg(short = 'O', long, default_value_t = false)]
+    pub dont_output: bool,
     /// Include empty points-to sets in output
     #[arg(short = 'E', long, default_value_t = false)]
     pub include_empty: bool,
