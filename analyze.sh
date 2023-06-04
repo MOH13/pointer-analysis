@@ -7,4 +7,4 @@ done
 llvm-link llvmtemp/*.bc -o llvmtemp/linked.ll -S
 llvm-link llvmtemp/*.bc -o llvmtemp/linked.bc
 
-cargo run --release -- --solver hash ./llvmtemp/linked.bc
+cargo run --release -- ./llvmtemp/linked.bc
