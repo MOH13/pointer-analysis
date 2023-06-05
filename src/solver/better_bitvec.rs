@@ -1,4 +1,4 @@
-use std::cmp::min;
+use std::cmp::{max, min};
 
 use bitvec::prelude::*;
 use bitvec::slice::IterOnes;
@@ -209,7 +209,7 @@ impl BetterBitVec {
         None
     }
 
-    fn get_slice_size(&self) -> usize {
+    fn get_block_count(&self) -> usize {
         self.bitvec.as_raw_slice().len()
     }
 
@@ -218,7 +218,7 @@ impl BetterBitVec {
     }
 
     fn get_end_block(&self) -> usize {
-        self.get_start_block() + self.get_slice_size()
+        self.get_start_block() + self.get_block_count()
     }
 
     fn get_start(&self) -> usize {
@@ -230,10 +230,33 @@ impl BetterBitVec {
     }
 
     fn expand_to(&mut self, index: usize) {
-        let block = index / usize::BITS as usize;
+        let block_of_bit = index / usize::BITS as usize;
+        if self.get_block_count() == 0 {
+            debug_assert_eq!(0, self.ones);
+            *self = Self {
+                bitvec: BitVec::from_vec(vec![0]),
+                offset: block_of_bit,
+                ones: 0,
+            };
+            return;
+        }
+        let start_block = self.get_start_block();
+        let end_block = self.get_end_block();
+        let block_count = self.get_block_count();
+        let block_to_expand_to = if block_of_bit >= end_block {
+            max(block_of_bit, start_block + block_count * 2)
+        } else if block_of_bit < start_block {
+            if start_block < block_count {
+                0
+            } else {
+                min(block_of_bit, start_block - block_count)
+            }
+        } else {
+            return;
+        };
         let dummy_bitvec = Self {
             bitvec: BitVec::from_vec(vec![0]),
-            offset: block,
+            offset: block_to_expand_to,
             ones: 0,
         };
         *self = join_bitvecs(self, &dummy_bitvec, UnionIter::iter_better_bitvecs, false);
@@ -378,7 +401,8 @@ mod test {
         assert_eq!(true, bitvec.insert(64));
         assert_eq!(true, bitvec.contains(64));
         assert_eq!(false, bitvec.contains(63));
-        assert_eq!(&[0, 1], bitvec.bitvec.as_raw_slice())
+        assert_eq!(&[1], bitvec.bitvec.as_raw_slice());
+        assert_eq!(1, bitvec.offset);
     }
 
     #[test]
