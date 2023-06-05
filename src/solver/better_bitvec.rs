@@ -201,6 +201,7 @@ impl BetterBitVec {
         self.offset * usize::BITS as usize
     }
 
+    #[inline(always)]
     fn offset_index(&self, index: usize) -> Option<usize> {
         let offset_bits = self.offset_bits();
         if index >= self.get_start() && index < self.get_end() {
@@ -209,26 +210,32 @@ impl BetterBitVec {
         None
     }
 
+    #[inline(always)]
     fn get_block_count(&self) -> usize {
         self.bitvec.as_raw_slice().len()
     }
 
+    #[inline(always)]
     fn get_start_block(&self) -> usize {
         self.offset
     }
 
+    #[inline(always)]
     fn get_end_block(&self) -> usize {
         self.get_start_block() + self.get_block_count()
     }
 
+    #[inline(always)]
     fn get_start(&self) -> usize {
         self.get_start_block() * usize::BITS as usize
     }
 
+    #[inline(always)]
     fn get_end(&self) -> usize {
         self.get_end_block() * usize::BITS as usize
     }
 
+    #[inline(always)]
     fn expand_to(&mut self, index: usize) {
         let block_of_bit = index / usize::BITS as usize;
         if self.get_block_count() == 0 {
@@ -254,12 +261,16 @@ impl BetterBitVec {
         } else {
             return;
         };
-        let dummy_bitvec = Self {
-            bitvec: BitVec::from_vec(vec![0]),
-            offset: block_to_expand_to,
-            ones: 0,
+        let new_start_block = min(start_block, block_to_expand_to);
+        let new_end_block = max(end_block, block_to_expand_to);
+        let mut new_bitvec = BitVec::from_vec(vec![0; new_end_block - new_start_block + 1]);
+        new_bitvec.as_raw_mut_slice()[start_block - new_start_block..end_block - new_start_block]
+            .copy_from_slice(self.bitvec.as_raw_slice());
+        *self = Self {
+            bitvec: new_bitvec,
+            offset: new_start_block,
+            ones: self.ones,
         };
-        *self = join_bitvecs(self, &dummy_bitvec, UnionIter::iter_better_bitvecs, false);
         debug_assert!(matches!(self.offset_index(index), Some(_)));
     }
 }
@@ -280,6 +291,7 @@ impl TermSetTrait for BetterBitVec {
         }
     }
 
+    #[inline(always)]
     fn len(&self) -> usize {
         self.ones
     }
