@@ -249,9 +249,9 @@ where
     T: Hash + Eq + Debug,
     T2: Copy,
 {
-    *term_map.get(term).expect(&format!(
-        "Invalid lookup for term that was not passed in during initialization: {term:?}"
-    ))
+    *term_map.get(term).unwrap_or_else(|| {
+        panic!("Invalid lookup for term that was not passed in during initialization: {term:?}")
+    })
 }
 
 fn edges_between<T: Hash + Eq + TryInto<usize>, U: Default>(
