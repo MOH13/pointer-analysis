@@ -108,17 +108,15 @@ impl<'a, S: Solver> PointsToResult<'a, S> {
     }
 }
 
-impl<
-        'a,
-        'b,
-        S: Solver<Term = Cell<'a>>,
-        F1: Fn(&Cell<'a>, &S::TermSet) -> bool,
-        F2: Fn(&Cell<'a>) -> bool,
-    > FilteredResults<'a, 'b, S, F1, F2>
+impl<'a, 'b, S, F1, F2> FilteredResults<'a, 'b, S, F1, F2>
 where
+    S: Solver<Term = Cell<'a>>,
+    S::TermSet: fmt::Debug,
     S::TermSet: IntoIterator<Item = Cell<'a>>,
     S::TermSet: FromIterator<Cell<'a>>,
     S::TermSet: Clone,
+    F1: Fn(&Cell<'a>, &S::TermSet) -> bool,
+    F2: Fn(&Cell<'a>) -> bool,
 {
     pub fn iter_solutions(&'b self) -> impl Iterator<Item = (Cell<'a>, S::TermSet)> + 'b {
         self.result
@@ -136,8 +134,9 @@ where
     }
 }
 
-impl<'a, S: Solver<Term = Cell<'a>>> Display for PointsToResult<'a, S>
+impl<'a, S> Display for PointsToResult<'a, S>
 where
+    S: Solver<Term = Cell<'a>>,
     S::TermSet: fmt::Debug,
     S::TermSet: IntoIterator<Item = Cell<'a>>,
     S::TermSet: FromIterator<Cell<'a>>,
@@ -150,18 +149,15 @@ where
     }
 }
 
-impl<
-        'a,
-        'b,
-        S: Solver<Term = Cell<'a>>,
-        F1: Fn(&Cell<'a>, &S::TermSet) -> bool,
-        F2: Fn(&Cell<'a>) -> bool,
-    > Display for FilteredResults<'a, 'b, S, F1, F2>
+impl<'a, 'b, S, F1, F2> Display for FilteredResults<'a, 'b, S, F1, F2>
 where
+    S: Solver<Term = Cell<'a>>,
     S::TermSet: fmt::Debug,
     S::TermSet: IntoIterator<Item = Cell<'a>>,
     S::TermSet: FromIterator<Cell<'a>>,
     S::TermSet: Clone,
+    F1: Fn(&Cell<'a>, &S::TermSet) -> bool,
+    F2: Fn(&Cell<'a>) -> bool,
 {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         for (cell, set) in self.iter_solutions() {

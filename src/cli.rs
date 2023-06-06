@@ -9,9 +9,9 @@ pub struct Args {
     /// Path to .bc file
     pub file_path: String,
     // Select used solver
-    #[arg(short, long, default_value_t = SolverMode::Basic)]
+    #[arg(short, long, default_value_t = SolverMode::Wave)]
     pub solver: SolverMode,
-    #[arg(short, long, default_value_t = TermSet::Hash)]
+    #[arg(short, long, default_value_t = TermSet::Roaring)]
     pub termset: TermSet,
     /// List of keywords that must present to be included in output
     #[arg(short, long)]
