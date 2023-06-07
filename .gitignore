@@ -7,3 +7,4 @@ source.ll
 *.bc
 *.dot
 *.svg
+heaptrack.*
