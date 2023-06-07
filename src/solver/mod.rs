@@ -129,47 +129,47 @@ impl<T: Eq + PartialEq + Hash + Clone> TermSetTrait for HashSet<T> {
 
     type Iterator<'a> = Cloned<hashbrown::hash_set::Iter<'a, T>> where T: 'a;
 
-    #[inline(always)]
+    #[inline]
     fn new() -> Self {
         HashSet::new()
     }
 
-    #[inline(always)]
+    #[inline]
     fn len(&self) -> usize {
         HashSet::len(&self)
     }
 
-    #[inline(always)]
+    #[inline]
     fn contains(&self, term: Self::Term) -> bool {
         HashSet::contains(self, &term)
     }
 
-    #[inline(always)]
+    #[inline]
     fn remove(&mut self, term: Self::Term) -> bool {
         HashSet::remove(self, &term)
     }
 
-    #[inline(always)]
+    #[inline]
     fn insert(&mut self, term: Self::Term) -> bool {
         HashSet::insert(self, term)
     }
 
-    #[inline(always)]
+    #[inline]
     fn union_assign(&mut self, other: &Self) {
         Extend::extend(self, other.iter().cloned());
     }
 
-    #[inline(always)]
+    #[inline]
     fn extend<U: Iterator<Item = Self::Term>>(&mut self, other: U) {
         Extend::extend(self, other);
     }
 
-    #[inline(always)]
+    #[inline]
     fn difference(&self, other: &Self) -> Self {
         HashSet::difference(self, other).cloned().collect()
     }
 
-    #[inline(always)]
+    #[inline]
     fn iter<'a>(&'a self) -> Self::Iterator<'a> {
         HashSet::iter(self).cloned()
     }
@@ -180,47 +180,47 @@ impl TermSetTrait for RoaringBitmap {
 
     type Iterator<'a> = roaring::bitmap::Iter<'a>;
 
-    #[inline(always)]
+    #[inline]
     fn new() -> Self {
         RoaringBitmap::new()
     }
 
-    #[inline(always)]
+    #[inline]
     fn len(&self) -> usize {
         RoaringBitmap::len(self) as usize
     }
 
-    #[inline(always)]
+    #[inline]
     fn contains(&self, term: Self::Term) -> bool {
         RoaringBitmap::contains(&self, term)
     }
 
-    #[inline(always)]
+    #[inline]
     fn remove(&mut self, term: Self::Term) -> bool {
         RoaringBitmap::remove(self, term)
     }
 
-    #[inline(always)]
+    #[inline]
     fn insert(&mut self, term: Self::Term) -> bool {
         RoaringBitmap::insert(self, term)
     }
 
-    #[inline(always)]
+    #[inline]
     fn union_assign(&mut self, other: &Self) {
         *self |= other;
     }
 
-    #[inline(always)]
+    #[inline]
     fn extend<T: Iterator<Item = Self::Term>>(&mut self, other: T) {
         Extend::extend(self, other)
     }
 
-    #[inline(always)]
+    #[inline]
     fn difference(&self, other: &Self) -> Self {
         self - other
     }
 
-    #[inline(always)]
+    #[inline]
     fn iter<'a>(&'a self) -> Self::Iterator<'a> {
         RoaringBitmap::iter(&self)
     }

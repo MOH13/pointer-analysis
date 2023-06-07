@@ -196,12 +196,12 @@ impl<'a> Iterator for DifferenceIter<'a> {
 }
 
 impl BetterBitVec {
-    #[inline(always)]
+    #[inline]
     fn offset_bits(&self) -> usize {
         self.offset * usize::BITS as usize
     }
 
-    #[inline(always)]
+    #[inline]
     fn offset_index(&self, index: usize) -> Option<usize> {
         let offset_bits = self.offset_bits();
         if index >= self.get_start() && index < self.get_end() {
@@ -210,32 +210,32 @@ impl BetterBitVec {
         None
     }
 
-    #[inline(always)]
+    #[inline]
     fn get_block_count(&self) -> usize {
         self.bitvec.as_raw_slice().len()
     }
 
-    #[inline(always)]
+    #[inline]
     fn get_start_block(&self) -> usize {
         self.offset
     }
 
-    #[inline(always)]
+    #[inline]
     fn get_end_block(&self) -> usize {
         self.get_start_block() + self.get_block_count()
     }
 
-    #[inline(always)]
+    #[inline]
     fn get_start(&self) -> usize {
         self.get_start_block() * usize::BITS as usize
     }
 
-    #[inline(always)]
+    #[inline]
     fn get_end(&self) -> usize {
         self.get_end_block() * usize::BITS as usize
     }
 
-    #[inline(always)]
+    #[inline]
     fn expand_to(&mut self, index: usize) {
         let block_of_bit = index / usize::BITS as usize;
         if self.get_block_count() == 0 {
@@ -283,6 +283,7 @@ impl TermSetTrait for BetterBitVec {
         Self: 'a,
     ;
 
+    #[inline]
     fn new() -> Self {
         Self {
             bitvec: bitvec![],
@@ -291,11 +292,12 @@ impl TermSetTrait for BetterBitVec {
         }
     }
 
-    #[inline(always)]
+    #[inline]
     fn len(&self) -> usize {
         self.ones
     }
 
+    #[inline]
     fn contains(&self, term: Self::Term) -> bool {
         if let Some(index) = self.offset_index(term as usize) {
             unsafe { *self.bitvec.get_unchecked(index) }
@@ -304,6 +306,7 @@ impl TermSetTrait for BetterBitVec {
         }
     }
 
+    #[inline]
     fn remove(&mut self, term: Self::Term) -> bool {
         if let Some(index) = self.offset_index(term as usize) {
             unsafe {
@@ -318,6 +321,7 @@ impl TermSetTrait for BetterBitVec {
         false
     }
 
+    #[inline]
     fn insert(&mut self, term: Self::Term) -> bool {
         if let Some(index) = self.offset_index(term as usize) {
             unsafe {
@@ -336,6 +340,7 @@ impl TermSetTrait for BetterBitVec {
         }
     }
 
+    #[inline]
     fn union_assign(&mut self, other: &Self) {
         if other.ones == 0 {
             return;
@@ -358,16 +363,19 @@ impl TermSetTrait for BetterBitVec {
                 }
             }
             self.ones = self.bitvec.count_ones();
+        } else {
+            *self = join_bitvecs(self, other, UnionIter::iter_better_bitvecs, true)
         }
-        *self = join_bitvecs(self, other, UnionIter::iter_better_bitvecs, true)
     }
 
+    #[inline]
     fn extend<T: Iterator<Item = Self::Term>>(&mut self, other: T) {
         for t in other {
             self.insert(t);
         }
     }
 
+    #[inline]
     fn difference(&self, other: &Self) -> Self {
         if other.ones == 0 {
             return self.clone();
@@ -375,6 +383,7 @@ impl TermSetTrait for BetterBitVec {
         join_bitvecs(self, other, DifferenceIter::iter_better_bitvecs, true)
     }
 
+    #[inline]
     fn iter<'a>(&'a self) -> Self::Iterator<'a> {
         let offset_bits = self.offset_bits();
         OffsetIter {
