@@ -3,7 +3,8 @@ use std::fmt::{self, Display, Formatter};
 use std::rc::Rc;
 use std::str::FromStr;
 
-use hashbrown::{HashMap, HashSet};
+use hashbrown::HashMap;
+use llvm_ir::function::FunctionDeclaration;
 use llvm_ir::module::GlobalVariable;
 use llvm_ir::types::NamedStructDef;
 use llvm_ir::{Function, Instruction, Module, Name, Terminator, Type, TypeRef};
@@ -11,6 +12,7 @@ use llvm_ir::{Function, Instruction, Module, Name, Terminator, Type, TypeRef};
 use self::structs::{StructMap, StructType};
 
 pub mod pointer;
+pub mod std_functions;
 pub mod structs;
 
 #[derive(Clone, Copy)]
@@ -18,7 +20,6 @@ pub struct Context<'a, 'b> {
     pub module: &'a Module,
     pub function: Option<&'a Function>,
     pub structs: &'b StructMap,
-    pub functions: &'b HashSet<&'a str>,
 }
 
 /// This trait allows implementors to define handler functions for llvm constructs,
@@ -26,6 +27,7 @@ pub struct Context<'a, 'b> {
 pub trait ModuleVisitor<'a> {
     fn init(&mut self, context: Context<'a, '_>);
     fn handle_function(&mut self, function: &'a Function, context: Context<'a, '_>);
+    fn handle_fun_decl(&mut self, fun_decl: &'a FunctionDeclaration, context: Context<'a, '_>);
     fn handle_global(&mut self, global: &'a GlobalVariable, context: Context<'a, '_>);
     fn handle_instruction(&mut self, instr: &'a Instruction, context: Context<'a, '_>);
     fn handle_terminator(&mut self, term: &'a Terminator, context: Context<'a, '_>);
@@ -40,19 +42,20 @@ pub trait ModuleVisitor<'a> {
             StructType::add_to_structs(name, ty, &mut structs, module);
         }
 
-        let functions = module.functions.iter().map(|f| f.name.as_str()).collect();
-
         let context = Context {
             module,
             function: None,
             structs: &structs,
-            functions: &functions,
         };
 
         self.init(context);
 
         for global in &module.global_vars {
             self.handle_global(global, context);
+        }
+
+        for fun_decl in &module.func_declarations {
+            self.handle_fun_decl(fun_decl, context);
         }
 
         for function in &module.functions {
@@ -79,7 +82,7 @@ pub enum VarIdent<'a> {
         fun_name: Cow<'a, str>,
     },
     Global {
-        name: Cow<'a, Name>,
+        name: Cow<'a, str>,
     },
     Fresh {
         index: usize,
@@ -91,10 +94,10 @@ pub enum VarIdent<'a> {
 }
 
 impl<'a> VarIdent<'a> {
-    fn new_local(reg_name: &'a Name, function: &'a Function) -> Self {
+    fn new_local(reg_name: &'a Name, fun_name: &'a str) -> Self {
         Self::Local {
             reg_name: Cow::Borrowed(reg_name),
-            fun_name: Cow::Borrowed(&function.name),
+            fun_name: Cow::Borrowed(fun_name),
         }
     }
 }
@@ -143,7 +146,7 @@ impl<'a> FromStr for VarIdent<'a> {
                     })
                 } else {
                     Ok(VarIdent::Global {
-                        name: Cow::Owned(Name::Name(Box::new(s.to_owned()))),
+                        name: Cow::Owned(s.to_owned()),
                     })
                 }
             }

@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use either::Either;
 use hashbrown::{HashMap, HashSet};
-use llvm_ir::function::ParameterAttribute;
+use llvm_ir::function::{FunctionDeclaration, Parameter, ParameterAttribute};
 use llvm_ir::instruction::{
     AddrSpaceCast, Alloca, BitCast, Call, ExtractElement, ExtractValue, Freeze, GetElementPtr,
     InlineAssembly, InsertElement, InsertValue, IntToPtr, Load, Phi, Select, ShuffleVector, Store,
@@ -17,6 +17,7 @@ use llvm_ir::{
 };
 use log::warn;
 
+use super::std_functions::STD_FUNCTIONS;
 use super::{
     strip_array_types, strip_pointer_type, Context, ModuleVisitor, StructMap, StructType, VarIdent,
 };
@@ -92,7 +93,7 @@ impl<'a> PointerContext<'a> {
 
 pub struct PointerModuleVisitor<'a, 'b, O> {
     original_ptr_types: HashMap<VarIdent<'a>, Rc<StructType>>,
-    non_defined_functions: HashSet<&'a str>,
+    std_functions: HashSet<&'a str>,
     fresh_counter: usize,
     observer: &'b mut O,
 }
@@ -104,7 +105,7 @@ where
     pub fn new(observer: &'b mut O) -> Self {
         Self {
             original_ptr_types: HashMap::new(),
-            non_defined_functions: HashSet::new(),
+            std_functions: STD_FUNCTIONS.clone(),
             fresh_counter: 0,
             observer,
         }
@@ -183,14 +184,7 @@ where
                 let ident = VarIdent::Global {
                     name: Cow::Borrowed(name),
                 };
-                if let Name::Name(name) = name {
-                    if is_function_type(ty)
-                        && !context.functions.contains(name.as_str())
-                        && !self.non_defined_functions.insert(name)
-                    {
-                        self.handle_unused_fresh(ident.clone(), None, pointer_context);
-                    }
-                }
+
                 (Some(ident), context.module.types.pointer_to(ty.clone()), 0)
             }
 
@@ -403,7 +397,7 @@ where
                     Type::PointerType { .. }
                     | Type::NamedStructType { .. }
                     | Type::StructType { .. } => {
-                        Some((VarIdent::new_local(name, function), ty, degree))
+                        Some((VarIdent::new_local(name, &function.name), ty, degree))
                     }
                     _ => None,
                 }
@@ -462,7 +456,7 @@ where
         let return_struct_type = StructType::try_from_type(result_ty.clone(), context.structs);
 
         let dest = if is_ptr_type(&result_ty) || is_struct_type(&result_ty) {
-            dest.map(|d| VarIdent::new_local(d, caller))
+            dest.map(|d| VarIdent::new_local(d, &caller.name))
         } else {
             None
         };
@@ -476,25 +470,25 @@ where
             .collect();
 
         if let VarIdent::Global { name } = &function {
-            if let Name::Name(name) = name.as_ref() {
-                if !context.functions.contains(name.as_str()) {
-                    self.handle_special_function(
-                        name.as_str(),
-                        arguments,
-                        &argument_idents,
-                        dest.clone(),
-                        return_struct_type.clone(),
-                        context,
-                    );
-                    if let Some(dest) = dest {
-                        let instr = PointerInstruction::Fresh {
-                            ident: dest,
-                            struct_type: return_struct_type,
-                        };
-                        self.observer.handle_ptr_instruction(instr, pointer_context);
-                    }
-                    return;
+            if self.std_functions.contains(&**name) {
+                self.handle_std_function(
+                    &**name,
+                    arguments,
+                    &argument_idents,
+                    dest.clone(),
+                    return_struct_type.clone(),
+                    context,
+                );
+
+                if let Some(dest) = dest {
+                    let instr = PointerInstruction::Fresh {
+                        ident: dest,
+                        struct_type: return_struct_type,
+                    };
+                    self.observer.handle_ptr_instruction(instr, pointer_context);
                 }
+
+                return;
             }
         }
 
@@ -508,10 +502,8 @@ where
         self.observer.handle_ptr_instruction(instr, pointer_context);
     }
 
-    /// Handle (possibly) special-case functions like malloc.
-    ///
-    /// Returns `true` if the function was special-case, `false` if not.
-    fn handle_special_function(
+    /// Handle std lib functions like malloc.
+    fn handle_std_function(
         &mut self,
         function: &str,
         arguments: &'a [(Operand, Vec<ParameterAttribute>)],
@@ -588,7 +580,8 @@ where
                 {
                     return;
                 }
-                warn!("Unhandled function '{function}'");
+
+                panic!("Missing std function handling for '{function}'");
             }
         }
     }
@@ -742,6 +735,25 @@ where
             }
         }
     }
+
+    fn handle_fun_signature(
+        &mut self,
+        name: &'a str,
+        parameters: &'a [Parameter],
+        return_type: TypeRef,
+        context: Context<'a, '_>,
+    ) {
+        let ident = VarIdent::Global {
+            name: Cow::Owned(String::from(name)),
+        };
+        let parameters = parameters
+            .iter()
+            .map(|p| VarIdent::new_local(&p.name, name))
+            .collect();
+        let return_struct_type = StructType::try_from_type(return_type, context.structs);
+        self.observer
+            .handle_ptr_function(ident, parameters, return_struct_type);
+    }
 }
 
 impl<'a, 'b, O> ModuleVisitor<'a> for PointerModuleVisitor<'a, 'b, O>
@@ -753,18 +765,30 @@ where
     }
 
     fn handle_function(&mut self, function: &'a Function, context: Context<'a, '_>) {
-        let ident = VarIdent::Global {
-            name: Cow::Owned(Name::Name(Box::new(function.name.clone()))),
-        };
-        let parameters = function
-            .parameters
-            .iter()
-            .map(|p| VarIdent::new_local(&p.name, function))
-            .collect();
-        let return_struct_type =
-            StructType::try_from_type(function.return_type.clone(), context.structs);
-        self.observer
-            .handle_ptr_function(ident, parameters, return_struct_type);
+        self.handle_fun_signature(
+            &function.name,
+            &function.parameters,
+            function.return_type.clone(),
+            context,
+        );
+        self.std_functions.remove(&function.name.as_str());
+    }
+
+    fn handle_fun_decl(&mut self, fun_decl: &'a FunctionDeclaration, context: Context<'a, '_>) {
+        self.handle_fun_signature(
+            &fun_decl.name,
+            &fun_decl.parameters,
+            fun_decl.return_type.clone(),
+            context,
+        );
+        if fun_decl.name.starts_with("llvm.lifetime")
+            || fun_decl.name.starts_with("llvm.dbg")
+            || fun_decl.name.starts_with("llvm.memset")
+        {
+            self.std_functions.insert(fun_decl.name.as_str());
+        } else if !self.std_functions.contains(&fun_decl.name.as_str()) {
+            warn!("Unhandled function '{}'", fun_decl.name);
+        }
     }
 
     fn handle_global(&mut self, global: &'a GlobalVariable, context: Context<'a, '_>) {
@@ -801,7 +825,7 @@ where
             })
             | Instruction::Freeze(Freeze { operand, dest, .. }) => {
                 if let Some((value, ty, ..)) = self.get_operand_ident_type(operand, context) {
-                    let dest = VarIdent::new_local(dest, function);
+                    let dest = VarIdent::new_local(dest, &function.name);
                     let struct_type = StructType::try_from_type(ty, context.structs);
                     self.handle_assign(dest, value, struct_type, pointer_context);
                 }
@@ -825,7 +849,7 @@ where
                 dest,
                 ..
             }) => {
-                let dest = VarIdent::new_local(dest, function);
+                let dest = VarIdent::new_local(dest, &function.name);
                 if let (Some((x, ty, ..)), Some((y, ..))) = (
                     self.get_operand_ident_type(x, context),
                     self.get_operand_ident_type(y, context),
@@ -842,7 +866,7 @@ where
                 ..
             }) => {
                 if let Some((base, ty, degree)) = self.get_operand_ident_type(aggregate, context) {
-                    let dest = VarIdent::new_local(dest, function);
+                    let dest = VarIdent::new_local(dest, &function.name);
                     self.handle_extract_value(dest, base, indices, degree, ty, context);
                 }
             }
@@ -854,7 +878,7 @@ where
                 dest,
                 ..
             }) => {
-                let dest = VarIdent::new_local(dest, function);
+                let dest = VarIdent::new_local(dest, &function.name);
                 match (
                     self.get_operand_ident_type(aggregate, context),
                     self.get_operand_ident_type(element, context),
@@ -885,7 +909,7 @@ where
                 allocated_type,
                 ..
             }) => {
-                let dest = VarIdent::new_local(dest, function);
+                let dest = VarIdent::new_local(dest, &function.name);
                 let struct_type =
                     StructType::try_from_type(allocated_type.clone(), context.structs);
                 let instr = PointerInstruction::Alloca { dest, struct_type };
@@ -895,7 +919,7 @@ where
             Instruction::BitCast(BitCast { operand, dest, .. })
             | Instruction::AddrSpaceCast(AddrSpaceCast { operand, dest, .. }) => {
                 if let Some((value, src_ty, _)) = self.get_operand_ident_type(operand, context) {
-                    let dest = VarIdent::new_local(dest, function);
+                    let dest = VarIdent::new_local(dest, &function.name);
                     self.handle_bitcast(dest, value, src_ty, context);
                 };
             }
@@ -911,7 +935,7 @@ where
                         .expect(&format!(
                     "GEP address should always be a pointer or array of pointers, got {address}"
                 ));
-                let dest = VarIdent::new_local(dest, function);
+                let dest = VarIdent::new_local(dest, &function.name);
 
                 let indices: Vec<_> = indices
                     .iter()
@@ -937,7 +961,7 @@ where
                     .map(|(ident, ty, _)| (ident, ty))
                     .unzip();
 
-                let dest = VarIdent::new_local(dest, function);
+                let dest = VarIdent::new_local(dest, &function.name);
                 let struct_type = incoming_types
                     .first()
                     .and_then(|ty| StructType::try_from_type(ty.clone(), context.structs));
@@ -952,7 +976,7 @@ where
             Instruction::Load(Load { address, dest, .. }) => {
                 match self.get_operand_ident_type(address, context) {
                     Some((address, address_ty, _)) if is_ptr_type(&address_ty) => {
-                        let dest = VarIdent::new_local(dest, function);
+                        let dest = VarIdent::new_local(dest, &function.name);
                         let struct_type = match address_ty.as_ref() {
                             Type::PointerType { pointee_type, .. } => {
                                 StructType::try_from_type(pointee_type.clone(), context.structs)
@@ -996,14 +1020,14 @@ where
             }
 
             Instruction::VAArg(VAArg { cur_type, dest, .. }) => {
-                let dest = VarIdent::new_local(dest, function);
+                let dest = VarIdent::new_local(dest, &function.name);
                 let struct_type = StructType::try_from_type(cur_type.clone(), context.structs);
                 self.handle_unused_fresh(dest, struct_type, pointer_context);
                 warn!("Unhandled VAArg");
             }
 
             Instruction::IntToPtr(IntToPtr { dest, .. }) => {
-                let dest = VarIdent::new_local(dest, function);
+                let dest = VarIdent::new_local(dest, &function.name);
                 self.handle_unused_fresh(dest, None, pointer_context);
                 warn!("Unhandled IntToPtr");
             }
@@ -1117,8 +1141,4 @@ fn is_struct_type(ty: &TypeRef) -> bool {
         ty.as_ref(),
         Type::StructType { .. } | Type::NamedStructType { .. }
     )
-}
-
-fn is_function_type(ty: &TypeRef) -> bool {
-    matches!(ty.as_ref(), Type::FuncType { .. })
 }
