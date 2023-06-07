@@ -58,14 +58,15 @@ fn better_bitvec_wave_prop(c: &mut Criterion) {
     bench_template::<BetterBitVecWavePropagationSolver>("BetterBitVecWaveProp", c);
 }
 
-criterion_group!(
-    benches,
-    hash,
+criterion_group! {
+    name = benches;
+    config = Criterion::default().sample_size(10);
+    targets = hash,
     bit_vec,
     better_bit_vec,
     roaring,
     hash_wave_prop,
     roaring_wave_prop,
     better_bitvec_wave_prop
-);
+}
 criterion_main!(benches);

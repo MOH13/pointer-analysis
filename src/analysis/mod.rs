@@ -3,8 +3,8 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::rc::Rc;
 use std::str::FromStr;
 
-use hashbrown::HashMap;
-use llvm_ir::{Module, Name};
+use hashbrown::{HashMap, HashSet};
+use llvm_ir::Module;
 use log::error;
 
 use crate::cstr;
@@ -215,6 +215,7 @@ impl<'a> Debug for Cell<'a> {
 }
 
 struct PointsToPreAnalyzer<'a> {
+    dests_already_added: HashSet<VarIdent<'a>>,
     cells: Vec<Cell<'a>>,
     allowed_offsets: Vec<(Cell<'a>, usize)>,
     num_cells_per_malloc: usize,
@@ -254,6 +255,7 @@ fn get_and_push_cells<'a>(
 impl<'a> PointsToPreAnalyzer<'a> {
     fn new() -> Self {
         Self {
+            dests_already_added: HashSet::new(),
             cells: vec![],
             allowed_offsets: vec![],
             num_cells_per_malloc: 0,
@@ -275,6 +277,9 @@ impl<'a> PointsToPreAnalyzer<'a> {
         struct_type: Option<&StructType>,
         ident_to_cell: fn(VarIdent<'a>) -> Cell<'a>,
     ) {
+        if !self.dests_already_added.insert(base_ident.clone()) {
+            return;
+        }
         let added = self.add_cells(base_ident, struct_type, ident_to_cell);
         for (i, cell) in self.cells.iter().rev().take(added).enumerate() {
             if i > 0 {
@@ -664,7 +669,7 @@ where
                     .fun_name
                     .expect("return instructions should only be generated inside functions");
                 let function = VarIdent::Global {
-                    name: Cow::Owned(Name::Name(Box::new(fun_name.into()))),
+                    name: Cow::Owned(String::from(fun_name)),
                 };
 
                 let return_struct_type = self

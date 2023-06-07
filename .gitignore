@@ -2,7 +2,8 @@
 source.ll
 *.h.gch
 /llvmtemp
-/benchmarks/**
+/benchmarks
+.DS_Store
 *.bc
 *.dot
 *.svg
