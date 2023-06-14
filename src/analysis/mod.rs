@@ -3,8 +3,9 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::rc::Rc;
 use std::str::FromStr;
 
-use hashbrown::HashMap;
-use llvm_ir::{Module, Name};
+use hashbrown::{HashMap, HashSet};
+use llvm_ir::Module;
+use log::error;
 
 use crate::cstr;
 use crate::module_visitor::pointer::{
@@ -13,8 +14,7 @@ use crate::module_visitor::pointer::{
 use crate::module_visitor::structs::{StructMap, StructType};
 use crate::module_visitor::{ModuleVisitor, VarIdent};
 use crate::solver::Solver;
-
-pub mod dummy;
+use crate::visualizer::{visualize, Graph};
 
 #[cfg(test)]
 mod tests;
@@ -22,8 +22,7 @@ mod tests;
 pub struct PointsToAnalysis;
 
 impl PointsToAnalysis {
-    /// Runs the points-to analysis on LLVM module `module` using `solver`.
-    pub fn run<'a, S>(module: &'a Module) -> PointsToResult<S>
+    fn solve_module<'a, S>(module: &'a Module) -> (S, Vec<Cell<'a>>)
     where
         S: Solver<Term = Cell<'a>> + 'a,
     {
@@ -34,58 +33,134 @@ impl PointsToAnalysis {
         let mut points_to_solver =
             PointsToSolver::<'a, S>::new(pre_analyzer.cells, pre_analyzer.allowed_offsets);
         PointerModuleVisitor::new(&mut points_to_solver).visit_module(module);
+        points_to_solver.solver.finalize();
 
-        let result_map = cells_copy
-            .into_iter()
-            .map(|c| {
-                let sol = points_to_solver.solver.get_solution(&c);
-                (c, sol)
-            })
-            .collect();
-        PointsToResult(result_map)
+        (points_to_solver.solver, cells_copy)
+    }
+
+    /// Runs the points-to analysis on LLVM module `module` using `solver`.
+    pub fn run<'a, S>(module: &'a Module) -> PointsToResult<S>
+    where
+        S: Solver<Term = Cell<'a>> + 'a,
+    {
+        let (solver, cells) = Self::solve_module::<S>(module);
+
+        PointsToResult(solver, cells)
+    }
+
+    pub fn run_and_visualize<'a, S>(
+        module: &'a Module,
+        dot_output_path: &str,
+    ) -> PointsToResult<'a, S>
+    where
+        S: Solver<Term = Cell<'a>> + Graph + 'a,
+    {
+        let (solver, cells) = Self::solve_module::<S>(module);
+        if let Err(e) = visualize(&solver, dot_output_path) {
+            error!("Error visualizing graph: {e}");
+        }
+        PointsToResult(solver, cells)
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct PointsToResult<'a, S: Solver>(pub HashMap<Cell<'a>, S::TermSet>);
+pub struct PointsToResult<'a, S: Solver>(pub S, pub Vec<Cell<'a>>);
 
-impl<'a, S: Solver> PointsToResult<'a, S>
+pub struct FilteredResults<'a, 'b, S: Solver, F1, F2> {
+    result: &'b PointsToResult<'a, S>,
+    key_filter: F1,
+    value_filter: F2,
+    include_strs: Vec<&'b str>,
+    exclude_strs: Vec<&'b str>,
+}
+
+impl<'a, S: Solver> PointsToResult<'a, S> {
+    pub fn get_filtered_entries<
+        'b,
+        F1: Fn(&Cell<'a>, &S::TermSet) -> bool,
+        F2: Fn(&Cell<'a>) -> bool,
+    >(
+        &'b self,
+        key_filter: F1,
+        value_filter: F2,
+        include_strs: Vec<&'b str>,
+        exclude_strs: Vec<&'b str>,
+    ) -> FilteredResults<'a, 'b, S, F1, F2> {
+        FilteredResults {
+            result: self,
+            key_filter,
+            value_filter,
+            include_strs,
+            exclude_strs,
+        }
+    }
+
+    pub fn get_all_entries<'b>(
+        &'b self,
+    ) -> FilteredResults<'a, 'b, S, fn(&Cell<'a>, &S::TermSet) -> bool, fn(&Cell<'a>) -> bool> {
+        FilteredResults {
+            result: self,
+            key_filter: |_, _| true,
+            value_filter: |_| true,
+            include_strs: Vec::new(),
+            exclude_strs: Vec::new(),
+        }
+    }
+}
+
+impl<'a, 'b, S, F1, F2> FilteredResults<'a, 'b, S, F1, F2>
 where
+    S: Solver<Term = Cell<'a>>,
+    S::TermSet: fmt::Debug,
     S::TermSet: IntoIterator<Item = Cell<'a>>,
     S::TermSet: FromIterator<Cell<'a>>,
     S::TermSet: Clone,
+    F1: Fn(&Cell<'a>, &S::TermSet) -> bool,
+    F2: Fn(&Cell<'a>) -> bool,
 {
-    pub fn get_filtered_entries(
-        &self,
-        mut key_filter: impl FnMut(&Cell<'a>, &S::TermSet) -> bool,
-        mut value_filter: impl FnMut(&Cell<'a>) -> bool,
-        include_strs: Vec<&str>,
-        exclude_strs: Vec<&str>,
-    ) -> Self {
-        Self(
-            self.0
-                .clone()
-                .into_iter()
-                .map(|(cell, set)| (cell, set.into_iter().filter(&mut value_filter).collect()))
-                .filter(|(cell, set)| {
-                    let cell_str = cell.to_string();
-                    key_filter(cell, set)
-                        && (include_strs.is_empty()
-                            || include_strs.iter().any(|s| cell_str.contains(s)))
-                        && (exclude_strs.iter().all(|s| !cell_str.contains(s)))
-                })
-                .collect(),
-        )
+    pub fn iter_solutions(&'b self) -> impl Iterator<Item = (Cell<'a>, S::TermSet)> + 'b {
+        self.result
+            .1
+            .iter()
+            .map(|cell| (cell.clone(), self.result.0.get_solution(cell)))
+            .map(|(cell, set)| (cell, set.into_iter().filter(&self.value_filter).collect()))
+            .filter(|(cell, set)| {
+                let cell_str = cell.to_string();
+                (self.key_filter)(cell, set)
+                    && (self.include_strs.is_empty()
+                        || self.include_strs.iter().any(|s| cell_str.contains(s)))
+                    && (self.exclude_strs.iter().all(|s| !cell_str.contains(s)))
+            })
     }
 }
 
 impl<'a, S> Display for PointsToResult<'a, S>
 where
-    S: Solver,
+    S: Solver<Term = Cell<'a>>,
     S::TermSet: fmt::Debug,
+    S::TermSet: IntoIterator<Item = Cell<'a>>,
+    S::TermSet: FromIterator<Cell<'a>>,
+    S::TermSet: Clone,
 {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        for (cell, set) in self.0.iter() {
+        let filtered = self.get_all_entries();
+        writeln!(f, "{filtered}")?;
+        Ok(())
+    }
+}
+
+impl<'a, 'b, S, F1, F2> Display for FilteredResults<'a, 'b, S, F1, F2>
+where
+    S: Solver<Term = Cell<'a>>,
+    S::TermSet: fmt::Debug,
+    S::TermSet: IntoIterator<Item = Cell<'a>>,
+    S::TermSet: FromIterator<Cell<'a>>,
+    S::TermSet: Clone,
+    F1: Fn(&Cell<'a>, &S::TermSet) -> bool,
+    F2: Fn(&Cell<'a>) -> bool,
+{
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        for (cell, set) in self.iter_solutions() {
             writeln!(f, "[[{cell}]] = {set:#?}")?;
         }
         Ok(())
@@ -140,6 +215,7 @@ impl<'a> Debug for Cell<'a> {
 }
 
 struct PointsToPreAnalyzer<'a> {
+    dests_already_added: HashSet<VarIdent<'a>>,
     cells: Vec<Cell<'a>>,
     allowed_offsets: Vec<(Cell<'a>, usize)>,
     num_cells_per_malloc: usize,
@@ -179,6 +255,7 @@ fn get_and_push_cells<'a>(
 impl<'a> PointsToPreAnalyzer<'a> {
     fn new() -> Self {
         Self {
+            dests_already_added: HashSet::new(),
             cells: vec![],
             allowed_offsets: vec![],
             num_cells_per_malloc: 0,
@@ -200,6 +277,9 @@ impl<'a> PointsToPreAnalyzer<'a> {
         struct_type: Option<&StructType>,
         ident_to_cell: fn(VarIdent<'a>) -> Cell<'a>,
     ) {
+        if !self.dests_already_added.insert(base_ident.clone()) {
+            return;
+        }
         let added = self.add_cells(base_ident, struct_type, ident_to_cell);
         for (i, cell) in self.cells.iter().rev().take(added).enumerate() {
             if i > 0 {
@@ -589,7 +669,7 @@ where
                     .fun_name
                     .expect("return instructions should only be generated inside functions");
                 let function = VarIdent::Global {
-                    name: Cow::Owned(Name::Name(Box::new(fun_name.into()))),
+                    name: Cow::Owned(String::from(fun_name)),
                 };
 
                 let return_struct_type = self

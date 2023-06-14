@@ -10,8 +10,12 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use test_generator::test_resources;
 
-use crate::analysis::{PointsToAnalysis, PointsToResult};
-use crate::solver::{BasicBitVecSolver, BasicHashSolver, GenericSolver, IterableTermSet, Solver};
+use crate::analysis::PointsToAnalysis;
+use crate::solver::{
+    BasicBetterBitVecSolver, BasicBitVecSolver, BasicHashSolver, BasicRoaringSolver,
+    BetterBitVecWavePropagationSolver, GenericSolver, HashWavePropagationSolver,
+    RoaringWavePropagationSolver, Solver,
+};
 
 use super::Cell;
 
@@ -85,8 +89,8 @@ fn parse_points_to<'a>(
 
 fn run_test_template<S>(resource: &str)
 where
-    S: Solver<Term = usize>,
-    S::TermSet: IterableTermSet<usize>,
+    S: Solver,
+    S::Term: TryInto<usize> + TryFrom<usize> + Copy,
 {
     dbg!(resource);
     let config_file = File::open(resource).expect("Could not open file");
@@ -111,7 +115,10 @@ where
 
     dbg!(&expected_points_to);
 
-    let PointsToResult(actual_points_to) = PointsToAnalysis::run::<GenericSolver<_, S>>(&module);
+    let result = PointsToAnalysis::run::<GenericSolver<_, S, _>>(&module);
+
+    let actual_points_to: HashMap<Cell, HashSet<Cell>> =
+        result.get_all_entries().iter_solutions().collect();
 
     dbg!(&actual_points_to);
 
@@ -134,4 +141,29 @@ fn hash(resource: &str) {
 #[test_resources("res/**/test_config.json")]
 fn bit_vec(resource: &str) {
     run_test_template::<BasicBitVecSolver>(resource)
+}
+
+#[test_resources("res/**/test_config.json")]
+fn better_bit_vec(resource: &str) {
+    run_test_template::<BasicBetterBitVecSolver>(resource)
+}
+
+#[test_resources("res/**/test_config.json")]
+fn roaring(resource: &str) {
+    run_test_template::<BasicRoaringSolver>(resource)
+}
+
+#[test_resources("res/**/test_config.json")]
+fn wave_prop(resource: &str) {
+    run_test_template::<HashWavePropagationSolver>(resource)
+}
+
+#[test_resources("res/**/test_config.json")]
+fn roaring_wave_prop(resource: &str) {
+    run_test_template::<RoaringWavePropagationSolver>(resource)
+}
+
+#[test_resources("res/**/test_config.json")]
+fn better_bitvec_wave_prop(resource: &str) {
+    run_test_template::<BetterBitVecWavePropagationSolver>(resource)
 }

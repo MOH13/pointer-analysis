@@ -2,8 +2,9 @@ use core::hash::Hash;
 use hashbrown::{HashMap, HashSet};
 use std::fmt::Debug;
 
-use super::{Constraint, IterableTermSet, Solver};
+use super::{Constraint, Solver};
 use crate::cstr;
+use crate::solver::TermSetTrait;
 
 macro_rules! output {
     [ $( $ptr:tt -> { $($target:tt),* } ),* ] => {
@@ -22,7 +23,7 @@ macro_rules! solver_tests {
                     ( $solver_ty:ty ) => {
                         #[allow(unused_assignments)]
                         {
-                            let mut index = 0;
+                            let mut index = 0 as <$solver_ty as Solver>::Term;
                             $(
                                 let $var = index;
                                 index += 1;
@@ -43,13 +44,29 @@ macro_rules! solver_tests {
                     vars!($crate::solver::BasicBitVecSolver)
                 }
                 #[test]
+                fn better_bit_vec() {
+                    vars!($crate::solver::BasicBetterBitVecSolver)
+                }
+                #[test]
+                fn hash_wave_prop() {
+                    vars!($crate::solver::HashWavePropagationSolver)
+                }
+                #[test]
+                fn roaring_wave_prop() {
+                    vars!($crate::solver::RoaringWavePropagationSolver)
+                }
+                #[test]
+                fn roaring() {
+                    vars!($crate::solver::BasicRoaringSolver)
+                }
+                #[test]
                 fn generic() {
                     #[allow(non_camel_case_types)]
                     #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
                     enum Term {
                         $( $var , )+
                     }
-                    type $solver = $crate::solver::GenericSolver<Term, $crate::solver::BasicHashSolver>;
+                    type $solver = $crate::solver::GenericSolver<Term, $crate::solver::BasicHashSolver, <$crate::solver::BasicHashSolver as Solver>::Term>;
                     use Term::*;
                     $body
                 }
@@ -66,16 +83,16 @@ fn solver_test_template<T, S>(
 ) where
     T: Eq + Hash + Copy + Debug,
     S: Solver<Term = T>,
-    S::TermSet: IterableTermSet<T>,
 {
     let mut solver = S::new(terms.clone(), allowed_offsets);
     for c in constraints {
         solver.add_constraint(c);
     }
+    solver.finalize();
 
     let actual_output: HashMap<T, HashSet<T>> = terms
         .into_iter()
-        .map(|t| (t, solver.get_solution(&t).iter_term_set().collect()))
+        .map(|t| (t, solver.get_solution(&t).iter().collect()))
         .collect();
 
     assert_eq!(expected_output, actual_output);
