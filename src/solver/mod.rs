@@ -1,16 +1,27 @@
-use bitvec::prelude::*;
-use hashbrown::{hash_set, HashMap, HashSet};
+use hashbrown::{HashMap, HashSet};
+use roaring::RoaringBitmap;
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::iter::Copied;
+use std::iter::Cloned;
+use std::ops::Add;
 
+mod basic;
+mod better_bitvec;
 mod bit_vec;
-mod hash;
+mod stats;
 #[cfg(test)]
 mod tests;
+mod wave_prop;
 
+pub use basic::{BasicBetterBitVecSolver, BasicHashSolver, BasicRoaringSolver};
+pub use better_bitvec::BetterBitVec;
 pub use bit_vec::BasicBitVecSolver;
-pub use hash::BasicHashSolver;
+pub use stats::StatSolver;
+pub use wave_prop::{
+    BetterBitVecWavePropagationSolver, HashWavePropagationSolver, RoaringWavePropagationSolver,
+};
+
+use crate::visualizer::Node;
 
 #[derive(Debug)]
 pub enum Constraint<T> {
@@ -93,76 +104,195 @@ enum UnivCond<T: Clone> {
     SubsetRight { left: T, offset: usize },
 }
 
+pub trait TermSetTrait: Clone + Default {
+    type Term;
+
+    type Iterator<'a>: Iterator<Item = Self::Term>
+    where
+        Self: 'a;
+
+    fn new() -> Self;
+    fn len(&self) -> usize;
+    fn contains(&self, term: Self::Term) -> bool;
+    // Returns true if the term was present before removal
+    fn remove(&mut self, term: Self::Term) -> bool;
+    // Returns true if the term was not present before insertion
+    fn insert(&mut self, term: Self::Term) -> bool;
+    fn union_assign(&mut self, other: &Self);
+    fn extend<T: Iterator<Item = Self::Term>>(&mut self, other: T);
+    fn difference(&self, other: &Self) -> Self;
+    fn iter<'a>(&'a self) -> Self::Iterator<'a>;
+}
+
+impl<T: Eq + PartialEq + Hash + Clone> TermSetTrait for HashSet<T> {
+    type Term = T;
+
+    type Iterator<'a> = Cloned<hashbrown::hash_set::Iter<'a, T>> where T: 'a;
+
+    #[inline]
+    fn new() -> Self {
+        HashSet::new()
+    }
+
+    #[inline]
+    fn len(&self) -> usize {
+        HashSet::len(&self)
+    }
+
+    #[inline]
+    fn contains(&self, term: Self::Term) -> bool {
+        HashSet::contains(self, &term)
+    }
+
+    #[inline]
+    fn remove(&mut self, term: Self::Term) -> bool {
+        HashSet::remove(self, &term)
+    }
+
+    #[inline]
+    fn insert(&mut self, term: Self::Term) -> bool {
+        HashSet::insert(self, term)
+    }
+
+    #[inline]
+    fn union_assign(&mut self, other: &Self) {
+        Extend::extend(self, other.iter().cloned());
+    }
+
+    #[inline]
+    fn extend<U: Iterator<Item = Self::Term>>(&mut self, other: U) {
+        Extend::extend(self, other);
+    }
+
+    #[inline]
+    fn difference(&self, other: &Self) -> Self {
+        HashSet::difference(self, other).cloned().collect()
+    }
+
+    #[inline]
+    fn iter<'a>(&'a self) -> Self::Iterator<'a> {
+        HashSet::iter(self).cloned()
+    }
+}
+
+impl TermSetTrait for RoaringBitmap {
+    type Term = u32;
+
+    type Iterator<'a> = roaring::bitmap::Iter<'a>;
+
+    #[inline]
+    fn new() -> Self {
+        RoaringBitmap::new()
+    }
+
+    #[inline]
+    fn len(&self) -> usize {
+        RoaringBitmap::len(self) as usize
+    }
+
+    #[inline]
+    fn contains(&self, term: Self::Term) -> bool {
+        RoaringBitmap::contains(&self, term)
+    }
+
+    #[inline]
+    fn remove(&mut self, term: Self::Term) -> bool {
+        RoaringBitmap::remove(self, term)
+    }
+
+    #[inline]
+    fn insert(&mut self, term: Self::Term) -> bool {
+        RoaringBitmap::insert(self, term)
+    }
+
+    #[inline]
+    fn union_assign(&mut self, other: &Self) {
+        *self |= other;
+    }
+
+    #[inline]
+    fn extend<T: Iterator<Item = Self::Term>>(&mut self, other: T) {
+        Extend::extend(self, other)
+    }
+
+    #[inline]
+    fn difference(&self, other: &Self) -> Self {
+        self - other
+    }
+
+    #[inline]
+    fn iter<'a>(&'a self) -> Self::Iterator<'a> {
+        RoaringBitmap::iter(&self)
+    }
+}
+
 pub trait Solver {
     type Term;
-    type TermSet;
+    type TermSet: TermSetTrait<Term = Self::Term>;
 
     fn new(terms: Vec<Self::Term>, allowed_offsets: Vec<(Self::Term, usize)>) -> Self;
 
     fn add_constraint(&mut self, c: Constraint<Self::Term>);
     fn get_solution(&self, node: &Self::Term) -> Self::TermSet;
+
+    fn finalize(&mut self);
 }
 
-pub trait IterableTermSet<T> {
-    type Iter<'a>: Iterator<Item = T>
-    where
-        Self: 'a;
-    fn iter_term_set<'a>(&'a self) -> Self::Iter<'a>;
-}
-
-impl<T> IterableTermSet<T> for HashSet<T>
-where
-    T: Copy,
-{
-    type Iter<'a> = Copied<hash_set::Iter<'a, T>> where T: 'a;
-
-    fn iter_term_set<'a>(&'a self) -> Self::Iter<'a> {
-        self.iter().copied()
-    }
-}
-
-impl IterableTermSet<usize> for BitVec {
-    type Iter<'a> = bitvec::slice::IterOnes<'a, usize, Lsb0>;
-
-    fn iter_term_set<'a>(&'a self) -> Self::Iter<'a> {
-        self.iter_ones()
-    }
-}
-
-pub struct GenericSolver<T, S> {
+pub struct GenericSolver<T, S, T2> {
     terms: Vec<T>,
-    term_map: HashMap<T, usize>,
+    term_map: HashMap<T, T2>,
     sub_solver: S,
 }
 
-fn term_to_usize<T>(term_map: &HashMap<T, usize>, term: &T) -> usize
+fn term_to_t2<T, T2>(term_map: &HashMap<T, T2>, term: &T) -> T2
 where
     T: Hash + Eq + Debug,
+    T2: Copy,
 {
-    *term_map.get(term).expect(&format!(
-        "Invalid lookup for term that was not passed in during initialization: {term:?}"
-    ))
+    *term_map.get(term).unwrap_or_else(|| {
+        panic!("Invalid lookup for term that was not passed in during initialization: {term:?}")
+    })
 }
 
-fn offset_term(
-    term: usize,
-    allowed_offsets: &HashMap<usize, usize>,
-    offset: usize,
-) -> Option<usize> {
+fn edges_between<T: Hash + Eq + TryInto<usize>, U: Default>(
+    edges: &mut Vec<HashMap<T, U>>,
+    left: T,
+    right: T,
+) -> &mut U {
+    edges[left
+        .try_into()
+        .map_err(|_| ())
+        .expect("Could not convert to usize")]
+    .entry(right)
+    .or_default()
+}
+
+fn offset_term<T>(term: T, allowed_offsets: &HashMap<T, usize>, offset: usize) -> Option<T>
+where
+    T: Hash + Eq + Ord + TryInto<usize> + TryFrom<usize> + Add<T, Output = T>,
+{
     if offset == 0 {
         Some(term)
     } else {
-        allowed_offsets
-            .get(&term)
-            .and_then(|&max_offset| (offset <= max_offset).then(|| term + offset))
+        allowed_offsets.get(&term).and_then(|&max_offset| {
+            (offset <= max_offset).then(|| {
+                term + offset
+                    .try_into()
+                    .map_err(|_| ())
+                    .expect("Could not convert from usize")
+            })
+        })
     }
 }
 
-fn offset_terms<'a>(
-    terms: impl Iterator<Item = usize>,
-    allowed_offsets: &HashMap<usize, usize>,
+fn offset_terms<T>(
+    terms: impl Iterator<Item = T>,
+    allowed_offsets: &HashMap<T, usize>,
     offset: usize,
-) -> Vec<usize> {
+) -> Vec<T>
+where
+    T: Hash + Eq + Ord + TryInto<usize> + TryFrom<usize> + Add<T, Output = T>,
+{
     if offset == 0 {
         terms.collect()
     } else {
@@ -172,23 +302,56 @@ fn offset_terms<'a>(
     }
 }
 
-impl<T, S> GenericSolver<T, S>
+fn to_usize<T>(v: T) -> usize
+where
+    T: TryInto<usize>,
+{
+    v.try_into()
+        .map_err(|_| ())
+        .expect("Could not convert to usize")
+}
+
+fn from_usize<T>(v: usize) -> T
+where
+    T: TryFrom<usize>,
+{
+    v.try_into()
+        .map_err(|_| ())
+        .expect("Could not convert to usize")
+}
+
+impl<T: Clone, S, T2> GenericSolver<T, S, T2> {
+    fn terms_as_nodes(&self) -> Vec<Node<T>> {
+        self.terms
+            .iter()
+            .enumerate()
+            .map(|(n, t)| Node {
+                inner: t.clone(),
+                id: n,
+            })
+            .collect()
+    }
+}
+
+impl<T, S> GenericSolver<T, S, S::Term>
 where
     T: Hash + Eq + Clone + Debug,
+    S: Solver,
+    S::Term: TryInto<usize> + TryFrom<usize> + Copy,
 {
-    fn term_to_usize(&self, term: &T) -> usize {
-        term_to_usize(&self.term_map, term)
+    fn term_to_t2(&self, term: &T) -> S::Term {
+        term_to_t2(&self.term_map, term)
     }
 
-    fn usize_to_term(&self, i: usize) -> T {
-        self.terms[i].clone()
+    fn t2_to_term(&self, i: S::Term) -> T {
+        self.terms[to_usize(i)].clone()
     }
 
-    fn translate_constraint(&self, c: Constraint<T>) -> Constraint<usize> {
+    fn translate_constraint(&self, c: Constraint<T>) -> Constraint<S::Term> {
         match c {
             Constraint::Inclusion { term, node } => {
-                let term = self.term_to_usize(&term);
-                let node = self.term_to_usize(&node);
+                let term = self.term_to_t2(&term);
+                let node = self.term_to_t2(&node);
                 cstr!(term in node)
             }
             Constraint::Subset {
@@ -196,8 +359,8 @@ where
                 right,
                 offset,
             } => {
-                let left = self.term_to_usize(&left);
-                let right = self.term_to_usize(&right);
+                let left = self.term_to_t2(&left);
+                let right = self.term_to_t2(&right);
                 cstr!(left + offset <= right)
             }
             Constraint::UnivCondSubsetLeft {
@@ -205,8 +368,8 @@ where
                 right,
                 offset,
             } => {
-                let cond_node = self.term_to_usize(&cond_node);
-                let right = self.term_to_usize(&right);
+                let cond_node = self.term_to_t2(&cond_node);
+                let right = self.term_to_t2(&right);
                 cstr!(c in cond_node + offset : c <= right)
             }
             Constraint::UnivCondSubsetRight {
@@ -214,19 +377,19 @@ where
                 left,
                 offset,
             } => {
-                let cond_node = self.term_to_usize(&cond_node);
-                let left = self.term_to_usize(&left);
+                let cond_node = self.term_to_t2(&cond_node);
+                let left = self.term_to_t2(&left);
                 cstr!(c in cond_node + offset : left <= c)
             }
         }
     }
 }
 
-impl<T, S> Solver for GenericSolver<T, S>
+impl<T, S> Solver for GenericSolver<T, S, S::Term>
 where
     T: Hash + Eq + Clone + Debug,
-    S: Solver<Term = usize>,
-    S::TermSet: IterableTermSet<usize>,
+    S: Solver,
+    S::Term: TryInto<usize> + TryFrom<usize> + Copy,
 {
     type Term = T;
     type TermSet = HashSet<T>;
@@ -237,13 +400,19 @@ where
             .iter()
             .cloned()
             .enumerate()
-            .map(|(i, t)| (t, i))
+            .map(|(i, t)| (t, from_usize(i)))
             .collect();
         let sub_solver = S::new(
-            (0..length).collect(),
+            (0..length)
+                .map(|v| {
+                    v.try_into()
+                        .map_err(|_| ())
+                        .expect("Could not convert to usize")
+                })
+                .collect(),
             allowed_offsets
                 .into_iter()
-                .map(|(term, offset)| (term_to_usize(&term_map, &term), offset))
+                .map(|(term, offset)| (term_to_t2(&term_map, &term), offset))
                 .collect(),
         );
         Self {
@@ -258,7 +427,11 @@ where
     }
 
     fn get_solution(&self, node: &T) -> HashSet<T> {
-        let sol = self.sub_solver.get_solution(&self.term_to_usize(node));
-        HashSet::from_iter(sol.iter_term_set().map(|i| self.usize_to_term(i)))
+        let sol = self.sub_solver.get_solution(&self.term_to_t2(node));
+        HashSet::from_iter(sol.iter().map(|i| self.t2_to_term(i)))
+    }
+
+    fn finalize(&mut self) {
+        self.sub_solver.finalize();
     }
 }

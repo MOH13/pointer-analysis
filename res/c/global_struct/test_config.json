@@ -6,6 +6,7 @@
             "stack-%a@main"
         ],
         "global-%struct_instance[1]": [
+            "global-%global_int",
             "stack-%b@main"
         ]
     }

@@ -2,6 +2,9 @@
 source.ll
 *.h.gch
 /llvmtemp
-/benchmarks/curl
-/benchmarks/scbf-compiler
+/benchmarks
+.DS_Store
 *.bc
+*.dot
+*.svg
+heaptrack.*

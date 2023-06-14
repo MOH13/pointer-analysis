@@ -1,5 +1,5 @@
 use bitvec::prelude::*;
-use hashbrown::HashMap;
+use hashbrown::{HashMap, HashSet};
 use std::collections::VecDeque;
 
 use bitvec::vec::BitVec;
@@ -90,7 +90,7 @@ impl BasicBitVecSolver {
 
 impl Solver for BasicBitVecSolver {
     type Term = usize;
-    type TermSet = BitVec;
+    type TermSet = HashSet<usize>;
 
     fn new(terms: Vec<usize>, allowed_offsets: Vec<(usize, usize)>) -> Self {
         let mut offset_bitmask = bitvec![0; terms.len()];
@@ -159,7 +159,9 @@ impl Solver for BasicBitVecSolver {
         self.propagate()
     }
 
-    fn get_solution(&self, node: &usize) -> BitVec {
-        self.sols[*node].clone()
+    fn get_solution(&self, node: &usize) -> HashSet<usize> {
+        self.sols[*node].iter_ones().collect()
     }
+
+    fn finalize(&mut self) {}
 }
