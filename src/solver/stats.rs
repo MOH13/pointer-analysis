@@ -32,11 +32,6 @@ impl<T> Default for DummyTermSet<T> {
 impl<T: Hash + Eq + Clone> TermSetTrait for DummyTermSet<T> {
     type Term = T;
 
-    type Iterator<'a> = std::vec::IntoIter<T>
-    where
-        Self: 'a,
-    ;
-
     fn new() -> Self {
         Self::default()
     }
@@ -65,8 +60,8 @@ impl<T: Hash + Eq + Clone> TermSetTrait for DummyTermSet<T> {
         Self::default()
     }
 
-    fn iter<'a>(&'a self) -> Self::Iterator<'a> {
-        vec![].into_iter()
+    fn iter(&self) -> impl Iterator<Item = Self::Term> {
+        [].into_iter()
     }
 }
 

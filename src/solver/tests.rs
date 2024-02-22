@@ -56,6 +56,10 @@ macro_rules! solver_tests {
                     vars!($crate::solver::RoaringWavePropagationSolver)
                 }
                 #[test]
+                fn shared_bitvec_wave_prop() {
+                    vars!($crate::solver::SharedBitVecWavePropagationSolver)
+                }
+                #[test]
                 fn roaring() {
                     vars!($crate::solver::BasicRoaringSolver)
                 }

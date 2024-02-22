@@ -3,7 +3,7 @@ use pointer_analysis::analysis::PointsToAnalysis;
 use pointer_analysis::solver::{
     BasicBetterBitVecSolver, BasicBitVecSolver, BasicHashSolver, BasicRoaringSolver,
     BetterBitVecWavePropagationSolver, GenericSolver, HashWavePropagationSolver,
-    RoaringWavePropagationSolver, Solver,
+    RoaringWavePropagationSolver, SharedBitVecWavePropagationSolver, Solver,
 };
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
@@ -31,19 +31,19 @@ where
 }
 
 fn hash(c: &mut Criterion) {
-    bench_template::<BasicHashSolver>("BasicHash", c);
+    bench_template::<BasicHashSolver>("HashWorklist", c);
 }
 
 fn bit_vec(c: &mut Criterion) {
-    bench_template::<BasicBitVecSolver>("BitVec", c);
+    bench_template::<BasicBitVecSolver>("BitVecWorklist", c);
 }
 
 fn better_bit_vec(c: &mut Criterion) {
-    bench_template::<BasicBetterBitVecSolver>("BetterBitVec", c);
+    bench_template::<BasicBetterBitVecSolver>("BetterBitVecWorklist", c);
 }
 
 fn roaring(c: &mut Criterion) {
-    bench_template::<BasicRoaringSolver>("BasicRoaring", c);
+    bench_template::<BasicRoaringSolver>("RoaringWorklist", c);
 }
 
 fn hash_wave_prop(c: &mut Criterion) {
@@ -58,15 +58,20 @@ fn better_bitvec_wave_prop(c: &mut Criterion) {
     bench_template::<BetterBitVecWavePropagationSolver>("BetterBitVecWaveProp", c);
 }
 
+fn shared_bitvec_wave_prop(c: &mut Criterion) {
+    bench_template::<SharedBitVecWavePropagationSolver>("SharedBitVecWaveProp", c);
+}
+
 criterion_group! {
     name = benches;
     config = Criterion::default().sample_size(10);
     targets = hash,
-    bit_vec,
+    //bit_vec,
     better_bit_vec,
     roaring,
     hash_wave_prop,
     roaring_wave_prop,
-    better_bitvec_wave_prop
+    better_bitvec_wave_prop,
+    shared_bitvec_wave_prop,
 }
 criterion_main!(benches);

@@ -2,12 +2,12 @@ use hashbrown::{HashMap, HashSet};
 use roaring::RoaringBitmap;
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::iter::Cloned;
 use std::ops::Add;
 
 mod basic;
 mod better_bitvec;
 mod bit_vec;
+mod shared_bitvec;
 mod stats;
 #[cfg(test)]
 mod tests;
@@ -19,6 +19,7 @@ pub use bit_vec::BasicBitVecSolver;
 pub use stats::StatSolver;
 pub use wave_prop::{
     BetterBitVecWavePropagationSolver, HashWavePropagationSolver, RoaringWavePropagationSolver,
+    SharedBitVecWavePropagationSolver,
 };
 
 use crate::visualizer::Node;
@@ -107,10 +108,6 @@ enum UnivCond<T: Clone> {
 pub trait TermSetTrait: Clone + Default {
     type Term;
 
-    type Iterator<'a>: Iterator<Item = Self::Term>
-    where
-        Self: 'a;
-
     fn new() -> Self;
     fn len(&self) -> usize;
     fn contains(&self, term: Self::Term) -> bool;
@@ -121,13 +118,11 @@ pub trait TermSetTrait: Clone + Default {
     fn union_assign(&mut self, other: &Self);
     fn extend<T: Iterator<Item = Self::Term>>(&mut self, other: T);
     fn difference(&self, other: &Self) -> Self;
-    fn iter<'a>(&'a self) -> Self::Iterator<'a>;
+    fn iter(&self) -> impl Iterator<Item = Self::Term>;
 }
 
 impl<T: Eq + PartialEq + Hash + Clone> TermSetTrait for HashSet<T> {
     type Term = T;
-
-    type Iterator<'a> = Cloned<hashbrown::hash_set::Iter<'a, T>> where T: 'a;
 
     #[inline]
     fn new() -> Self {
@@ -170,15 +165,13 @@ impl<T: Eq + PartialEq + Hash + Clone> TermSetTrait for HashSet<T> {
     }
 
     #[inline]
-    fn iter<'a>(&'a self) -> Self::Iterator<'a> {
+    fn iter(&self) -> impl Iterator<Item = Self::Term> {
         HashSet::iter(self).cloned()
     }
 }
 
 impl TermSetTrait for RoaringBitmap {
     type Term = u32;
-
-    type Iterator<'a> = roaring::bitmap::Iter<'a>;
 
     #[inline]
     fn new() -> Self {
@@ -221,7 +214,7 @@ impl TermSetTrait for RoaringBitmap {
     }
 
     #[inline]
-    fn iter<'a>(&'a self) -> Self::Iterator<'a> {
+    fn iter(&self) -> impl Iterator<Item = Self::Term> {
         RoaringBitmap::iter(&self)
     }
 }
