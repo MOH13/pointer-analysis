@@ -18,6 +18,9 @@ stderrlog = "0.5.4"
 roaring = "0.10.1"
 dot = "0.1.4"
 lazy_static = "1.4.0"
+smallvec = { version = "1.13.1", features = ["const_generics"] }
+arrayvec = "0.7.4"
+tinybitset = "0.0.1"
 
 [dev-dependencies]
 serde = { version = "1.0.159", features = ["derive"] }
@@ -28,9 +31,7 @@ glob = "0.3.1"
 
 [build-dependencies]
 build-deps = "0.1.4"
-
-[profile.bench]
-debug=true
+# debug = true
 
 [[bench]]
 name = "real_world"

@@ -7,6 +7,7 @@ use hashbrown::{HashMap, HashSet};
 use once_cell::unsync::Lazy;
 use roaring::RoaringBitmap;
 
+use super::shared_bitvec::SharedBitVec;
 use super::{
     edges_between, offset_term, BetterBitVec, Constraint, GenericSolver, Solver, TermSetTrait,
 };
@@ -426,6 +427,7 @@ fn get_representative<T: Eq + PartialEq + Hash + Copy>(parents: &mut HashMap<T, 
 pub type HashWavePropagationSolver = WavePropagationSolver<HashSet<Term>>;
 pub type RoaringWavePropagationSolver = WavePropagationSolver<RoaringBitmap>;
 pub type BetterBitVecWavePropagationSolver = WavePropagationSolver<BetterBitVec>;
+pub type SharedBitVecWavePropagationSolver = WavePropagationSolver<SharedBitVec>;
 
 #[derive(Clone)]
 pub struct WavePropagationNode<T> {

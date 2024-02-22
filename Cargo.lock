@@ -87,6 +87,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrayvec"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96d30a06541fbafbc7f82ed10c06164cfbd2c401138f6addd8404629c4b16711"
+
+[[package]]
 name = "atty"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -617,9 +623,9 @@ dependencies = [
 
 [[package]]
 name = "num-traits"
-version = "0.2.15"
+version = "0.2.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "578ede34cf02f8924ab9447f50c28075b4d3e5b269972345e7e0372b38c6cdcd"
+checksum = "da0df0e5185db44f69b44f26786fe401b6c293d1907744beaa7fa62b2e5a517a"
 dependencies = [
  "autocfg",
 ]
@@ -684,6 +690,7 @@ dependencies = [
 name = "pointer-analysis"
 version = "0.1.0"
 dependencies = [
+ "arrayvec",
  "bitvec",
  "build-deps",
  "clap 4.2.7",
@@ -699,8 +706,10 @@ dependencies = [
  "roaring",
  "serde",
  "serde_json",
+ "smallvec",
  "stderrlog",
  "test-generator",
+ "tinybitset",
 ]
 
 [[package]]
@@ -874,6 +883,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "smallvec"
+version = "1.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6ecd384b10a64542d77071bd64bd7b231f4ed5940fba55e98c3de13824cf3d7"
+
+[[package]]
 name = "stderrlog"
 version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -955,6 +970,15 @@ checksum = "3fdd6f064ccff2d6567adcb3873ca630700f00b5ad3f060c25b5dcfd9a4ce152"
 dependencies = [
  "cfg-if",
  "once_cell",
+]
+
+[[package]]
+name = "tinybitset"
+version = "0.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "531cf39f777aa8fb6284385243d3e0fdcb7577fd159691ee5e7d2170561f3521"
+dependencies = [
+ "num-traits",
 ]
 
 [[package]]
