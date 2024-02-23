@@ -13,8 +13,9 @@ use test_generator::test_resources;
 use crate::analysis::PointsToAnalysis;
 use crate::solver::{
     BasicBetterBitVecSolver, BasicBitVecSolver, BasicHashSolver, BasicRoaringSolver,
-    BetterBitVecWavePropagationSolver, GenericSolver, HashWavePropagationSolver,
-    RoaringWavePropagationSolver, Solver,
+    BasicSharedBitVecSolver, BetterBitVecWavePropagationSolver, GenericSolver,
+    HashWavePropagationSolver, RoaringWavePropagationSolver, SharedBitVecWavePropagationSolver,
+    Solver,
 };
 
 use super::Cell;
@@ -154,6 +155,11 @@ fn roaring(resource: &str) {
 }
 
 #[test_resources("res/**/test_config.json")]
+fn shared_bit_vec(resource: &str) {
+    run_test_template::<BasicSharedBitVecSolver>(resource)
+}
+
+#[test_resources("res/**/test_config.json")]
 fn wave_prop(resource: &str) {
     run_test_template::<HashWavePropagationSolver>(resource)
 }
@@ -161,6 +167,11 @@ fn wave_prop(resource: &str) {
 #[test_resources("res/**/test_config.json")]
 fn roaring_wave_prop(resource: &str) {
     run_test_template::<RoaringWavePropagationSolver>(resource)
+}
+
+#[test_resources("res/**/test_config.json")]
+fn shared_bit_vec_wave_prop(resource: &str) {
+    run_test_template::<SharedBitVecWavePropagationSolver>(resource)
 }
 
 #[test_resources("res/**/test_config.json")]

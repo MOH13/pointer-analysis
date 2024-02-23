@@ -13,7 +13,9 @@ mod stats;
 mod tests;
 mod wave_prop;
 
-pub use basic::{BasicBetterBitVecSolver, BasicHashSolver, BasicRoaringSolver};
+pub use basic::{
+    BasicBetterBitVecSolver, BasicHashSolver, BasicRoaringSolver, BasicSharedBitVecSolver,
+};
 pub use better_bitvec::BetterBitVec;
 pub use bit_vec::BasicBitVecSolver;
 pub use stats::StatSolver;
