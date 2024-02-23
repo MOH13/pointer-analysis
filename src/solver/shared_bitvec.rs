@@ -38,11 +38,7 @@ pub enum SharedBitVec {
 
 impl Default for SharedBitVec {
     fn default() -> Self {
-        // Self::Array(ArrayVec::new())
-        Self::BitVec(InnerBitVec {
-            segments: SmallVec::new(),
-            len: 0,
-        })
+        Self::Array(ArrayVec::new())
     }
 }
 
@@ -297,24 +293,24 @@ impl TermSetTrait for SharedBitVec {
                                 }
                                 self_idx += 1;
                             } else if self_segment.start_index > other_segment.start_index {
-                                if let Some(queue_segment) = queue.front() {
-                                    if other_segment.start_index < queue_segment.start_index {
-                                        let mut new_segment = other_segment.clone();
+                                if queue.front().map_or(true, |queue_segment| {
+                                    other_segment.start_index < queue_segment.start_index
+                                }) {
+                                    let mut new_segment = other_segment.clone();
+                                    self_inner.len -= self_segment.len();
+                                    self_inner.len += new_segment.len();
+                                    std::mem::swap(self_segment, &mut new_segment);
+                                    queue.push_back(new_segment);
+                                    other_idx += 1;
+                                } else {
+                                    let mut queue_segment = queue.pop_front().unwrap();
+                                    if other_segment.start_index > queue_segment.start_index {
                                         self_inner.len -= self_segment.len();
-                                        self_inner.len += new_segment.len();
-                                        std::mem::swap(self_segment, &mut new_segment);
-                                        queue.push_back(new_segment);
-                                        other_idx += 1;
-                                    } else if other_segment.start_index > queue_segment.start_index
-                                    {
-                                        let mut new_segment = queue.pop_front().unwrap();
-                                        self_inner.len -= self_segment.len();
-                                        self_inner.len += new_segment.len();
-                                        std::mem::swap(self_segment, &mut new_segment);
-                                        queue.push_back(new_segment);
+                                        self_inner.len += queue_segment.len();
+                                        std::mem::swap(self_segment, &mut queue_segment);
+                                        queue.push_back(queue_segment);
                                     } else {
-                                        let new_chunk = *other_segment.chunk
-                                            | *queue.pop_front().unwrap().chunk;
+                                        let new_chunk = *other_segment.chunk | *queue_segment.chunk;
                                         let new_count = chunk_diff(&new_chunk, &self_segment.chunk);
                                         if new_count > 0 {
                                             self_segment.chunk = Rc::new(new_chunk);
@@ -357,6 +353,7 @@ impl TermSetTrait for SharedBitVec {
                                 other_segment.start_index < queue_segment.start_index
                             }) {
                                 self_segments.push(other_segment.clone());
+                                self_inner.len += other_segment.len();
                                 other_idx += 1;
                             } else {
                                 let queue_segment = queue.pop_front().unwrap();
