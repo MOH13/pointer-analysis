@@ -30,7 +30,7 @@ impl Segment {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug)]
 pub enum SharedBitVec {
     Array(ArrayVec<Term, ARRAY_VEC_SIZE>),
     BitVec(InnerBitVec),
@@ -46,10 +46,45 @@ impl Default for SharedBitVec {
     }
 }
 
-#[derive(Clone, Default, PartialEq, Eq, Debug)]
+impl Clone for SharedBitVec {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Array(terms) => Self::Array(terms.clone()),
+            Self::BitVec(segments) => Self::BitVec(segments.clone()),
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        match (self, source) {
+            (SharedBitVec::Array(self_terms), SharedBitVec::Array(source_terms)) => {
+                self_terms.clone_from(source_terms);
+            }
+            (SharedBitVec::BitVec(self_inner), SharedBitVec::BitVec(source_inner)) => {
+                self_inner.clone_from(source_inner);
+            }
+            (this, _) => *this = source.clone(),
+        }
+    }
+}
+
+#[derive(Default, PartialEq, Eq, Debug)]
 pub struct InnerBitVec {
     segments: SmallVec<[Segment; BACKING_ARRAY_SIZE]>,
     len: u32,
+}
+
+impl Clone for InnerBitVec {
+    fn clone(&self) -> Self {
+        Self {
+            segments: self.segments.clone(),
+            len: self.len,
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.segments.clone_from(&source.segments);
+        self.len = source.len;
+    }
 }
 
 impl InnerBitVec {
@@ -353,30 +388,28 @@ impl TermSetTrait for SharedBitVec {
                             self_idx += 1;
                         }
                         (None, Some(other_segment)) => {
-                            if let Some(queue_segment) = queue.front() {
-                                if other_segment.start_index < queue_segment.start_index {
-                                    let mut new_segment = other_segment.clone();
-                                    std::mem::swap(&mut self_segments[self_idx], &mut new_segment);
-                                    queue.push_back(new_segment);
-                                    self_segments[self_idx] = other_segment.clone();
-                                    other_idx += 1;
-                                } else if other_segment.start_index > queue_segment.start_index {
-                                    let mut new_segment = queue.pop_front().unwrap();
-                                    std::mem::swap(&mut self_segments[self_idx], &mut new_segment);
-                                    queue.push_back(new_segment);
-                                } else {
-                                    let new_chunk =
-                                        *other_segment.chunk | *queue.pop_front().unwrap().chunk;
-                                    let new_count = new_chunk.len();
-                                    if new_count > 0 {
-                                        self_segments.push(Segment {
-                                            start_index: other_segment.start_index,
-                                            chunk: Rc::new(new_chunk),
-                                        });
-                                        self_inner.len += new_count as u32;
-                                    }
-                                    other_idx += 1;
+                            if other_segment.start_index < queue_segment.start_index {
+                                let mut new_segment = other_segment.clone();
+                                std::mem::swap(&mut self_segments[self_idx], &mut new_segment);
+                                queue.push_back(new_segment);
+                                self_segments[self_idx] = other_segment.clone();
+                                other_idx += 1;
+                            } else if other_segment.start_index > queue_segment.start_index {
+                                let mut new_segment = queue.pop_front().unwrap();
+                                std::mem::swap(&mut self_segments[self_idx], &mut new_segment);
+                                queue.push_back(new_segment);
+                            } else {
+                                let new_chunk =
+                                    *other_segment.chunk | *queue.pop_front().unwrap().chunk;
+                                let new_count = new_chunk.len();
+                                if new_count > 0 {
+                                    self_segments.push(Segment {
+                                        start_index: other_segment.start_index,
+                                        chunk: Rc::new(new_chunk),
+                                    });
+                                    self_inner.len += new_count as u32;
                                 }
+                                other_idx += 1;
                             }
                         }
                         (None, None) => unreachable!(),

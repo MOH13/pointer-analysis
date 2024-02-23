@@ -233,7 +233,7 @@ impl<T: TermSetTrait<Term = u32>> WavePropagationSolver<T> {
             }
             changed = true;
             let p_dif = self.sols[v as usize].difference(&p_old[v as usize]);
-            p_old[v as usize] = self.sols[v as usize].clone();
+            p_old[v as usize].clone_from(&self.sols[v as usize]);
 
             let allowed_offsets = Lazy::new(|| {
                 p_dif
