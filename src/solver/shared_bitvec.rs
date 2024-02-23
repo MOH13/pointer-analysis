@@ -388,26 +388,26 @@ impl TermSetTrait for SharedBitVec {
                             self_idx += 1;
                         }
                         (None, Some(other_segment)) => {
-                            if other_segment.start_index < queue_segment.start_index {
-                                let mut new_segment = other_segment.clone();
-                                std::mem::swap(&mut self_segments[self_idx], &mut new_segment);
-                                queue.push_back(new_segment);
-                                self_segments[self_idx] = other_segment.clone();
+                            if queue.front().map_or(true, |queue_segment| {
+                                other_segment.start_index < queue_segment.start_index
+                            }) {
+                                self_segments.push(other_segment.clone());
                                 other_idx += 1;
-                            } else if other_segment.start_index > queue_segment.start_index {
-                                let mut new_segment = queue.pop_front().unwrap();
-                                std::mem::swap(&mut self_segments[self_idx], &mut new_segment);
-                                queue.push_back(new_segment);
                             } else {
-                                let new_chunk =
-                                    *other_segment.chunk | *queue.pop_front().unwrap().chunk;
-                                let new_count = new_chunk.len();
-                                if new_count > 0 {
-                                    self_segments.push(Segment {
-                                        start_index: other_segment.start_index,
-                                        chunk: Rc::new(new_chunk),
-                                    });
-                                    self_inner.len += new_count as u32;
+                                let queue_segment = queue.pop_front().unwrap();
+                                if other_segment.start_index > queue_segment.start_index {
+                                    self_segments.push(queue_segment);
+                                } else {
+                                    let new_chunk = *other_segment.chunk | *queue_segment.chunk;
+                                    let new_count = new_chunk.len();
+                                    if new_count > 0 {
+                                        self_segments.push(Segment {
+                                            start_index: other_segment.start_index,
+                                            chunk: Rc::new(new_chunk),
+                                        });
+                                        self_inner.len += new_count as u32;
+                                    }
+                                    other_idx += 1;
                                 }
                                 other_idx += 1;
                             }
