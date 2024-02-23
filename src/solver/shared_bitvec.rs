@@ -38,7 +38,11 @@ pub enum SharedBitVec {
 
 impl Default for SharedBitVec {
     fn default() -> Self {
-        Self::Array(ArrayVec::new())
+        // Self::Array(ArrayVec::new())
+        Self::BitVec(InnerBitVec {
+            segments: SmallVec::new(),
+            len: 0,
+        })
     }
 }
 
@@ -71,7 +75,12 @@ impl InnerBitVec {
             .segments
             .binary_search_by_key(&start_index, |segment| segment.start_index)
         {
-            Ok(i) => &mut self.segments[i],
+            Ok(i) => {
+                if self.segments[i].chunk[index_in_chunk] {
+                    return false;
+                }
+                &mut self.segments[i]
+            }
             Err(i) => {
                 self.segments.insert(
                     i,
@@ -84,9 +93,6 @@ impl InnerBitVec {
             }
         };
 
-        if segment.chunk[index_in_chunk] {
-            return false;
-        }
         Rc::make_mut(&mut segment.chunk).insert(index_in_chunk);
         self.len += 1;
         true
@@ -100,15 +106,17 @@ impl InnerBitVec {
             .segments
             .binary_search_by_key(&start_index, |segment| segment.start_index)
         {
-            Ok(i) => &mut self.segments[i],
+            Ok(i) => {
+                if !self.segments[i].chunk[index_in_chunk] {
+                    return false;
+                }
+                &mut self.segments[i]
+            }
             Err(_) => {
                 return false;
             }
         };
 
-        if !segment.chunk[index_in_chunk] {
-            return false;
-        }
         Rc::make_mut(&mut segment.chunk).remove(index_in_chunk);
         self.len -= 1;
         true

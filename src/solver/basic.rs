@@ -5,6 +5,7 @@ use std::hash::Hash;
 use hashbrown::{HashMap, HashSet};
 use roaring::RoaringBitmap;
 
+use super::shared_bitvec::SharedBitVec;
 use super::{
     edges_between, offset_term, offset_terms, BetterBitVec, Constraint, GenericSolver, Solver,
     TermSetTrait, UnivCond,
@@ -141,6 +142,7 @@ impl<T: TermSetTrait<Term = u32>> Solver for BasicSolver<u32, T> {
 pub type BasicHashSolver = BasicSolver<u32, HashSet<u32>>;
 pub type BasicRoaringSolver = BasicSolver<u32, RoaringBitmap>;
 pub type BasicBetterBitVecSolver = BasicSolver<u32, BetterBitVec>;
+pub type BasicSharedBitVecSolver = BasicSolver<u32, SharedBitVec>;
 
 impl<T, S> Graph for GenericSolver<T, BasicSolver<u32, S>, u32>
 where

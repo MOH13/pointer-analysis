@@ -66,6 +66,8 @@ pub enum TermSet {
     Hash,
     /// Roaring bitmap
     Roaring,
+    /// Shared Bitvec
+    SharedBitVec,
 }
 
 impl Display for TermSet {
@@ -74,6 +76,7 @@ impl Display for TermSet {
             TermSet::BitVec => write!(f, "bitvec"),
             TermSet::Hash => write!(f, "hash"),
             TermSet::Roaring => write!(f, "roaring"),
+            TermSet::SharedBitVec => write!(f, "shared bitvec"),
         }
     }
 }
