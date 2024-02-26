@@ -29,13 +29,61 @@ struct CondRightEntry {
 
 pub struct WavePropagationSolver<T> {
     sols: Vec<T>,
-    edges: Vec<HashMap<Term, T>>,
+    edges: Vec<HashMap<Term, Edges>>,
     rev_edges: Vec<T>,
     left_conds: Vec<CondLeftEntry>,
     right_conds: Vec<CondRightEntry>,
     allowed_offsets: HashMap<Term, usize>,
     parents: HashMap<Term, Term>,
     top_order: Vec<Term>,
+}
+
+#[derive(Clone, Default)]
+struct Edges {
+    zero: bool,
+    offsets: Vec<usize>,
+}
+
+impl Edges {
+    fn contains(&self, offset: usize) -> bool {
+        if offset == 0 {
+            return self.zero;
+        }
+        return self.offsets.contains(&offset);
+    }
+
+    fn insert(&mut self, offset: usize) -> bool {
+        if offset == 0 && !self.zero {
+            self.zero = true;
+            return true;
+        } else {
+            match self.offsets.binary_search(&offset) {
+                Ok(_) => false,
+                Err(i) => {
+                    self.offsets.insert(i, offset);
+                    return true;
+                }
+            }
+        }
+    }
+
+    fn union_assign(&mut self, other: &Self) {
+        self.zero = other.zero;
+        for offset in &other.offsets {
+            self.insert(*offset);
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.zero as usize + self.offsets.len()
+    }
+
+    fn iter(&self) -> impl Iterator<Item = usize> + '_ {
+        self.zero
+            .then_some(0)
+            .into_iter()
+            .chain(self.offsets.iter().copied())
+    }
 }
 
 struct SCC<T> {
@@ -232,7 +280,7 @@ impl<T: TermSetTrait<Term = u32>> WavePropagationSolver<T> {
                 continue;
             }
             changed = true;
-            let p_dif = self.sols[v as usize].difference(&p_old[v as usize]);
+            let p_dif = self.sols[v as usize].weak_difference(&p_old[v as usize]);
             p_old[v as usize].clone_from(&self.sols[v as usize]);
 
             let allowed_offsets = Lazy::new(|| {
@@ -247,7 +295,7 @@ impl<T: TermSetTrait<Term = u32>> WavePropagationSolver<T> {
                         self.sols[w as usize].union_assign(&p_dif);
                     } else {
                         let to_add = p_dif.iter().enumerate().filter_map(|(i, t)| {
-                            (o <= allowed_offsets[i as usize] as Term).then(|| t + o as Term)
+                            (o <= allowed_offsets[i as usize]).then(|| t + o as Term)
                         });
                         self.sols[w as usize].extend(to_add);
                     }
@@ -332,7 +380,7 @@ impl<T: TermSetTrait<Term = u32>> WavePropagationSolver<T> {
         changed
     }
 
-    fn add_edge(&mut self, left: Term, right: Term, offset: Term) -> bool {
+    fn add_edge(&mut self, left: Term, right: Term, offset: usize) -> bool {
         let res = edges_between(&mut self.edges, left, right).insert(offset);
         if res {
             self.rev_edges[right as usize].insert(left);
@@ -368,7 +416,7 @@ impl<T: TermSetTrait<Term = u32>> Solver for WavePropagationSolver<T> {
                 right,
                 offset,
             } => {
-                self.add_edge(left, right, offset as Term);
+                self.add_edge(left, right, offset);
             }
             Constraint::UnivCondSubsetLeft {
                 cond_node,
@@ -514,7 +562,7 @@ where
                     let edge = Edge {
                         from: from_node.clone(),
                         to: to_node.clone(),
-                        weight: OffsetWeight(weight),
+                        weight: OffsetWeight(weight as Term),
                         kind: EdgeKind::Subset,
                     };
                     edges.push(edge);
