@@ -9,10 +9,10 @@ use tinybitset::TinyBitSet;
 use super::TermSetTrait;
 
 type Term = u32;
-type Chunk = TinyBitSet<u64, CHUNK_SIZE>;
+type Chunk = TinyBitSet<u64, BLOCKS_IN_CHUNK>;
 
-const CHUNK_SIZE: usize = 64;
-const ELEMS_IN_CHUNK: Term = usize::BITS * CHUNK_SIZE as Term;
+const BLOCKS_IN_CHUNK: usize = 64;
+const ELEMS_IN_CHUNK: Term = u64::BITS * BLOCKS_IN_CHUNK as Term;
 const BACKING_ARRAY_SIZE: usize = 4;
 
 // Maximal size of a sorted list of u32 terms so that it has the same size as InnerBitVec
@@ -137,16 +137,13 @@ impl InnerBitVec {
             .segments
             .binary_search_by_key(&start_index, |segment| segment.start_index)
         {
-            Ok(i) => {
-                if !self.segments[i].chunk[index_in_chunk] {
-                    return false;
-                }
-                &mut self.segments[i]
-            }
-            Err(_) => {
-                return false;
-            }
+            Ok(i) => &mut self.segments[i],
+            Err(_) => return false,
         };
+
+        if !segment.chunk[index_in_chunk] {
+            return false;
+        }
 
         Rc::make_mut(&mut segment.chunk).remove(index_in_chunk);
         self.len -= 1;
@@ -176,7 +173,7 @@ impl TermSetTrait for SharedBitVec {
     fn len(&self) -> usize {
         match self {
             SharedBitVec::Array(terms) => terms.len(),
-            SharedBitVec::BitVec(segments) => segments.len as usize,
+            SharedBitVec::BitVec(inner) => inner.len as usize,
         }
     }
 
@@ -237,9 +234,19 @@ impl TermSetTrait for SharedBitVec {
                 let mut merged: ArrayVec<_, ARRAY_VEC_SIZE> = ArrayVec::new();
                 let mut self_idx = 0;
                 let mut other_idx = 0;
-                while (self_idx < self_terms.len() || other_idx < other_terms.len())
-                    && !merged.is_full()
-                {
+                while self_idx < self_terms.len() || other_idx < other_terms.len() {
+                    if merged.is_full() {
+                        let mut inner = InnerBitVec::default();
+                        for &term in merged
+                            .iter()
+                            .chain(&self_terms[self_idx..])
+                            .chain(&other_terms[other_idx..])
+                        {
+                            inner.insert(term);
+                        }
+                        *this = SharedBitVec::BitVec(inner);
+                        return;
+                    }
                     match (self_terms.get(self_idx), other_terms.get(other_idx)) {
                         (Some(&self_term), Some(&other_term)) => {
                             if self_term < other_term {
@@ -266,19 +273,7 @@ impl TermSetTrait for SharedBitVec {
                     }
                 }
 
-                if merged.is_full() {
-                    let mut inner = InnerBitVec::default();
-                    for &term in merged
-                        .iter()
-                        .chain(&self_terms[self_idx..])
-                        .chain(&other_terms[other_idx..])
-                    {
-                        inner.insert(term);
-                    }
-                    *this = SharedBitVec::BitVec(inner);
-                } else {
-                    *this = SharedBitVec::Array(merged);
-                }
+                *this = SharedBitVec::Array(merged);
             }
             (this @ SharedBitVec::Array(_), SharedBitVec::BitVec(_)) => {
                 // TODO: Help us Polonius, you are our only hope
@@ -301,116 +296,78 @@ impl TermSetTrait for SharedBitVec {
                 let other_segments = &other_inner.segments;
 
                 let mut queue = VecDeque::<Segment>::new();
-                let mut self_idx = 0;
+                let mut self_iter = self_segments.iter_mut();
                 let mut other_idx = 0;
 
-                while self_idx < self_segments.len() || other_idx < other_segments.len() {
-                    match (
-                        self_segments.get_mut(self_idx),
-                        other_segments.get(self_idx),
-                    ) {
-                        (Some(self_segment), Some(other_segment)) => {
-                            if self_segment.start_index < other_segment.start_index {
-                                if let Some(mut queue_segment) = queue.pop_front() {
-                                    if self_segment.start_index > queue_segment.start_index {
-                                        self_inner.len -= self_segment.len();
-                                        self_inner.len += queue_segment.len();
-                                        std::mem::swap(self_segment, &mut queue_segment);
-                                        queue.push_back(queue_segment);
-                                    } else {
-                                        let new_chunk = *self_segment.chunk | *queue_segment.chunk;
-                                        let new_count = chunk_diff(&new_chunk, &self_segment.chunk);
-                                        if new_count > 0 {
-                                            self_segment.chunk = Rc::new(new_chunk);
-                                            self_inner.len += new_count as u32;
-                                        }
-                                    }
-                                }
-                                self_idx += 1;
-                            } else if self_segment.start_index > other_segment.start_index {
-                                if queue.front().map_or(true, |queue_segment| {
-                                    other_segment.start_index < queue_segment.start_index
-                                }) {
-                                    let mut new_segment = other_segment.clone();
-                                    self_inner.len -= self_segment.len();
-                                    self_inner.len += new_segment.len();
-                                    std::mem::swap(self_segment, &mut new_segment);
-                                    queue.push_back(new_segment);
-                                    other_idx += 1;
-                                } else {
-                                    let mut queue_segment = queue.pop_front().unwrap();
-                                    if other_segment.start_index > queue_segment.start_index {
-                                        self_inner.len -= self_segment.len();
-                                        self_inner.len += queue_segment.len();
-                                        std::mem::swap(self_segment, &mut queue_segment);
-                                        queue.push_back(queue_segment);
-                                    } else {
-                                        let new_chunk = *other_segment.chunk | *queue_segment.chunk;
-                                        let new_count = chunk_diff(&new_chunk, &self_segment.chunk);
-                                        if new_count > 0 {
-                                            self_segment.chunk = Rc::new(new_chunk);
-                                            self_inner.len += new_count as u32;
-                                        }
-                                        other_idx += 1;
-                                    }
-                                }
-                            } else {
-                                let new_chunk = *self_segment.chunk | *other_segment.chunk;
-                                let new_count = chunk_diff(&new_chunk, &self_segment.chunk);
-                                if new_count > 0 {
-                                    self_segment.chunk = Rc::new(new_chunk);
-                                    self_inner.len += new_count as u32;
-                                }
-                                self_idx += 1;
-                                other_idx += 1;
-                            }
-                        }
-                        (Some(self_segment), None) => {
-                            if let Some(mut queue_segment) = queue.pop_front() {
-                                if self_segment.start_index > queue_segment.start_index {
-                                    self_inner.len -= self_segment.len();
-                                    self_inner.len += queue_segment.len();
-                                    std::mem::swap(self_segment, &mut queue_segment);
-                                    queue.push_back(queue_segment);
-                                } else {
-                                    let new_chunk = *self_segment.chunk | *queue_segment.chunk;
-                                    let new_count = chunk_diff(&new_chunk, &self_segment.chunk);
-                                    if new_count > 0 {
-                                        self_segment.chunk = Rc::new(new_chunk);
-                                        self_inner.len += new_count as u32;
-                                    }
-                                }
-                            }
-                            self_idx += 1;
-                        }
-                        (None, Some(other_segment)) => {
-                            if queue.front().map_or(true, |queue_segment| {
-                                other_segment.start_index < queue_segment.start_index
-                            }) {
-                                self_segments.push(other_segment.clone());
-                                self_inner.len += other_segment.len();
-                                other_idx += 1;
-                            } else {
-                                let queue_segment = queue.pop_front().unwrap();
-                                if other_segment.start_index > queue_segment.start_index {
-                                    self_segments.push(queue_segment);
-                                } else {
-                                    let new_chunk = *other_segment.chunk | *queue_segment.chunk;
-                                    let new_count = new_chunk.len();
-                                    if new_count > 0 {
-                                        self_segments.push(Segment {
-                                            start_index: other_segment.start_index,
-                                            chunk: Rc::new(new_chunk),
-                                        });
-                                        self_inner.len += new_count as u32;
-                                    }
-                                    other_idx += 1;
-                                }
-                                other_idx += 1;
-                            }
-                        }
-                        (None, None) => unreachable!(),
+                for self_segment in &mut self_iter {
+                    let Some(other_segment) = other_segments.get(other_idx) else {
+                        if let Some(mut queue_segment) = queue.pop_front() {
+                            // queue_segment always comes from earlier in self_segment
+                            debug_assert!(self_segment.start_index > queue_segment.start_index);
+                            self_inner.len -= self_segment.len();
+                            self_inner.len += queue_segment.len();
+                            std::mem::swap(self_segment, &mut queue_segment);
+                            queue.push_back(queue_segment);
+                        };
+                        continue;
+                    };
+
+                    if queue
+                        .front()
+                        .is_some_and(|q| q.start_index <= other_segment.start_index)
+                    {
+                        let mut queue_segment = queue.pop_front().unwrap();
+                        // queue_segment always comes from earlier in self_segment
+                        debug_assert!(self_segment.start_index > queue_segment.start_index);
+                        self_inner.len -= self_segment.len();
+                        self_inner.len += queue_segment.len();
+                        std::mem::swap(self_segment, &mut queue_segment);
+                        queue.push_back(queue_segment);
                     }
+
+                    if self_segment.start_index > other_segment.start_index {
+                        let mut new_segment = other_segment.clone();
+                        self_inner.len -= self_segment.len();
+                        self_inner.len += new_segment.len();
+                        std::mem::swap(self_segment, &mut new_segment);
+                        queue.push_back(new_segment);
+                        other_idx += 1;
+                    } else if self_segment.start_index == other_segment.start_index {
+                        let new_chunk = *self_segment.chunk | *other_segment.chunk;
+                        let new_count = chunk_diff(&new_chunk, &self_segment.chunk);
+                        if new_count > 0 {
+                            self_segment.chunk = Rc::new(new_chunk);
+                            self_inner.len += new_count as u32;
+                        }
+                        other_idx += 1;
+                    }
+                }
+
+                for other_segment in &other_segments[other_idx..] {
+                    while let Some(queue_segment) = queue.front() {
+                        if queue_segment.start_index > other_segment.start_index {
+                            break;
+                        }
+                        let queue_segment = queue.pop_front().unwrap();
+                        if queue_segment.start_index < other_segment.start_index {
+                            self_inner.len += queue_segment.len();
+                            self_segments.push(queue_segment);
+                        } else {
+                            let new_chunk = *other_segment.chunk | *queue_segment.chunk;
+                            self_inner.len += new_chunk.len() as Term;
+                            self_segments.push(Segment {
+                                start_index: other_segment.start_index,
+                                chunk: Rc::new(new_chunk),
+                            });
+                        }
+                    }
+                    self_inner.len += other_segment.len();
+                    self_segments.push(other_segment.clone());
+                }
+
+                for queue_segment in queue.drain(..) {
+                    self_inner.len += queue_segment.len();
+                    self_segments.push(queue_segment);
                 }
             }
         }
@@ -495,7 +452,10 @@ impl TermSetTrait for SharedBitVec {
                     };
 
                     if other_idx == other_segments.len() {
-                        diff.segments.extend(self_iter.cloned());
+                        for segment in self_iter.cloned() {
+                            diff.len += segment.len();
+                            diff.segments.push(segment);
+                        }
                         break;
                     }
                 }
@@ -507,17 +467,11 @@ impl TermSetTrait for SharedBitVec {
     fn iter(&self) -> impl Iterator<Item = Self::Term> {
         match self {
             SharedBitVec::Array(terms) => Either::Left(terms.iter().copied()),
-            SharedBitVec::BitVec(inner) => Either::Right(
-                inner
-                    .segments
+            SharedBitVec::BitVec(inner) => Either::Right(inner.segments.iter().flat_map(|s| {
+                s.chunk
                     .iter()
-                    .map(|s| {
-                        s.chunk
-                            .iter()
-                            .map(|i| i as u32 + s.start_index * CHUNK_SIZE as u32)
-                    })
-                    .flatten(),
-            ),
+                    .map(|i| i as Term + s.start_index * ELEMS_IN_CHUNK as Term)
+            })),
         }
     }
 }
@@ -525,6 +479,7 @@ impl TermSetTrait for SharedBitVec {
 mod tests {
     use super::*;
     use arrayvec::ArrayVec;
+    use quickcheck_macros::quickcheck;
 
     #[test]
     fn test_difference() {
@@ -554,5 +509,33 @@ mod tests {
             bitvec,
             SharedBitVec::Array(ArrayVec::try_from([1, 2, 3, 4, 5].as_slice()).unwrap())
         );
+    }
+
+    #[quickcheck]
+    fn test_contains(terms: Vec<Term>) -> bool {
+        let mut bitvec = SharedBitVec::new();
+        for term in &terms {
+            bitvec.insert(*term);
+        }
+        for term in &terms {
+            if !bitvec.contains(*term) {
+                return false;
+            }
+        }
+        true
+    }
+
+    #[quickcheck]
+    fn test_iter_quickcheck(terms: Vec<Term>) -> bool {
+        let mut bitvec = SharedBitVec::new();
+        for term in &terms {
+            bitvec.insert(*term);
+        }
+        for term in bitvec.iter() {
+            if !bitvec.contains(term) {
+                return false;
+            }
+        }
+        true
     }
 }
