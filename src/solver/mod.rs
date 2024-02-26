@@ -119,8 +119,12 @@ pub trait TermSetTrait: Clone + Default {
     fn insert(&mut self, term: Self::Term) -> bool;
     fn union_assign(&mut self, other: &Self);
     fn extend<T: Iterator<Item = Self::Term>>(&mut self, other: T);
-    fn difference(&self, other: &Self) -> Self;
     fn iter(&self) -> impl Iterator<Item = Self::Term>;
+    fn difference(&self, other: &Self) -> Self;
+    // Only guarantees that the result is a subset of self and a superset of self.difference(other)
+    fn weak_difference(&self, other: &Self) -> Self {
+        self.difference(other)
+    }
 }
 
 impl<T: Eq + PartialEq + Hash + Clone> TermSetTrait for HashSet<T> {

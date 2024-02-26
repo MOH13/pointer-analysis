@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::ops::BitOr;
 use std::rc::Rc;
 
 use arrayvec::ArrayVec;
@@ -9,14 +10,13 @@ use tinybitset::TinyBitSet;
 use super::TermSetTrait;
 
 type Term = u32;
-type Chunk = TinyBitSet<u64, BLOCKS_IN_CHUNK>;
 
-const BLOCKS_IN_CHUNK: usize = 64;
+const BLOCKS_IN_CHUNK: usize = 24;
 const ELEMS_IN_CHUNK: Term = u64::BITS * BLOCKS_IN_CHUNK as Term;
-const BACKING_ARRAY_SIZE: usize = 4;
+const BACKING_ARRAY_SIZE: usize = 3;
 
 // Maximal size of a sorted list of u32 terms so that it has the same size as InnerBitVec
-const ARRAY_VEC_SIZE: usize = 19; // wrong: (std::mem::size_of::<InnerBitVec>() - 4) / 4 - 1;
+const ARRAY_VEC_SIZE: usize = 15; // wrong: (std::mem::size_of::<InnerBitVec>() - 4) / 4 - 1;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Segment {
@@ -26,7 +26,35 @@ struct Segment {
 
 impl Segment {
     fn len(&self) -> u32 {
-        self.chunk.len() as u32
+        self.chunk.len
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+struct Chunk {
+    data: TinyBitSet<u64, BLOCKS_IN_CHUNK>,
+    len: u32,
+}
+
+impl Chunk {
+    fn difference(self, rhs: Self) -> Self {
+        let new_data = self.data & !rhs.data;
+        Chunk {
+            data: new_data,
+            len: new_data.len() as u32,
+        }
+    }
+}
+
+impl BitOr for Chunk {
+    type Output = Chunk;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        let new_data = self.data | rhs.data;
+        Chunk {
+            data: new_data,
+            len: new_data.len() as u32,
+        }
     }
 }
 
@@ -92,7 +120,7 @@ impl InnerBitVec {
         {
             Ok(i) => {
                 let chunk_index = index_in_chunk(term);
-                self.segments[i].chunk[chunk_index]
+                self.segments[i].chunk.data[chunk_index]
             }
             Err(_) => false,
         }
@@ -107,7 +135,7 @@ impl InnerBitVec {
             .binary_search_by_key(&start_index, |segment| segment.start_index)
         {
             Ok(i) => {
-                if self.segments[i].chunk[index_in_chunk] {
+                if self.segments[i].chunk.data[index_in_chunk] {
                     return false;
                 }
                 &mut self.segments[i]
@@ -117,14 +145,16 @@ impl InnerBitVec {
                     i,
                     Segment {
                         start_index,
-                        chunk: Rc::new(TinyBitSet::new()),
+                        chunk: Rc::default(),
                     },
                 );
                 &mut self.segments[i]
             }
         };
 
-        Rc::make_mut(&mut segment.chunk).insert(index_in_chunk);
+        let chunk = Rc::make_mut(&mut segment.chunk);
+        chunk.data.insert(index_in_chunk);
+        chunk.len += 1;
         self.len += 1;
         true
     }
@@ -141,11 +171,13 @@ impl InnerBitVec {
             Err(_) => return false,
         };
 
-        if !segment.chunk[index_in_chunk] {
+        if !segment.chunk.data[index_in_chunk] {
             return false;
         }
 
-        Rc::make_mut(&mut segment.chunk).remove(index_in_chunk);
+        let chunk = Rc::make_mut(&mut segment.chunk);
+        chunk.data.remove(index_in_chunk);
+        chunk.len -= 1;
         self.len -= 1;
         true
     }
@@ -159,8 +191,18 @@ fn index_in_chunk(term: Term) -> usize {
     (term % ELEMS_IN_CHUNK) as usize
 }
 
-fn chunk_diff(big: &Chunk, small: &Chunk) -> usize {
-    big.len() - small.len()
+fn chunk_diff(big: &Chunk, small: &Chunk) -> u32 {
+    big.len - small.len
+}
+
+#[inline(never)]
+fn new_never_inline<T>(v: T) -> Rc<T> {
+    Rc::new(v)
+}
+
+#[inline(never)]
+fn make_mut_never_inline<T: Clone>(v: &mut Rc<T>) -> &mut T {
+    Rc::make_mut(v)
 }
 
 impl TermSetTrait for SharedBitVec {
@@ -333,17 +375,24 @@ impl TermSetTrait for SharedBitVec {
                         queue.push_back(new_segment);
                         other_idx += 1;
                     } else if self_segment.start_index == other_segment.start_index {
+                        if Rc::ptr_eq(&self_segment.chunk, &other_segment.chunk) {
+                            other_idx += 1;
+                            continue;
+                        }
                         let new_chunk = *self_segment.chunk | *other_segment.chunk;
                         let new_count = chunk_diff(&new_chunk, &self_segment.chunk);
-                        if new_count > 0 {
-                            self_segment.chunk = Rc::new(new_chunk);
+                        if new_chunk.len == other_segment.chunk.len {
+                            self_segment.chunk = other_segment.chunk.clone();
+                            self_inner.len += new_count as u32;
+                        } else if new_count > 0 {
+                            *make_mut_never_inline(&mut self_segment.chunk) = new_chunk;
                             self_inner.len += new_count as u32;
                         }
                         other_idx += 1;
                     }
                 }
 
-                for other_segment in &other_segments[other_idx..] {
+                'other_loop: for other_segment in &other_segments[other_idx..] {
                     while let Some(queue_segment) = queue.front() {
                         if queue_segment.start_index > other_segment.start_index {
                             break;
@@ -354,11 +403,12 @@ impl TermSetTrait for SharedBitVec {
                             self_segments.push(queue_segment);
                         } else {
                             let new_chunk = *other_segment.chunk | *queue_segment.chunk;
-                            self_inner.len += new_chunk.len() as Term;
+                            self_inner.len += new_chunk.len;
                             self_segments.push(Segment {
                                 start_index: other_segment.start_index,
-                                chunk: Rc::new(new_chunk),
+                                chunk: new_never_inline(new_chunk),
                             });
+                            continue 'other_loop;
                         }
                     }
                     self_inner.len += other_segment.len();
@@ -429,13 +479,16 @@ impl TermSetTrait for SharedBitVec {
                         Ok(i) => {
                             other_idx += i + 1;
                             let other_segment = &other_segments[other_idx - 1];
-                            let new_chunk = *segment.chunk & !*other_segment.chunk;
-                            let new_chunk_len = new_chunk.len() as u32;
+                            if Rc::ptr_eq(&segment.chunk, &other_segment.chunk) {
+                                continue;
+                            }
+                            let new_chunk = segment.chunk.difference(*other_segment.chunk);
+                            let new_chunk_len = new_chunk.len;
                             if new_chunk_len == 0 {
                                 continue;
                             }
                             diff.len += new_chunk_len;
-                            if *segment.chunk == new_chunk {
+                            if segment.chunk.data == new_chunk.data {
                                 diff.segments.push(segment.clone());
                             } else {
                                 diff.segments.push(Segment {
@@ -464,11 +517,58 @@ impl TermSetTrait for SharedBitVec {
         }
     }
 
+    fn weak_difference(&self, other: &Self) -> Self {
+        match (self, other) {
+            (SharedBitVec::BitVec(self_inner), SharedBitVec::BitVec(other_inner)) => {
+                let other_segments = &other_inner.segments;
+                let mut diff = InnerBitVec::default();
+                let mut self_iter = self_inner.segments.iter();
+                let mut other_idx = 0;
+                while let Some(segment) = self_iter.next() {
+                    match other_segments[other_idx..]
+                        .binary_search_by_key(&segment.start_index, |s| s.start_index)
+                    {
+                        Ok(i) => {
+                            other_idx += i + 1;
+                            let other_segment = &other_segments[other_idx - 1];
+                            if Rc::ptr_eq(&segment.chunk, &other_segment.chunk) {
+                                continue;
+                            }
+                            let new_chunk = segment.chunk.difference(*other_segment.chunk);
+                            let new_chunk_len = new_chunk.len;
+                            if new_chunk_len == 0 {
+                                continue;
+                            }
+                            diff.len += segment.len();
+                            diff.segments.push(segment.clone());
+                        }
+                        Err(i) => {
+                            other_idx += i;
+                            diff.len += segment.len();
+                            diff.segments.push(segment.clone());
+                        }
+                    };
+
+                    if other_idx == other_segments.len() {
+                        for segment in self_iter.cloned() {
+                            diff.len += segment.len();
+                            diff.segments.push(segment);
+                        }
+                        break;
+                    }
+                }
+                Self::BitVec(diff)
+            }
+            _ => self.difference(other),
+        }
+    }
+
     fn iter(&self) -> impl Iterator<Item = Self::Term> {
         match self {
             SharedBitVec::Array(terms) => Either::Left(terms.iter().copied()),
             SharedBitVec::BitVec(inner) => Either::Right(inner.segments.iter().flat_map(|s| {
                 s.chunk
+                    .data
                     .iter()
                     .map(|i| i as Term + s.start_index * ELEMS_IN_CHUNK as Term)
             })),
@@ -532,10 +632,31 @@ mod tests {
             bitvec.insert(*term);
         }
         for term in bitvec.iter() {
-            if !bitvec.contains(term) {
+            if !terms.contains(&term) {
                 return false;
             }
         }
         true
+    }
+
+    #[quickcheck]
+    fn test_union_assign_strictly_sorted(t1: Vec<Term>, t2: Vec<Term>) -> bool {
+        let mut bitvec1 = SharedBitVec::new();
+        let mut bitvec2 = SharedBitVec::new();
+        for term in &t1 {
+            bitvec1.insert(*term);
+        }
+        for term in &t2 {
+            bitvec2.insert(*term);
+        }
+        bitvec1.union_assign(&bitvec2);
+
+        match &bitvec1 {
+            SharedBitVec::Array(_) => true,
+            SharedBitVec::BitVec(inner) => inner
+                .segments
+                .windows(2)
+                .all(|w| w[0].start_index < w[1].start_index),
+        }
     }
 }
