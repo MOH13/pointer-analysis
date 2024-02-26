@@ -333,7 +333,11 @@ impl<T: TermSetTrait<Term = u32>> WavePropagationSolver<T> {
     }
 
     fn add_edge(&mut self, left: Term, right: Term, offset: Term) -> bool {
-        edges_between(&mut self.edges, left, right).insert(offset)
+        let res = edges_between(&mut self.edges, left, right).insert(offset);
+        if res {
+            self.rev_edges[right as usize].insert(left);
+        }
+        res
     }
 }
 
@@ -365,7 +369,6 @@ impl<T: TermSetTrait<Term = u32>> Solver for WavePropagationSolver<T> {
                 offset,
             } => {
                 self.add_edge(left, right, offset as Term);
-                self.rev_edges[right as usize].insert(left);
             }
             Constraint::UnivCondSubsetLeft {
                 cond_node,
