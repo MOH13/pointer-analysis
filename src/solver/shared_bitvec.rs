@@ -13,10 +13,10 @@ type Term = u32;
 
 const BLOCKS_IN_CHUNK: usize = 24;
 const ELEMS_IN_CHUNK: Term = u64::BITS * BLOCKS_IN_CHUNK as Term;
-const BACKING_ARRAY_SIZE: usize = 3;
+const BACKING_ARRAY_SIZE: usize = 2;
 
 // Maximal size of a sorted list of u32 terms so that it has the same size as InnerBitVec
-const ARRAY_VEC_SIZE: usize = 15; // wrong: (std::mem::size_of::<InnerBitVec>() - 4) / 4 - 1;
+const ARRAY_VEC_SIZE: usize = 14; // wrong: (std::mem::size_of::<InnerBitVec>() - 4) / 4 - 1;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Segment {
