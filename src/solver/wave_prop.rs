@@ -9,7 +9,8 @@ use roaring::RoaringBitmap;
 
 use super::shared_bitvec::SharedBitVec;
 use super::{
-    edges_between, offset_term, BetterBitVec, Constraint, GenericSolver, Solver, TermSetTrait,
+    edges_between, offset_term_vec_offsets, BetterBitVec, Constraint, GenericSolver, Solver,
+    TermSetTrait,
 };
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
 
@@ -30,11 +31,11 @@ struct CondRightEntry {
 pub struct WavePropagationSolver<T> {
     sols: Vec<T>,
     edges: Vec<HashMap<Term, Edges>>,
-    rev_edges: Vec<T>,
+    rev_edges: Vec<HashSet<Term>>,
     left_conds: Vec<CondLeftEntry>,
     right_conds: Vec<CondRightEntry>,
-    allowed_offsets: HashMap<Term, usize>,
-    parents: HashMap<Term, Term>,
+    allowed_offsets: Vec<usize>,
+    parents: Vec<Term>,
     top_order: Vec<Term>,
 }
 
@@ -53,15 +54,19 @@ impl Edges {
     }
 
     fn insert(&mut self, offset: usize) -> bool {
-        if offset == 0 && !self.zero {
-            self.zero = true;
-            return true;
+        if offset == 0 {
+            if !self.zero {
+                self.zero = true;
+                true
+            } else {
+                false
+            }
         } else {
             match self.offsets.binary_search(&offset) {
                 Ok(_) => false,
                 Err(i) => {
                     self.offsets.insert(i, offset);
-                    return true;
+                    true
                 }
             }
         }
@@ -103,6 +108,10 @@ impl<T: TermSetTrait<Term = u32> + Default + Clone> SCC<T> {
         self.iteration += 1;
         self.d[v as usize] = Some(self.iteration);
         self.r[v as usize] = Some(v);
+        if solver.edges[v as usize].is_empty() {
+            self.c.insert(v);
+            return;
+        }
         for (&w, offsets) in &solver.edges[v as usize] {
             if offsets.contains(0) {
                 if self.d[w as usize] == None {
@@ -136,6 +145,47 @@ impl<T: TermSetTrait<Term = u32> + Default + Clone> SCC<T> {
         }
     }
 
+    fn visit_with_weighted(&mut self, v: Term, solver: &WavePropagationSolver<T>) {
+        self.iteration += 1;
+        self.d[v as usize] = Some(self.iteration);
+        self.r[v as usize] = Some(v);
+        if solver.edges[v as usize].is_empty() {
+            self.c.insert(v);
+            return;
+        }
+        for (&w, offsets) in &solver.edges[v as usize] {
+            if offsets.len() > 0 {
+                if self.d[w as usize] == None {
+                    self.visit_with_weighted(w, solver);
+                }
+                if !self.c.contains(&w) {
+                    let r_v = self.r[v as usize].unwrap();
+                    let r_w = self.r[w as usize].unwrap();
+                    self.r[v as usize] = Some(if self.d[r_v as usize] < self.d[r_w as usize] {
+                        r_v
+                    } else {
+                        r_w
+                    });
+                }
+            }
+        }
+        if self.r[v as usize] == Some(v) {
+            self.c.insert(v);
+            while let Some(&w) = self.s.last() {
+                if self.d[w as usize] <= self.d[v as usize] {
+                    break;
+                } else {
+                    self.s.pop();
+                    self.c.insert(w);
+                    self.top_order.push(w);
+                }
+            }
+            self.top_order.push(v);
+        } else {
+            self.s.push(v);
+        }
+    }
+
     fn init_result(iterative: bool, solver: &WavePropagationSolver<T>) -> Self {
         let node_count = solver.edges.len();
         Self {
@@ -161,6 +211,19 @@ impl<T: TermSetTrait<Term = u32> + Default + Clone> SCC<T> {
         result
     }
 
+    fn run_with_weighted(solver: &mut WavePropagationSolver<T>) -> Self {
+        let mut result = SCC::init_result(false, solver);
+        for v in 0..result.node_count as u32 {
+            if result.d[v as usize] == None {
+                result.visit_with_weighted(v, solver);
+            }
+        }
+
+        result.r.fill(None);
+
+        result
+    }
+
     fn run_iteratively<I: Iterator<Item = Term>>(
         solver: &mut WavePropagationSolver<T>,
         nodes_to_search: I,
@@ -175,6 +238,8 @@ impl<T: TermSetTrait<Term = u32> + Default + Clone> SCC<T> {
     }
 
     fn unify(&self, child: Term, parent: Term, solver: &mut WavePropagationSolver<T>) {
+        debug_assert_ne!(child, parent);
+
         let child_sols = mem::take(&mut solver.sols[child as usize]);
         solver.sols[parent as usize].union_assign(&child_sols);
 
@@ -183,15 +248,19 @@ impl<T: TermSetTrait<Term = u32> + Default + Clone> SCC<T> {
         for (&other, offsets) in &child_edges {
             debug_assert_ne!(0, offsets.len());
 
+            let other = if other == child { parent } else { other };
+
             solver.edges[parent as usize]
                 .entry(other)
                 .or_default()
                 .union_assign(&offsets);
-            solver.rev_edges[other as usize].remove(child);
+            // Self::do_remove_stuff(&mut solver.rev_edges, other, child);
+            // solver.num_removes += 1;
+            solver.rev_edges[other as usize].remove(&child);
             solver.rev_edges[other as usize].insert(parent);
         }
         let child_rev_edges = mem::take(&mut solver.rev_edges[child as usize]);
-        for i in child_rev_edges.iter() {
+        for &i in child_rev_edges.iter() {
             if i == child {
                 continue;
             }
@@ -209,11 +278,12 @@ impl<T: TermSetTrait<Term = u32> + Default + Clone> SCC<T> {
         }
 
         solver.rev_edges[parent as usize].union_assign(&child_rev_edges);
-        if solver.rev_edges[parent as usize].remove(child as u32) {
-            solver.rev_edges[parent as usize].insert(parent as u32);
+
+        if solver.rev_edges[parent as usize].remove(&(child as Term)) {
+            solver.rev_edges[parent as usize].insert(parent as Term);
         }
 
-        solver.parents.insert(child, parent);
+        solver.parents[child as usize] = parent;
     }
 
     // Collapse cycles and update topological order
@@ -242,6 +312,11 @@ impl<T: TermSetTrait<Term = u32> + Default + Clone> SCC<T> {
             solver.top_order = self.top_order;
         }
     }
+
+    // Collapse cycles and update topological order
+    fn apply_to_graph_weighted(self, solver: &mut WavePropagationSolver<T>) {
+        solver.top_order = self.top_order;
+    }
 }
 
 impl<T: TermSetTrait<Term = u32>> WavePropagationSolver<T> {
@@ -254,21 +329,24 @@ impl<T: TermSetTrait<Term = u32>> WavePropagationSolver<T> {
         SCC::run(self).apply_to_graph(self);
 
         loop {
-            SCC::run_iteratively(self, nodes_with_new_outgoing.iter()).apply_to_graph(self);
+            // SCC::run_iteratively(self, nodes_with_new_outgoing.iter()).apply_to_graph(self);
+            SCC::run(self).apply_to_graph(self);
+            // SCC::run_with_weighted(self).apply_to_graph_weighted(self);
+
             nodes_with_new_outgoing = T::new();
 
-            let changed = self.wave_propagate_iteration(&mut p_old);
+            let mut changed = self.wave_propagate_iteration(&mut p_old);
 
-            if !changed {
-                break;
-            }
-
-            self.add_edges_after_wave_prop(
+            changed |= self.add_edges_after_wave_prop(
                 &mut p_cache_left,
                 &mut p_cache_right,
                 &mut p_old,
                 &mut nodes_with_new_outgoing,
             );
+
+            if !changed {
+                break;
+            }
         }
     }
 
@@ -286,7 +364,7 @@ impl<T: TermSetTrait<Term = u32>> WavePropagationSolver<T> {
             let allowed_offsets = Lazy::new(|| {
                 p_dif
                     .iter()
-                    .map(|t| self.allowed_offsets.get(&t).copied().unwrap_or(0))
+                    .map(|t| self.allowed_offsets[t as usize])
                     .collect::<Vec<usize>>()
             });
             for (&w, offsets) in &self.edges[v as usize] {
@@ -331,7 +409,7 @@ impl<T: TermSetTrait<Term = u32>> WavePropagationSolver<T> {
             let p_new = self.sols[cond_node as usize].difference(&p_cache_left[i]);
             p_cache_left[i].union_assign(&p_new);
             for t in p_new.iter() {
-                if let Some(t) = offset_term(t, &self.allowed_offsets, *offset) {
+                if let Some(t) = offset_term_vec_offsets(t, &self.allowed_offsets, *offset) {
                     let t = get_representative(&mut self.parents, t);
                     if t == right {
                         continue;
@@ -363,7 +441,7 @@ impl<T: TermSetTrait<Term = u32>> WavePropagationSolver<T> {
             let p_new = self.sols[cond_node as usize].difference(&p_cache_right[i]);
             p_cache_right[i].union_assign(&p_new);
             for t in p_new.iter() {
-                if let Some(t) = offset_term(t, &self.allowed_offsets, *offset) {
+                if let Some(t) = offset_term_vec_offsets(t, &self.allowed_offsets, *offset) {
                     let t = get_representative(&mut self.parents, t);
                     if t == left {
                         continue;
@@ -394,14 +472,20 @@ impl<T: TermSetTrait<Term = u32>> Solver for WavePropagationSolver<T> {
     type TermSet = T;
 
     fn new(terms: Vec<Term>, allowed_offsets: Vec<(Term, usize)>) -> Self {
+        let mut allowed_offsets_vec = vec![0; terms.len()];
+
+        for &(t, offset) in &allowed_offsets {
+            allowed_offsets_vec[t as usize] = offset;
+        }
+
         Self {
             sols: vec![T::new(); terms.len()],
             edges: vec![HashMap::new(); terms.len()],
-            rev_edges: vec![T::new(); terms.len()],
+            rev_edges: vec![HashSet::new(); terms.len()],
             left_conds: vec![],
             right_conds: vec![],
-            allowed_offsets: allowed_offsets.into_iter().collect(),
-            parents: HashMap::new(),
+            allowed_offsets: allowed_offsets_vec,
+            parents: Vec::from_iter(0..terms.len() as Term),
             top_order: Vec::new(),
         }
     }
@@ -453,26 +537,25 @@ impl<T: TermSetTrait<Term = u32>> Solver for WavePropagationSolver<T> {
     }
 }
 
-fn get_representative_no_mutation<T: Eq + PartialEq + Hash + Copy>(
-    parents: &HashMap<T, T>,
-    child: T,
-) -> T {
+fn get_representative_no_mutation(parents: &Vec<Term>, child: Term) -> Term {
     let mut node = child;
-    while let Some(&parent) = parents.get(&node) {
+    loop {
+        let parent = parents[child as usize];
+        if parent == node {
+            return node;
+        }
         node = parent;
     }
-    node
 }
 
-fn get_representative<T: Eq + PartialEq + Hash + Copy>(parents: &mut HashMap<T, T>, child: T) -> T {
-    match parents.get(&child) {
-        Some(&parent) => {
-            let representative = get_representative(parents, parent);
-            parents.insert(child, representative);
-            representative
-        }
-        None => child,
+fn get_representative(parents: &mut Vec<Term>, child: Term) -> Term {
+    let parent = parents[child as usize];
+    if parent == child {
+        return child;
     }
+    let representative = get_representative(parents, parent);
+    parents[child as usize] = representative;
+    representative
 }
 
 pub type HashWavePropagationSolver = WavePropagationSolver<HashSet<Term>>;

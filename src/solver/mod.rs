@@ -121,7 +121,7 @@ pub trait TermSetTrait: Clone + Default {
     fn extend<T: Iterator<Item = Self::Term>>(&mut self, other: T);
     fn iter(&self) -> impl Iterator<Item = Self::Term>;
     fn difference(&self, other: &Self) -> Self;
-    // Only guarantees that the result is a subset of self and a superset of self.difference(other)
+    // Only guarantees that if self is superset of other, then the result is a subset of self and a superset of self.difference(other)
     fn weak_difference(&self, other: &Self) -> Self {
         self.difference(other)
     }
@@ -257,13 +257,34 @@ fn edges_between<T: Hash + Eq + TryInto<usize>, U: Default>(
     edges: &mut Vec<HashMap<T, U>>,
     left: T,
     right: T,
-) -> &mut U {
+) -> &mut U
+where
+    T: Hash + Eq + TryInto<usize>,
+    U: Default,
+    <T as TryInto<usize>>::Error: Debug,
+{
     edges[left
         .try_into()
         .map_err(|_| ())
         .expect("Could not convert to usize")]
     .entry(right)
     .or_default()
+}
+
+fn offset_term_vec_offsets<T>(term: T, allowed_offsets: &Vec<usize>, offset: usize) -> Option<T>
+where
+    T: Copy + Hash + Eq + Ord + TryInto<usize> + TryFrom<usize> + Add<T, Output = T>,
+{
+    if offset == 0 {
+        Some(term)
+    } else {
+        (offset <= allowed_offsets[term.try_into().map_err(|_| ()).unwrap()]).then(|| {
+            term + offset
+                .try_into()
+                .map_err(|_| ())
+                .expect("Could not convert from usize")
+        })
+    }
 }
 
 fn offset_term<T>(term: T, allowed_offsets: &HashMap<T, usize>, offset: usize) -> Option<T>
@@ -388,7 +409,7 @@ impl<T, S> Solver for GenericSolver<T, S, S::Term>
 where
     T: Hash + Eq + Clone + Debug,
     S: Solver,
-    S::Term: TryInto<usize> + TryFrom<usize> + Copy,
+    S::Term: TryInto<usize> + TryFrom<usize> + Copy + Debug,
 {
     type Term = T;
     type TermSet = HashSet<T>;

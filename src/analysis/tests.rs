@@ -91,7 +91,7 @@ fn parse_points_to<'a>(
 fn run_test_template<S>(resource: &str)
 where
     S: Solver,
-    S::Term: TryInto<usize> + TryFrom<usize> + Copy,
+    S::Term: TryInto<usize> + TryFrom<usize> + Copy + Debug,
 {
     dbg!(resource);
     let config_file = File::open(resource).expect("Could not open file");
