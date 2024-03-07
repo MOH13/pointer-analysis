@@ -6,13 +6,14 @@ use pointer_analysis::solver::{
     HashWavePropagationSolver, RoaringWavePropagationSolver, SharedBitVecWavePropagationSolver,
     Solver,
 };
+use std::fmt::Debug;
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 fn bench_template<S>(name: &str, c: &mut Criterion)
 where
     S: Solver,
-    S::Term: TryInto<usize> + TryFrom<usize> + Copy,
+    S::Term: TryInto<usize> + TryFrom<usize> + Copy + Debug,
 {
     for entry in glob::glob("benchmarks/*/bench.bc").unwrap() {
         let entry = entry.expect("Error in path");

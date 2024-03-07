@@ -195,11 +195,13 @@ fn chunk_diff(big: &Chunk, small: &Chunk) -> u32 {
     big.len - small.len
 }
 
+/// For debugging
 #[inline(never)]
 fn new_never_inline<T>(v: T) -> Rc<T> {
     Rc::new(v)
 }
 
+/// For debugging
 #[inline(never)]
 fn make_mut_never_inline<T: Clone>(v: &mut Rc<T>) -> &mut T {
     Rc::make_mut(v)
@@ -534,13 +536,10 @@ impl TermSetTrait for SharedBitVec {
                             if Rc::ptr_eq(&segment.chunk, &other_segment.chunk) {
                                 continue;
                             }
-                            let new_chunk = segment.chunk.difference(*other_segment.chunk);
-                            let new_chunk_len = new_chunk.len;
-                            if new_chunk_len == 0 {
-                                continue;
+                            if segment.len() > other_segment.len() {
+                                diff.len += segment.len();
+                                diff.segments.push(segment.clone());
                             }
-                            diff.len += segment.len();
-                            diff.segments.push(segment.clone());
                         }
                         Err(i) => {
                             other_idx += i;
