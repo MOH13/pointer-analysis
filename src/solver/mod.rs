@@ -253,17 +253,15 @@ where
     })
 }
 
-fn edges_between<T: Hash + Eq + TryInto<usize>, U: Default>(
-    edges: &mut Vec<HashMap<T, U>>,
-    left: T,
-    right: T,
-) -> &mut U {
-    edges[left
-        .try_into()
-        .map_err(|_| ())
-        .expect("Could not convert to usize")]
-    .entry(right)
-    .or_default()
+fn edges_between<T, U>(edges: &mut Vec<HashMap<T, U>>, left: T, right: T) -> &mut U
+where
+    T: Hash + Eq + TryInto<usize>,
+    U: Default,
+    <T as TryInto<usize>>::Error: Debug,
+{
+    edges[left.try_into().expect("Could not convert to usize")]
+        .entry(right)
+        .or_default()
 }
 
 fn offset_term<T>(term: T, allowed_offsets: &HashMap<T, usize>, offset: usize) -> Option<T>
