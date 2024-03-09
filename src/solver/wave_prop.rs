@@ -1,8 +1,11 @@
+use std::cmp::min;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::mem;
 
+use bitvec::bitvec;
+use bitvec::prelude::*;
 use hashbrown::{HashMap, HashSet};
 use once_cell::unsync::Lazy;
 use roaring::RoaringBitmap;
@@ -83,6 +86,10 @@ impl Edges {
         self.zero as usize + self.offsets.len()
     }
 
+    fn has_non_zero(&self) -> bool {
+        !self.offsets.is_empty()
+    }
+
     fn iter(&self) -> impl Iterator<Item = usize> + '_ {
         self.zero
             .then_some(0)
@@ -95,9 +102,10 @@ struct SCC<T> {
     iterative: bool,
     node_count: usize,
     iteration: usize,
-    d: Vec<Option<usize>>,
+    /// 0 means not visited.
+    d: Vec<usize>,
     r: Vec<Option<Term>>,
-    c: HashSet<Term>,
+    c: BitVec,
     s: Vec<Term>,
     top_order: Vec<Term>,
     term_set_type_phantom: PhantomData<T>,
@@ -106,38 +114,41 @@ struct SCC<T> {
 impl<T: TermSetTrait<Term = u32> + Default + Clone> SCC<T> {
     fn visit(&mut self, v: Term, solver: &WavePropagationSolver<T>) {
         self.iteration += 1;
-        self.d[v as usize] = Some(self.iteration);
+        self.d[v as usize] = self.iteration;
         self.r[v as usize] = Some(v);
         if solver.edges[v as usize].is_empty() {
-            self.c.insert(v);
+            self.c.set(v as usize, true);
             return;
         }
+
         for (&w, offsets) in &solver.edges[v as usize] {
-            if offsets.contains(0) {
-                if self.d[w as usize] == None {
-                    self.visit(w, solver);
-                }
-                if !self.c.contains(&w) {
-                    let r_v = self.r[v as usize].unwrap();
-                    let r_w = self.r[w as usize].unwrap();
-                    self.r[v as usize] = Some(if self.d[r_v as usize] < self.d[r_w as usize] {
-                        r_v
-                    } else {
-                        r_w
-                    });
-                }
+            if !offsets.contains(0) {
+                continue;
+            }
+
+            if self.d[w as usize] == 0 {
+                self.visit(w, solver);
+            }
+            if !self.c[w as usize] {
+                let r_v = self.r[v as usize].unwrap();
+                let r_w = self.r[w as usize].unwrap();
+                self.r[v as usize] = Some(if self.d[r_v as usize] < self.d[r_w as usize] {
+                    r_v
+                } else {
+                    r_w
+                });
             }
         }
+
         if self.r[v as usize] == Some(v) {
-            self.c.insert(v);
+            self.c.set(v as usize, true);
             while let Some(&w) = self.s.last() {
                 if self.d[w as usize] <= self.d[v as usize] {
                     break;
-                } else {
-                    self.s.pop();
-                    self.c.insert(w);
-                    self.r[w as usize] = Some(v);
                 }
+                self.s.pop();
+                self.c.set(w as usize, true);
+                self.r[w as usize] = Some(v);
             }
             self.top_order.push(v);
         } else {
@@ -145,42 +156,64 @@ impl<T: TermSetTrait<Term = u32> + Default + Clone> SCC<T> {
         }
     }
 
-    fn visit_with_weighted(&mut self, v: Term, solver: &WavePropagationSolver<T>) {
-        self.iteration += 1;
-        self.d[v as usize] = Some(self.iteration);
-        self.r[v as usize] = Some(v);
-        if solver.edges[v as usize].is_empty() {
-            self.c.insert(v);
+    fn dfs_add_and_finish(&mut self, v: Term, solver: &WavePropagationSolver<T>) {
+        if self.c[v as usize] {
             return;
         }
+
+        self.c.set(v as usize, true);
+
         for (&w, offsets) in &solver.edges[v as usize] {
-            if offsets.len() > 0 {
-                if self.d[w as usize] == None {
-                    self.visit_with_weighted(w, solver);
-                }
-                if !self.c.contains(&w) {
-                    let r_v = self.r[v as usize].unwrap();
-                    let r_w = self.r[w as usize].unwrap();
-                    self.r[v as usize] = Some(if self.d[r_v as usize] < self.d[r_w as usize] {
-                        r_v
-                    } else {
-                        r_w
-                    });
-                }
+            if !offsets.contains(0) || self.r[v as usize] != self.r[w as usize] {
+                continue;
+            }
+
+            self.dfs_add_and_finish(w, solver);
+        }
+
+        self.top_order.push(v);
+    }
+
+    fn visit_with_weighted(&mut self, v: Term, solver: &WavePropagationSolver<T>) {
+        self.iteration += 1;
+        self.d[v as usize] = self.iteration;
+        self.r[v as usize] = Some(v);
+        if solver.edges[v as usize].is_empty() {
+            self.c.set(v as usize, true);
+            return;
+        }
+
+        for (&w, offsets) in &solver.edges[v as usize] {
+            debug_assert!(offsets.len() > 0);
+
+            if self.d[w as usize] == 0 {
+                self.visit_with_weighted(w, solver);
+            }
+            if !self.c[w as usize] {
+                let r_v = self.r[v as usize].unwrap();
+                let r_w = self.r[w as usize].unwrap();
+                self.r[v as usize] = Some(if self.d[r_v as usize] < self.d[r_w as usize] {
+                    r_v
+                } else {
+                    r_w
+                });
             }
         }
         if self.r[v as usize] == Some(v) {
-            self.c.insert(v);
+            for &w in self.s.iter().rev() {
+                if self.d[w as usize] <= self.d[v as usize] {
+                    break;
+                }
+                self.r[w as usize] = Some(v);
+            }
             while let Some(&w) = self.s.last() {
                 if self.d[w as usize] <= self.d[v as usize] {
                     break;
-                } else {
-                    self.s.pop();
-                    self.c.insert(w);
-                    self.top_order.push(w);
                 }
+                self.s.pop();
+                self.dfs_add_and_finish(w, solver);
             }
-            self.top_order.push(v);
+            self.dfs_add_and_finish(v, solver);
         } else {
             self.s.push(v);
         }
@@ -192,9 +225,9 @@ impl<T: TermSetTrait<Term = u32> + Default + Clone> SCC<T> {
             iterative,
             node_count,
             iteration: 0,
-            d: vec![None; node_count],
+            d: vec![0; node_count],
             r: vec![None; node_count],
-            c: HashSet::new(),
+            c: bitvec![0; node_count],
             s: vec![],
             top_order: vec![],
             term_set_type_phantom: PhantomData,
@@ -204,7 +237,7 @@ impl<T: TermSetTrait<Term = u32> + Default + Clone> SCC<T> {
     fn run(solver: &mut WavePropagationSolver<T>) -> Self {
         let mut result = SCC::init_result(false, solver);
         for v in 0..result.node_count as u32 {
-            if result.d[v as usize] == None {
+            if result.d[v as usize] == 0 {
                 result.visit(v, solver);
             }
         }
@@ -214,12 +247,10 @@ impl<T: TermSetTrait<Term = u32> + Default + Clone> SCC<T> {
     fn run_with_weighted(solver: &mut WavePropagationSolver<T>) -> Self {
         let mut result = SCC::init_result(false, solver);
         for v in 0..result.node_count as u32 {
-            if result.d[v as usize] == None {
+            if result.d[v as usize] == 0 {
                 result.visit_with_weighted(v, solver);
             }
         }
-
-        result.r.fill(None);
 
         result
     }
@@ -230,7 +261,7 @@ impl<T: TermSetTrait<Term = u32> + Default + Clone> SCC<T> {
     ) -> Self {
         let mut result = SCC::init_result(true, solver);
         for v in nodes_to_search {
-            if result.d[v as usize] == None {
+            if result.d[v as usize] == 0 {
                 result.visit(v, solver);
             }
         }
@@ -328,14 +359,22 @@ impl<T: TermSetTrait<Term = u32>> WavePropagationSolver<T> {
 
         SCC::run(self).apply_to_graph(self);
 
-        loop {
+        let mut iters = 0usize;
+
+        let mut changed = true;
+        while changed {
+            iters += 1;
             // SCC::run_iteratively(self, nodes_with_new_outgoing.iter()).apply_to_graph(self);
+            let approx_node_count = self.top_order.len();
             SCC::run(self).apply_to_graph(self);
-            // SCC::run_with_weighted(self).apply_to_graph_weighted(self);
+            SCC::run_with_weighted(self).apply_to_graph_weighted(self);
+
+            let removed = approx_node_count - min(self.top_order.len(), approx_node_count);
+            println!("{iters}: Removed approx {removed} nodes");
 
             nodes_with_new_outgoing = T::new();
 
-            let mut changed = self.wave_propagate_iteration(&mut p_old);
+            changed = self.wave_propagate_iteration(&mut p_old);
 
             changed |= self.add_edges_after_wave_prop(
                 &mut p_cache_left,
@@ -343,11 +382,9 @@ impl<T: TermSetTrait<Term = u32>> WavePropagationSolver<T> {
                 &mut p_old,
                 &mut nodes_with_new_outgoing,
             );
-
-            if !changed {
-                break;
-            }
         }
+        println!("SCC count: {}", self.top_order.len());
+        println!("Iterations: {}", iters);
     }
 
     fn wave_propagate_iteration(&mut self, p_old: &mut Vec<T>) -> bool {

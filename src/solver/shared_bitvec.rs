@@ -207,6 +207,14 @@ fn make_mut_never_inline<T: Clone>(v: &mut Rc<T>) -> &mut T {
     Rc::make_mut(v)
 }
 
+impl SharedBitVec {
+    /// Creates an equivalent bit vector
+    /// that is using the array representation.
+    fn to_forced_array(&self) -> SharedBitVec {
+        Self::Array(self.iter().collect())
+    }
+}
+
 impl TermSetTrait for SharedBitVec {
     type Term = u32;
 
@@ -340,7 +348,19 @@ impl TermSetTrait for SharedBitVec {
                 let other_segments = &other_inner.segments;
 
                 let mut queue = VecDeque::<Segment>::new();
-                let mut self_iter = self_segments.iter_mut();
+
+                if other_segments.len() == 0 {
+                    return;
+                }
+
+                let start_index = match self_segments
+                    .binary_search_by_key(&other_segments[0].start_index, |s| s.start_index)
+                {
+                    Ok(i) => i,
+                    Err(i) => i,
+                };
+
+                let mut self_iter = self_segments[start_index..].iter_mut();
                 let mut other_idx = 0;
 
                 for self_segment in &mut self_iter {
@@ -352,8 +372,10 @@ impl TermSetTrait for SharedBitVec {
                             self_inner.len += queue_segment.len();
                             std::mem::swap(self_segment, &mut queue_segment);
                             queue.push_back(queue_segment);
-                        };
-                        continue;
+                            continue;
+                        } else {
+                            return;
+                        }
                     };
 
                     if queue
