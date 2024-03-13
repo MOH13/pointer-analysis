@@ -6,7 +6,6 @@ use std::ops::Add;
 
 mod basic;
 mod better_bitvec;
-mod bit_vec;
 mod shared_bitvec;
 mod stats;
 #[cfg(test)]
@@ -17,7 +16,7 @@ pub use basic::{
     BasicBetterBitVecSolver, BasicHashSolver, BasicRoaringSolver, BasicSharedBitVecSolver,
 };
 pub use better_bitvec::BetterBitVec;
-pub use bit_vec::BasicBitVecSolver;
+// pub use bit_vec::BasicBitVecSolver;
 pub use stats::StatSolver;
 pub use wave_prop::{
     BetterBitVecWavePropagationSolver, HashWavePropagationSolver, RoaringWavePropagationSolver,
@@ -41,11 +40,13 @@ pub enum Constraint<T> {
         cond_node: T,
         right: T,
         offset: usize,
+        is_function: bool,
     },
     UnivCondSubsetRight {
         cond_node: T,
         left: T,
         offset: usize,
+        is_function: bool,
     },
 }
 
@@ -71,32 +72,52 @@ macro_rules! cstr {
             offset: $offset,
         }
     };
-    (c in $cond_node:tt : c <= $right:tt) => {
-        $crate::solver::Constraint::UnivCondSubsetLeft {
-            cond_node: $cond_node,
-            right: $right,
-            offset: 0,
-        }
-    };
-    (c in $cond_node:tt : $left:tt <= c) => {
-        $crate::solver::Constraint::UnivCondSubsetRight {
-            cond_node: $cond_node,
-            left: $left,
-            offset: 0,
-        }
-    };
-    (c in $cond_node:tt + $offset:tt : c <= $right:tt) => {
+    (*($cond_node:tt + $offset:tt) <= $right:tt) => {
         $crate::solver::Constraint::UnivCondSubsetLeft {
             cond_node: $cond_node,
             right: $right,
             offset: $offset,
+            is_function: false,
         }
     };
-    (c in $cond_node:tt + $offset:tt : $left:tt <= c) => {
+    ($left:tt <= *($cond_node:tt + $offset:tt)) => {
         $crate::solver::Constraint::UnivCondSubsetRight {
             cond_node: $cond_node,
             left: $left,
             offset: $offset,
+            is_function: false,
+        }
+    };
+    (*$cond_node:tt <= $right:tt) => {
+        $crate::solver::Constraint::UnivCondSubsetLeft {
+            cond_node: $cond_node,
+            right: $right,
+            offset: 0,
+            is_function: false,
+        }
+    };
+    ($left:tt <= *$cond_node:tt) => {
+        $crate::solver::Constraint::UnivCondSubsetRight {
+            cond_node: $cond_node,
+            left: $left,
+            offset: 0,
+            is_function: false,
+        }
+    };
+    (*fn ($cond_node:tt + $offset:tt) <= $right:tt) => {
+        $crate::solver::Constraint::UnivCondSubsetLeft {
+            cond_node: $cond_node,
+            right: $right,
+            offset: $offset,
+            is_function: true,
+        }
+    };
+    ($left:tt <= *fn ($cond_node:tt + $offset:tt)) => {
+        $crate::solver::Constraint::UnivCondSubsetRight {
+            cond_node: $cond_node,
+            left: $left,
+            offset: $offset,
+            is_function: true,
         }
     };
 }
@@ -229,12 +250,28 @@ pub trait Solver {
     type Term;
     type TermSet: TermSetTrait<Term = Self::Term>;
 
-    fn new(terms: Vec<Self::Term>, allowed_offsets: Vec<(Self::Term, usize)>) -> Self;
+    fn new(terms: Vec<Self::Term>, term_types: Vec<(Self::Term, TermType)>) -> Self;
 
     fn add_constraint(&mut self, c: Constraint<Self::Term>);
     fn get_solution(&self, node: &Self::Term) -> Self::TermSet;
 
     fn finalize(&mut self);
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum TermType {
+    Basic,
+    Struct(usize),
+    Function(usize),
+}
+
+impl TermType {
+    pub fn into_offset(self) -> usize {
+        match self {
+            TermType::Basic => 0,
+            TermType::Struct(offset) | TermType::Function(offset) => offset,
+        }
+    }
 }
 
 pub struct GenericSolver<T, S, T2> {
@@ -264,36 +301,41 @@ where
         .or_default()
 }
 
-fn offset_term_vec_offsets<T>(term: T, allowed_offsets: &Vec<usize>, offset: usize) -> Option<T>
+fn offset_term_vec_offsets<T>(
+    term: T,
+    is_function: bool,
+    term_types: &[TermType],
+    offset: usize,
+) -> Option<T>
 where
     T: Copy + Hash + Eq + Ord + TryInto<usize> + TryFrom<usize> + Add<T, Output = T>,
+    <T as TryInto<usize>>::Error: Debug,
+    <T as TryFrom<usize>>::Error: Debug,
 {
-    if offset == 0 {
-        Some(term)
-    } else {
-        (offset <= allowed_offsets[term.try_into().map_err(|_| ()).unwrap()]).then(|| {
-            term + offset
-                .try_into()
-                .map_err(|_| ())
-                .expect("Could not convert from usize")
-        })
+    let term_type = term_types[term.try_into().unwrap()];
+    match term_type {
+        TermType::Basic if !is_function && offset == 0 => Some(term),
+        TermType::Struct(allowed) if !is_function => {
+            (offset <= allowed).then(|| term + offset.try_into().unwrap())
+        }
+        TermType::Function(allowed) if is_function => {
+            (offset <= allowed).then(|| term + offset.try_into().unwrap())
+        }
+        _ => None,
     }
 }
 
 fn offset_term<T>(term: T, allowed_offsets: &HashMap<T, usize>, offset: usize) -> Option<T>
 where
-    T: Hash + Eq + Ord + TryInto<usize> + TryFrom<usize> + Add<T, Output = T>,
+    T: Hash + Eq + Ord + TryFrom<usize> + Add<T, Output = T>,
+    <T as TryFrom<usize>>::Error: Debug,
 {
     if offset == 0 {
         Some(term)
     } else {
         allowed_offsets.get(&term).and_then(|&max_offset| {
-            (offset <= max_offset).then(|| {
-                term + offset
-                    .try_into()
-                    .map_err(|_| ())
-                    .expect("Could not convert from usize")
-            })
+            (offset <= max_offset)
+                .then(|| term + offset.try_into().expect("Could not convert from usize"))
         })
     }
 }
@@ -305,6 +347,7 @@ fn offset_terms<T>(
 ) -> Vec<T>
 where
     T: Hash + Eq + Ord + TryInto<usize> + TryFrom<usize> + Add<T, Output = T>,
+    <T as TryFrom<usize>>::Error: Debug,
 {
     if offset == 0 {
         terms.collect()
@@ -380,19 +423,29 @@ where
                 cond_node,
                 right,
                 offset,
+                is_function,
             } => {
                 let cond_node = self.term_to_t2(&cond_node);
                 let right = self.term_to_t2(&right);
-                cstr!(c in cond_node + offset : c <= right)
+                if is_function {
+                    cstr!(*fn (cond_node + offset) <= right)
+                } else {
+                    cstr!(*(cond_node + offset) <= right)
+                }
             }
             Constraint::UnivCondSubsetRight {
                 cond_node,
                 left,
                 offset,
+                is_function,
             } => {
                 let cond_node = self.term_to_t2(&cond_node);
                 let left = self.term_to_t2(&left);
-                cstr!(c in cond_node + offset : left <= c)
+                if is_function {
+                    cstr!(left <= *fn (cond_node + offset))
+                } else {
+                    cstr!(left <= *(cond_node + offset))
+                }
             }
         }
     }
@@ -407,7 +460,7 @@ where
     type Term = T;
     type TermSet = HashSet<T>;
 
-    fn new(terms: Vec<Self::Term>, allowed_offsets: Vec<(Self::Term, usize)>) -> Self {
+    fn new(terms: Vec<Self::Term>, term_types: Vec<(Self::Term, TermType)>) -> Self {
         let length = terms.len();
         let term_map = terms
             .iter()
@@ -423,7 +476,7 @@ where
                         .expect("Could not convert to usize")
                 })
                 .collect(),
-            allowed_offsets
+            term_types
                 .into_iter()
                 .map(|(term, offset)| (term_to_t2(&term_map, &term), offset))
                 .collect(),

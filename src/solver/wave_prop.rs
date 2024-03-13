@@ -13,7 +13,7 @@ use roaring::RoaringBitmap;
 use super::shared_bitvec::SharedBitVec;
 use super::{
     edges_between, offset_term_vec_offsets, BetterBitVec, Constraint, GenericSolver, Solver,
-    TermSetTrait,
+    TermSetTrait, TermType,
 };
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
 
@@ -23,12 +23,14 @@ struct CondLeftEntry {
     cond_node: Term,
     right: Term,
     offset: usize,
+    is_function: bool,
 }
 
 struct CondRightEntry {
     cond_node: Term,
     left: Term,
     offset: usize,
+    is_function: bool,
 }
 
 pub struct WavePropagationSolver<T> {
@@ -37,7 +39,7 @@ pub struct WavePropagationSolver<T> {
     rev_edges: Vec<HashSet<Term>>,
     left_conds: Vec<CondLeftEntry>,
     right_conds: Vec<CondRightEntry>,
-    allowed_offsets: Vec<usize>,
+    term_types: Vec<TermType>,
     parents: Vec<Term>,
     top_order: Vec<Term>,
 }
@@ -84,10 +86,6 @@ impl Edges {
 
     fn len(&self) -> usize {
         self.zero as usize + self.offsets.len()
-    }
-
-    fn has_non_zero(&self) -> bool {
-        !self.offsets.is_empty()
     }
 
     fn iter(&self) -> impl Iterator<Item = usize> + '_ {
@@ -255,19 +253,6 @@ impl<T: TermSetTrait<Term = u32> + Default + Clone> SCC<T> {
         result
     }
 
-    fn run_iteratively<I: Iterator<Item = Term>>(
-        solver: &mut WavePropagationSolver<T>,
-        nodes_to_search: I,
-    ) -> Self {
-        let mut result = SCC::init_result(true, solver);
-        for v in nodes_to_search {
-            if result.d[v as usize] == 0 {
-                result.visit(v, solver);
-            }
-        }
-        result
-    }
-
     fn unify(&self, child: Term, parent: Term, solver: &mut WavePropagationSolver<T>) {
         debug_assert_ne!(child, parent);
 
@@ -355,7 +340,6 @@ impl<T: TermSetTrait<Term = u32>> WavePropagationSolver<T> {
         let mut p_old = vec![T::new(); self.sols.len()];
         let mut p_cache_left = vec![T::new(); self.left_conds.len()];
         let mut p_cache_right = vec![T::new(); self.right_conds.len()];
-        let mut nodes_with_new_outgoing = T::new();
 
         SCC::run(self).apply_to_graph(self);
 
@@ -372,7 +356,7 @@ impl<T: TermSetTrait<Term = u32>> WavePropagationSolver<T> {
             let removed = approx_node_count - min(self.top_order.len(), approx_node_count);
             println!("{iters}: Removed approx {removed} nodes");
 
-            nodes_with_new_outgoing = T::new();
+            let mut nodes_with_new_outgoing = T::new();
 
             changed = self.wave_propagate_iteration(&mut p_old);
 
@@ -396,21 +380,20 @@ impl<T: TermSetTrait<Term = u32>> WavePropagationSolver<T> {
             }
             changed = true;
             let p_dif = self.sols[v as usize].weak_difference(&p_old[v as usize]);
+            let p_dif_vec = Lazy::new(|| p_dif.iter().collect::<Vec<Term>>());
             p_old[v as usize].clone_from(&self.sols[v as usize]);
 
-            let allowed_offsets = Lazy::new(|| {
-                p_dif
-                    .iter()
-                    .map(|t| self.allowed_offsets[t as usize])
-                    .collect::<Vec<usize>>()
-            });
             for (&w, offsets) in &self.edges[v as usize] {
                 for o in offsets.iter() {
                     if o == 0 {
                         self.sols[w as usize].union_assign(&p_dif);
                     } else {
-                        let to_add = p_dif.iter().enumerate().filter_map(|(i, t)| {
-                            (o <= allowed_offsets[i as usize]).then(|| t + o as Term)
+                        let to_add = p_dif_vec.iter().filter_map(|&t| {
+                            if let TermType::Struct(allowed) = self.term_types[t as usize] {
+                                (o <= allowed).then(|| t + o as Term)
+                            } else {
+                                None
+                            }
                         });
                         self.sols[w as usize].extend(to_add);
                     }
@@ -434,6 +417,7 @@ impl<T: TermSetTrait<Term = u32>> WavePropagationSolver<T> {
                 cond_node,
                 right,
                 offset,
+                is_function,
             },
         ) in self.left_conds.iter().enumerate()
         {
@@ -446,7 +430,8 @@ impl<T: TermSetTrait<Term = u32>> WavePropagationSolver<T> {
             let p_new = self.sols[cond_node as usize].difference(&p_cache_left[i]);
             p_cache_left[i].union_assign(&p_new);
             for t in p_new.iter() {
-                if let Some(t) = offset_term_vec_offsets(t, &self.allowed_offsets, *offset) {
+                if let Some(t) = offset_term_vec_offsets(t, *is_function, &self.term_types, *offset)
+                {
                     let t = get_representative(&mut self.parents, t);
                     if t == right {
                         continue;
@@ -466,6 +451,7 @@ impl<T: TermSetTrait<Term = u32>> WavePropagationSolver<T> {
                 cond_node,
                 left,
                 offset,
+                is_function,
             },
         ) in self.right_conds.iter().enumerate()
         {
@@ -478,7 +464,8 @@ impl<T: TermSetTrait<Term = u32>> WavePropagationSolver<T> {
             let p_new = self.sols[cond_node as usize].difference(&p_cache_right[i]);
             p_cache_right[i].union_assign(&p_new);
             for t in p_new.iter() {
-                if let Some(t) = offset_term_vec_offsets(t, &self.allowed_offsets, *offset) {
+                if let Some(t) = offset_term_vec_offsets(t, *is_function, &self.term_types, *offset)
+                {
                     let t = get_representative(&mut self.parents, t);
                     if t == left {
                         continue;
@@ -508,11 +495,11 @@ impl<T: TermSetTrait<Term = u32>> Solver for WavePropagationSolver<T> {
     type Term = Term;
     type TermSet = T;
 
-    fn new(terms: Vec<Term>, allowed_offsets: Vec<(Term, usize)>) -> Self {
-        let mut allowed_offsets_vec = vec![0; terms.len()];
+    fn new(terms: Vec<Term>, term_types: Vec<(Term, TermType)>) -> Self {
+        let mut term_type_vec = vec![TermType::Basic; terms.len()];
 
-        for &(t, offset) in &allowed_offsets {
-            allowed_offsets_vec[t as usize] = offset;
+        for &(t, ty) in &term_types {
+            term_type_vec[t as usize] = ty;
         }
 
         Self {
@@ -521,7 +508,7 @@ impl<T: TermSetTrait<Term = u32>> Solver for WavePropagationSolver<T> {
             rev_edges: vec![HashSet::new(); terms.len()],
             left_conds: vec![],
             right_conds: vec![],
-            allowed_offsets: allowed_offsets_vec,
+            term_types: term_type_vec,
             parents: Vec::from_iter(0..terms.len() as Term),
             top_order: Vec::new(),
         }
@@ -543,22 +530,26 @@ impl<T: TermSetTrait<Term = u32>> Solver for WavePropagationSolver<T> {
                 cond_node,
                 right,
                 offset,
+                is_function,
             } => {
                 self.left_conds.push(CondLeftEntry {
                     cond_node,
                     right,
                     offset,
+                    is_function,
                 });
             }
             Constraint::UnivCondSubsetRight {
                 cond_node,
                 left,
                 offset,
+                is_function,
             } => {
                 self.right_conds.push(CondRightEntry {
                     cond_node,
                     left,
                     offset,
+                    is_function,
                 });
             }
         };
@@ -566,6 +557,21 @@ impl<T: TermSetTrait<Term = u32>> Solver for WavePropagationSolver<T> {
 
     fn finalize(&mut self) {
         self.run_wave_propagation();
+
+        println!("Max: {}", self.sols.iter().map(|s| s.len()).max().unwrap());
+        println!(
+            "Mean: {}",
+            self.sols.iter().map(|s| s.len() as f64).sum::<f64>() / self.sols.len() as f64
+        );
+        println!(
+            "Median: {}",
+            self.sols
+                .iter()
+                .map(|s| s.len())
+                .collect::<Vec<usize>>()
+                .select_nth_unstable(self.sols.len() / 2)
+                .1
+        );
     }
 
     fn get_solution(&self, node: &Term) -> Self::TermSet {
