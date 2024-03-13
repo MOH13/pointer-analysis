@@ -12,9 +12,9 @@ use test_generator::test_resources;
 
 use crate::analysis::PointsToAnalysis;
 use crate::solver::{
-    BasicBetterBitVecSolver, BasicBitVecSolver, BasicHashSolver, BasicRoaringSolver,
+    BasicBetterBitVecSolver, BasicHashSolver, BasicRoaringSolver, BasicSharedBitVecSolver,
     BetterBitVecWavePropagationSolver, GenericSolver, HashWavePropagationSolver,
-    RoaringWavePropagationSolver, Solver,
+    RoaringWavePropagationSolver, SharedBitVecWavePropagationSolver, Solver,
 };
 
 use super::Cell;
@@ -90,7 +90,7 @@ fn parse_points_to<'a>(
 fn run_test_template<S>(resource: &str)
 where
     S: Solver,
-    S::Term: TryInto<usize> + TryFrom<usize> + Copy,
+    S::Term: TryInto<usize> + TryFrom<usize> + Copy + Debug,
 {
     dbg!(resource);
     let config_file = File::open(resource).expect("Could not open file");
@@ -139,11 +139,6 @@ fn hash(resource: &str) {
 }
 
 #[test_resources("res/**/test_config.json")]
-fn bit_vec(resource: &str) {
-    run_test_template::<BasicBitVecSolver>(resource)
-}
-
-#[test_resources("res/**/test_config.json")]
 fn better_bit_vec(resource: &str) {
     run_test_template::<BasicBetterBitVecSolver>(resource)
 }
@@ -154,6 +149,11 @@ fn roaring(resource: &str) {
 }
 
 #[test_resources("res/**/test_config.json")]
+fn shared_bit_vec(resource: &str) {
+    run_test_template::<BasicSharedBitVecSolver>(resource)
+}
+
+#[test_resources("res/**/test_config.json")]
 fn wave_prop(resource: &str) {
     run_test_template::<HashWavePropagationSolver>(resource)
 }
@@ -161,6 +161,11 @@ fn wave_prop(resource: &str) {
 #[test_resources("res/**/test_config.json")]
 fn roaring_wave_prop(resource: &str) {
     run_test_template::<RoaringWavePropagationSolver>(resource)
+}
+
+#[test_resources("res/**/test_config.json")]
+fn shared_bit_vec_wave_prop(resource: &str) {
+    run_test_template::<SharedBitVecWavePropagationSolver>(resource)
 }
 
 #[test_resources("res/**/test_config.json")]

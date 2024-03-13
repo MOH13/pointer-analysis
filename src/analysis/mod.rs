@@ -13,7 +13,7 @@ use crate::module_visitor::pointer::{
 };
 use crate::module_visitor::structs::{StructMap, StructType};
 use crate::module_visitor::{ModuleVisitor, VarIdent};
-use crate::solver::Solver;
+use crate::solver::{Solver, TermType};
 use crate::visualizer::{visualize, Graph};
 
 #[cfg(test)]
@@ -31,7 +31,7 @@ impl PointsToAnalysis {
         let cells_copy = pre_analyzer.cells.clone();
 
         let mut points_to_solver =
-            PointsToSolver::<'a, S>::new(pre_analyzer.cells, pre_analyzer.allowed_offsets);
+            PointsToSolver::<'a, S>::new(pre_analyzer.cells, pre_analyzer.term_types);
         PointerModuleVisitor::new(&mut points_to_solver).visit_module(module);
         points_to_solver.solver.finalize();
 
@@ -217,7 +217,7 @@ impl<'a> Debug for Cell<'a> {
 struct PointsToPreAnalyzer<'a> {
     dests_already_added: HashSet<VarIdent<'a>>,
     cells: Vec<Cell<'a>>,
-    allowed_offsets: Vec<(Cell<'a>, usize)>,
+    term_types: Vec<(Cell<'a>, TermType)>,
     num_cells_per_malloc: usize,
 }
 
@@ -257,7 +257,7 @@ impl<'a> PointsToPreAnalyzer<'a> {
         Self {
             dests_already_added: HashSet::new(),
             cells: vec![],
-            allowed_offsets: vec![],
+            term_types: vec![],
             num_cells_per_malloc: 0,
         }
     }
@@ -271,7 +271,7 @@ impl<'a> PointsToPreAnalyzer<'a> {
         get_and_push_cells(base_ident, struct_type, ident_to_cell, &mut self.cells)
     }
 
-    fn add_cells_and_allowed_offsets(
+    fn add_cells_and_term_types(
         &mut self,
         base_ident: VarIdent<'a>,
         struct_type: Option<&StructType>,
@@ -283,7 +283,7 @@ impl<'a> PointsToPreAnalyzer<'a> {
         let added = self.add_cells(base_ident, struct_type, ident_to_cell);
         for (i, cell) in self.cells.iter().rev().take(added).enumerate() {
             if i > 0 {
-                self.allowed_offsets.push((cell.clone(), i));
+                self.term_types.push((cell.clone(), TermType::Struct(i)));
             }
         }
     }
@@ -311,7 +311,8 @@ impl<'a> PointerModuleObserver<'a> for PointsToPreAnalyzer<'a> {
         }
 
         let first_cell = Cell::Return(first_ident(ident, return_struct_type.as_deref()));
-        self.allowed_offsets.push((first_cell, offset));
+        self.term_types
+            .push((first_cell, TermType::Function(offset)));
     }
 
     fn handle_ptr_global(
@@ -321,7 +322,7 @@ impl<'a> PointerModuleObserver<'a> for PointsToPreAnalyzer<'a> {
         struct_type: Option<Rc<StructType>>,
     ) {
         self.cells.push(Cell::Var(ident.clone()));
-        self.add_cells_and_allowed_offsets(ident, struct_type.as_deref(), Cell::Global);
+        self.add_cells_and_term_types(ident, struct_type.as_deref(), Cell::Global);
     }
 
     fn handle_ptr_instruction(
@@ -331,10 +332,10 @@ impl<'a> PointerModuleObserver<'a> for PointsToPreAnalyzer<'a> {
     ) {
         match instr {
             PointerInstruction::Fresh { ident, struct_type } => {
-                self.add_cells_and_allowed_offsets(ident, struct_type.as_deref(), Cell::Var)
+                self.add_cells_and_term_types(ident, struct_type.as_deref(), Cell::Var)
             }
             PointerInstruction::Gep { dest, .. } => {
-                self.add_cells_and_allowed_offsets(dest, None, Cell::Var)
+                self.add_cells_and_term_types(dest, None, Cell::Var)
             }
             PointerInstruction::Assign {
                 dest, struct_type, ..
@@ -349,12 +350,12 @@ impl<'a> PointerModuleObserver<'a> for PointsToPreAnalyzer<'a> {
                 dest: Some(dest),
                 return_struct_type: struct_type,
                 ..
-            } => self.add_cells_and_allowed_offsets(dest, struct_type.as_deref(), Cell::Var),
+            } => self.add_cells_and_term_types(dest, struct_type.as_deref(), Cell::Var),
             PointerInstruction::Call { dest: None, .. } => {}
 
             PointerInstruction::Alloca { dest, struct_type } => {
                 self.cells.push(Cell::Var(dest.clone()));
-                self.add_cells_and_allowed_offsets(dest, struct_type.as_deref(), Cell::Stack);
+                self.add_cells_and_term_types(dest, struct_type.as_deref(), Cell::Stack);
             }
 
             PointerInstruction::Malloc { dest } => {
@@ -367,7 +368,8 @@ impl<'a> PointerModuleObserver<'a> for PointsToPreAnalyzer<'a> {
                         offset: i,
                     });
                     self.cells.push(cell.clone());
-                    self.allowed_offsets.push((cell, num_cells - i - 1));
+                    self.term_types
+                        .push((cell, TermType::Struct(num_cells - i - 1)));
                 }
             }
 
@@ -400,9 +402,9 @@ impl<'a, S> PointsToSolver<'a, S>
 where
     S: Solver<Term = Cell<'a>>,
 {
-    fn new(cells: Vec<Cell<'a>>, allowed_offsets: Vec<(Cell<'a>, usize)>) -> Self {
+    fn new(cells: Vec<Cell<'a>>, term_types: Vec<(Cell<'a>, TermType)>) -> Self {
         Self {
-            solver: S::new(cells, allowed_offsets),
+            solver: S::new(cells, term_types),
             return_struct_types: HashMap::new(),
         }
     }
@@ -513,13 +515,13 @@ where
                             &mut value_vec,
                         );
                         for (offset, value_cell) in value_vec.into_iter().enumerate() {
-                            let c = cstr!(c in (address_cell.clone()) + offset : value_cell <= c);
+                            let c = cstr!(value_cell <= *((address_cell.clone()) + offset));
                             self.solver.add_constraint(c);
                         }
                     }
                     None => {
                         let value_cell = Cell::Var(value);
-                        let c = cstr!(c in address_cell : value_cell <= c);
+                        let c = cstr!(value_cell <= *address_cell);
                         self.solver.add_constraint(c);
                     }
                 };
@@ -536,13 +538,13 @@ where
                         let mut dest_vec = vec![];
                         get_and_push_cells(dest, struct_type.as_deref(), Cell::Var, &mut dest_vec);
                         for (offset, dest_cell) in dest_vec.into_iter().enumerate() {
-                            let c = cstr!(c in (address_cell.clone()) + offset : c <= dest_cell);
+                            let c = cstr!(*((address_cell.clone()) + offset) <= dest_cell);
                             self.solver.add_constraint(c);
                         }
                     }
                     None => {
                         let dest_cell = Cell::Var(dest);
-                        let c = cstr!(c in address_cell : c <= dest_cell);
+                        let c = cstr!(*address_cell <= dest_cell);
                         self.solver.add_constraint(c);
                     }
                 };
@@ -643,7 +645,7 @@ where
                 {
                     let arg_cell = Cell::Var(arg);
                     let offset = return_struct_type.as_ref().map(|st| st.size).unwrap_or(1) + i;
-                    let c = cstr!(c in (function_cell.clone()) + offset : arg_cell <= c);
+                    let c = cstr!(arg_cell <= *fn ((function_cell.clone()) + offset));
                     self.solver.add_constraint(c);
                 }
 
@@ -658,7 +660,7 @@ where
                     );
 
                     for (i, cell) in dest_cells.into_iter().enumerate() {
-                        let c = cstr!(c in (function_cell.clone()) + i : c <= cell);
+                        let c = cstr!(*fn ((function_cell.clone()) + i) <= cell);
                         self.solver.add_constraint(c);
                     }
                 }

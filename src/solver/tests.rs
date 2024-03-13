@@ -2,7 +2,7 @@ use core::hash::Hash;
 use hashbrown::{HashMap, HashSet};
 use std::fmt::Debug;
 
-use super::{Constraint, Solver};
+use super::{Constraint, Solver, TermType};
 use crate::cstr;
 use crate::solver::TermSetTrait;
 
@@ -40,10 +40,6 @@ macro_rules! solver_tests {
                     vars!($crate::solver::BasicHashSolver)
                 }
                 #[test]
-                fn bit_vec() {
-                    vars!($crate::solver::BasicBitVecSolver)
-                }
-                #[test]
                 fn better_bit_vec() {
                     vars!($crate::solver::BasicBetterBitVecSolver)
                 }
@@ -54,6 +50,10 @@ macro_rules! solver_tests {
                 #[test]
                 fn roaring_wave_prop() {
                     vars!($crate::solver::RoaringWavePropagationSolver)
+                }
+                #[test]
+                fn shared_bitvec_wave_prop() {
+                    vars!($crate::solver::SharedBitVecWavePropagationSolver)
                 }
                 #[test]
                 fn roaring() {
@@ -77,14 +77,14 @@ macro_rules! solver_tests {
 
 fn solver_test_template<T, S>(
     terms: Vec<T>,
-    allowed_offsets: Vec<(T, usize)>,
+    term_types: Vec<(T, TermType)>,
     constraints: impl IntoIterator<Item = Constraint<T>>,
     expected_output: HashMap<T, HashSet<T>>,
 ) where
     T: Eq + Hash + Copy + Debug,
     S: Solver<Term = T>,
 {
-    let mut solver = S::new(terms.clone(), allowed_offsets);
+    let mut solver = S::new(terms.clone(), term_types);
     for c in constraints {
         solver.add_constraint(c);
     }
@@ -111,7 +111,7 @@ solver_tests! {
         let constraints = [
             cstr!(y in x),
             cstr!(x <= z),
-            cstr!(c in z : x <= c),
+            cstr!(x <= *z),
             cstr!(w in z),
         ];
         let expected_output = output![x -> {y}, y -> {y}, z -> {y, w}, w -> {y}, a -> {}];
@@ -133,13 +133,13 @@ solver_tests! {
             cstr!(x in yg),
             cstr!(yf in py),
             cstr!(py + 1 <= pg),
-            cstr!(c in pg : c <= z),
-            cstr!(c in z : py <= c),
-            cstr!(c in pg : py <= c),
+            cstr!(*pg <= z),
+            cstr!(py <= *z),
+            cstr!(py <= *pg),
         ];
         let expected_output =
             output![x -> {yf}, yf -> {yf}, yg -> {x, yf}, py -> {yf}, pg -> {yg}, z -> {x, yf}];
-        solver_test_template::<_, S>(terms, vec![(yf, 1)], constraints, expected_output);
+        solver_test_template::<_, S>(terms, vec![(yf, TermType::Struct(1))], constraints, expected_output);
     }
 
     // Pseudo code:
@@ -153,7 +153,7 @@ solver_tests! {
         let terms = vec![x1, x2, y];
         let constraints = [cstr!(x1 in x1), cstr!(x1 + 1 <= x2), cstr!(x2 <= x1)];
         let expected_output = output![x1 -> {x1,x2}, x2 -> {x2}, y -> {}];
-        solver_test_template::<_, S>(terms, vec![(x1, 1)], constraints, expected_output);
+        solver_test_template::<_, S>(terms, vec![(x1, TermType::Struct(1))], constraints, expected_output);
     }
 
     // Pseudo code:
@@ -168,10 +168,10 @@ solver_tests! {
         let constraints = [
             cstr!(x in ag),
             cstr!(hf in b),
-            cstr!(c in b + 0 : af <= c),
-            cstr!(c in b + 1 : ag <= c),
-            cstr!(c in b + 0 : c <= cf),
-            cstr!(c in b + 1 : c <= cg),
+            cstr!(af <= *(b + 0)),
+            cstr!(ag <= *(b + 1)),
+            cstr!(*(b + 0) <= cf),
+            cstr!(*(b + 1) <= cg),
         ];
         let expected_output = output![
             x -> {},
@@ -183,7 +183,7 @@ solver_tests! {
             cf -> {},
             cg -> {x}
         ];
-        let allowed_offsets = vec![(af, 1), (hf, 1), (cf, 1)];
+        let allowed_offsets = vec![(af, TermType::Struct(1)), (hf, TermType::Struct(1)), (cf, TermType::Struct(1))];
         solver_test_template::<_, S>(terms, allowed_offsets, constraints, expected_output);
     }
 }
