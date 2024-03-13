@@ -12,10 +12,9 @@ use test_generator::test_resources;
 
 use crate::analysis::PointsToAnalysis;
 use crate::solver::{
-    BasicBetterBitVecSolver, BasicBitVecSolver, BasicHashSolver, BasicRoaringSolver,
-    BasicSharedBitVecSolver, BetterBitVecWavePropagationSolver, GenericSolver,
-    HashWavePropagationSolver, RoaringWavePropagationSolver, SharedBitVecWavePropagationSolver,
-    Solver,
+    BasicBetterBitVecSolver, BasicHashSolver, BasicRoaringSolver, BasicSharedBitVecSolver,
+    BetterBitVecWavePropagationSolver, GenericSolver, HashWavePropagationSolver,
+    RoaringWavePropagationSolver, SharedBitVecWavePropagationSolver, Solver,
 };
 
 use super::Cell;
@@ -137,11 +136,6 @@ where
 #[test_resources("res/**/test_config.json")]
 fn hash(resource: &str) {
     run_test_template::<BasicHashSolver>(resource)
-}
-
-#[test_resources("res/**/test_config.json")]
-fn bit_vec(resource: &str) {
-    run_test_template::<BasicBitVecSolver>(resource)
 }
 
 #[test_resources("res/**/test_config.json")]

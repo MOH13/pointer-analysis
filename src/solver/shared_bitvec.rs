@@ -196,24 +196,16 @@ fn chunk_diff(big: &Chunk, small: &Chunk) -> u32 {
 }
 
 /// For debugging
-#[inline(never)]
-fn new_never_inline<T>(v: T) -> Rc<T> {
-    Rc::new(v)
-}
+// #[inline(never)]
+// fn new_never_inline<T>(v: T) -> Rc<T> {
+//     Rc::new(v)
+// }
 
-/// For debugging
-#[inline(never)]
-fn make_mut_never_inline<T: Clone>(v: &mut Rc<T>) -> &mut T {
-    Rc::make_mut(v)
-}
-
-impl SharedBitVec {
-    /// Creates an equivalent bit vector
-    /// that is using the array representation.
-    fn to_forced_array(&self) -> SharedBitVec {
-        Self::Array(self.iter().collect())
-    }
-}
+// /// For debugging
+// #[inline(never)]
+// fn make_mut_never_inline<T: Clone>(v: &mut Rc<T>) -> &mut T {
+//     Rc::make_mut(v)
+// }
 
 impl TermSetTrait for SharedBitVec {
     type Term = u32;
@@ -409,7 +401,7 @@ impl TermSetTrait for SharedBitVec {
                             self_segment.chunk = other_segment.chunk.clone();
                             self_inner.len += new_count as u32;
                         } else if new_count > 0 {
-                            *make_mut_never_inline(&mut self_segment.chunk) = new_chunk;
+                            *Rc::make_mut(&mut self_segment.chunk) = new_chunk;
                             self_inner.len += new_count as u32;
                         }
                         other_idx += 1;
@@ -430,7 +422,7 @@ impl TermSetTrait for SharedBitVec {
                             self_inner.len += new_chunk.len;
                             self_segments.push(Segment {
                                 start_index: other_segment.start_index,
-                                chunk: new_never_inline(new_chunk),
+                                chunk: Rc::new(new_chunk),
                             });
                             continue 'other_loop;
                         }

@@ -1,10 +1,9 @@
 use llvm_ir::Module;
 use pointer_analysis::analysis::PointsToAnalysis;
 use pointer_analysis::solver::{
-    BasicBetterBitVecSolver, BasicBitVecSolver, BasicHashSolver, BasicRoaringSolver,
-    BasicSharedBitVecSolver, BetterBitVecWavePropagationSolver, GenericSolver,
-    HashWavePropagationSolver, RoaringWavePropagationSolver, SharedBitVecWavePropagationSolver,
-    Solver,
+    BasicBetterBitVecSolver, BasicHashSolver, BasicRoaringSolver, BasicSharedBitVecSolver,
+    BetterBitVecWavePropagationSolver, GenericSolver, HashWavePropagationSolver,
+    RoaringWavePropagationSolver, SharedBitVecWavePropagationSolver, Solver,
 };
 use std::fmt::Debug;
 
@@ -34,10 +33,6 @@ where
 
 fn hash(c: &mut Criterion) {
     bench_template::<BasicHashSolver>("HashWorklist", c);
-}
-
-fn bit_vec(c: &mut Criterion) {
-    bench_template::<BasicBitVecSolver>("BitVecWorklist", c);
 }
 
 fn better_bit_vec(c: &mut Criterion) {
@@ -72,7 +67,6 @@ criterion_group! {
     name = benches;
     config = Criterion::default().sample_size(10);
     targets = hash,
-    //bit_vec,
     better_bit_vec,
     roaring,
     shared_bitvec,

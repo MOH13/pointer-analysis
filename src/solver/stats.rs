@@ -6,7 +6,7 @@ use std::marker::PhantomData;
 
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
 
-use super::{Constraint, Solver, TermSetTrait};
+use super::{Constraint, Solver, TermSetTrait, TermType};
 
 pub struct StatSolver<T> {
     terms: Vec<T>,
@@ -69,7 +69,7 @@ impl<T: Eq + PartialEq + Hash + Clone> Solver for StatSolver<T> {
     type Term = T;
     type TermSet = HashSet<T>;
 
-    fn new(terms: Vec<Self::Term>, _allowed_offsets: Vec<(Self::Term, usize)>) -> Self {
+    fn new(terms: Vec<Self::Term>, _term_types: Vec<(Self::Term, TermType)>) -> Self {
         Self {
             terms,
             inclusions: vec![],
@@ -91,11 +91,13 @@ impl<T: Eq + PartialEq + Hash + Clone> Solver for StatSolver<T> {
                 cond_node,
                 right,
                 offset,
+                is_function: _, // TODO
             } => self.cond_lefts.push((cond_node, offset, right)),
             Constraint::UnivCondSubsetRight {
                 cond_node,
                 left,
                 offset,
+                is_function: _,
             } => self.cond_rights.push((cond_node, offset, left)),
         }
     }

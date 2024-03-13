@@ -8,7 +8,7 @@ use roaring::RoaringBitmap;
 use super::shared_bitvec::SharedBitVec;
 use super::{
     edges_between, offset_term, offset_terms, BetterBitVec, Constraint, GenericSolver, Solver,
-    TermSetTrait, UnivCond,
+    TermSetTrait, TermType, UnivCond,
 };
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
 
@@ -74,13 +74,17 @@ impl<T: TermSetTrait<Term = u32>> Solver for BasicSolver<u32, T> {
     type Term = u32;
     type TermSet = T;
 
-    fn new(terms: Vec<Self::Term>, allowed_offsets: Vec<(Self::Term, usize)>) -> Self {
+    fn new(terms: Vec<Self::Term>, term_types: Vec<(Self::Term, TermType)>) -> Self {
         Self {
             worklist: VecDeque::new(),
             sols: vec![T::new(); terms.len()],
             edges: vec![HashMap::new(); terms.len()],
             conds: vec![vec![]; terms.len()],
-            allowed_offsets: allowed_offsets.into_iter().collect(),
+            // TODO: use term types instead
+            allowed_offsets: term_types
+                .into_iter()
+                .map(|(t, ty)| (t, ty.into_offset()))
+                .collect(),
         }
     }
 
@@ -100,6 +104,7 @@ impl<T: TermSetTrait<Term = u32>> Solver for BasicSolver<u32, T> {
                 cond_node,
                 right,
                 offset,
+                ..// TODO: functions
             } => {
                 self.conds[cond_node as usize].push(UnivCond::SubsetLeft { right, offset });
                 let terms = offset_terms(
@@ -116,6 +121,7 @@ impl<T: TermSetTrait<Term = u32>> Solver for BasicSolver<u32, T> {
                 cond_node,
                 left,
                 offset,
+                ..// TODO: functions
             } => {
                 self.conds[cond_node as usize].push(UnivCond::SubsetRight { left, offset });
                 let terms = offset_terms(
