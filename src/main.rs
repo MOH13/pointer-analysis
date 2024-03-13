@@ -5,7 +5,10 @@ use hashbrown::HashSet;
 use llvm_ir::Module;
 use pointer_analysis::analysis::{cell_is_in_function, Cell, PointsToAnalysis, PointsToResult};
 use pointer_analysis::cli::{Args, SolverMode, TermSet};
-use pointer_analysis::solver::{BasicBetterBitVecSolver, RoaringWavePropagationSolver, Solver};
+use pointer_analysis::solver::{
+    BasicBetterBitVecSolver, BasicSharedBitVecSolver, RoaringWavePropagationSolver,
+    SharedBitVecWavePropagationSolver, Solver,
+};
 use pointer_analysis::solver::{BasicHashSolver, BasicRoaringSolver, GenericSolver, StatSolver};
 use pointer_analysis::solver::{BetterBitVecWavePropagationSolver, HashWavePropagationSolver};
 use std::io;
@@ -100,6 +103,17 @@ fn main() -> io::Result<()> {
             };
             show_output(result, &args);
         }
+        (SolverMode::Basic, TermSet::SharedBitVec, visualize) => {
+            let result = match visualize {
+                Some(path) => PointsToAnalysis::run_and_visualize::<
+                    GenericSolver<_, BasicSharedBitVecSolver, _>,
+                >(&module, &path),
+                None => {
+                    PointsToAnalysis::run::<GenericSolver<_, BasicSharedBitVecSolver, _>>(&module)
+                }
+            };
+            show_output(result, &args);
+        }
         // Wave prop solver
         // Basic solver
         (SolverMode::Wave, TermSet::Hash, visualize) => {
@@ -121,6 +135,17 @@ fn main() -> io::Result<()> {
                 None => PointsToAnalysis::run::<GenericSolver<_, RoaringWavePropagationSolver, _>>(
                     &module,
                 ),
+            };
+            show_output(result, &args);
+        }
+        (SolverMode::Wave, TermSet::SharedBitVec, visualize) => {
+            let result = match visualize {
+                Some(path) => PointsToAnalysis::run_and_visualize::<
+                    GenericSolver<_, SharedBitVecWavePropagationSolver, _>,
+                >(&module, &path),
+                None => PointsToAnalysis::run::<
+                    GenericSolver<_, SharedBitVecWavePropagationSolver, _>,
+                >(&module),
             };
             show_output(result, &args);
         }

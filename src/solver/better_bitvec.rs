@@ -1,7 +1,6 @@
 use std::cmp::{max, min};
 
 use bitvec::prelude::*;
-use bitvec::slice::IterOnes;
 use bitvec::vec::BitVec;
 
 use super::TermSetTrait;
@@ -278,11 +277,6 @@ impl BetterBitVec {
 impl TermSetTrait for BetterBitVec {
     type Term = u32;
 
-    type Iterator<'a> = OffsetIter<IterOnes<'a, usize, Lsb0>>
-    where
-        Self: 'a,
-    ;
-
     #[inline]
     fn new() -> Self {
         Self {
@@ -384,7 +378,7 @@ impl TermSetTrait for BetterBitVec {
     }
 
     #[inline]
-    fn iter<'a>(&'a self) -> Self::Iterator<'a> {
+    fn iter(&self) -> impl Iterator<Item = Self::Term> {
         let offset_bits = self.offset_bits();
         OffsetIter {
             iter: self.bitvec.iter_ones(),
