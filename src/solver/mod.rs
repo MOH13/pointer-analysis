@@ -2,7 +2,8 @@ use hashbrown::{HashMap, HashSet};
 use roaring::RoaringBitmap;
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::ops::Add;
+use std::marker::PhantomData;
+use std::mem;
 
 mod basic;
 mod better_bitvec;
@@ -122,6 +123,8 @@ macro_rules! cstr {
     };
 }
 
+pub type IntegerTerm = u32;
+
 #[derive(Clone, Debug)]
 enum UnivCond<T: Clone> {
     SubsetLeft { right: T, offset: usize },
@@ -145,6 +148,10 @@ pub trait TermSetTrait: Clone + Default {
     // Only guarantees that if self is superset of other, then the result is a subset of self and a superset of self.difference(other)
     fn weak_difference(&self, other: &Self) -> Self {
         self.difference(other)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 
@@ -198,7 +205,7 @@ impl<T: Eq + PartialEq + Hash + Clone> TermSetTrait for HashSet<T> {
 }
 
 impl TermSetTrait for RoaringBitmap {
-    type Term = u32;
+    type Term = IntegerTerm;
 
     #[inline]
     fn new() -> Self {
@@ -246,19 +253,77 @@ impl TermSetTrait for RoaringBitmap {
     }
 }
 
-pub trait Solver {
+#[derive(Debug)]
+pub struct ConstrainedTerms<T> {
+    pub terms: Vec<T>,
+    pub term_types: Vec<(T, TermType)>,
+    pub constraints: Vec<Constraint<T>>,
+}
+
+impl<T> ConstrainedTerms<T> {
+    fn combine(&mut self, other: Self) {
+        self.terms.extend(other.terms);
+        self.term_types.extend(other.term_types);
+        self.constraints.extend(other.constraints);
+    }
+}
+pub trait Solver<I>
+where
+    I: SolverInput,
+{
+    type Solution: SolverSolution<Term = I::Term>;
+
+    fn solve(self, input: I) -> Self::Solution;
+
+    fn as_generic(self) -> GenericSolver<Self>
+    where
+        Self: Sized,
+        I: SolverInput<Term = IntegerTerm>,
+    {
+        GenericSolver::new(self)
+    }
+}
+
+// impl<F, I, O> Solver<I> for F
+// where
+//     F: FnOnce(I) -> O,
+//     I: SolverInput<Term = O::Term>,
+//     O: SolverSolution,
+// {
+//     type Solution = O;
+
+//     fn solve(self, input: I) -> Self::Solution {
+//         self(input)
+//     }
+// }
+
+pub trait SolverInput {
+    type Term;
+}
+
+pub struct ContextSensitiveInput<T, F> {
+    pub entry: ConstrainedTerms<T>,
+    pub functions: Vec<(F, ConstrainedTerms<T>)>,
+}
+
+impl<T, F> SolverInput for ContextSensitiveInput<T, F> {
+    type Term = T;
+}
+
+pub type ContextInsensitiveInput<T> = ConstrainedTerms<T>;
+
+impl<T> SolverInput for ContextInsensitiveInput<T> {
+    type Term = T;
+}
+
+pub trait SolverSolution {
     type Term;
     type TermSet: TermSetTrait<Term = Self::Term>;
 
-    fn new(terms: Vec<Self::Term>, term_types: Vec<(Self::Term, TermType)>) -> Self;
-
-    fn add_constraint(&mut self, c: Constraint<Self::Term>);
-    fn get_solution(&self, node: &Self::Term) -> Self::TermSet;
-
-    fn finalize(&mut self);
+    fn get(&self, node: &Self::Term) -> Self::TermSet;
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TermType {
     Basic,
     Struct(usize),
@@ -272,111 +337,162 @@ impl TermType {
             TermType::Struct(offset) | TermType::Function(offset) => offset,
         }
     }
+
+    pub fn is_basic(self) -> bool {
+        self == TermType::Basic
+    }
 }
 
-pub struct GenericSolver<T, S, T2> {
-    terms: Vec<T>,
-    term_map: HashMap<T, T2>,
+pub trait ContextInsensitiveSolver<T>: Solver<ContextInsensitiveInput<T>> {
+    type ContextSensitiveSolver<F>: Solver<ContextSensitiveInput<T, F>>;
+
+    fn as_context_sensitive<F>(self) -> Self::ContextSensitiveSolver<F>;
+}
+
+impl<S, T> ContextInsensitiveSolver<T> for S
+where
+    S: Solver<ContextInsensitiveInput<T>> + Sized,
+{
+    type ContextSensitiveSolver<F> = AsContextSensitive<S, F>;
+
+    fn as_context_sensitive<F>(self) -> Self::ContextSensitiveSolver<F> {
+        AsContextSensitive(self, PhantomData)
+    }
+}
+
+#[derive(Clone)]
+pub struct AsContextSensitive<S, F>(pub S, PhantomData<F>);
+
+impl<S, T, F> Solver<ContextSensitiveInput<T, F>> for AsContextSensitive<S, F>
+where
+    S: Solver<ContextInsensitiveInput<T>>,
+{
+    type Solution = S::Solution;
+
+    fn solve(self, mut input: ContextSensitiveInput<T, F>) -> Self::Solution {
+        for (_, t) in input.functions {
+            input.entry.combine(t);
+        }
+        self.0.solve(input.entry)
+    }
+}
+
+pub struct WithoutContext<S>(pub S);
+
+impl<S, T, F> Solver<ContextSensitiveInput<T, F>> for WithoutContext<S>
+where
+    S: Solver<ContextSensitiveInput<T, F>>,
+{
+    type Solution = S::Solution;
+
+    fn solve(self, mut input: ContextSensitiveInput<T, F>) -> Self::Solution {
+        let funcs = mem::take(&mut input.functions);
+        for (_, t) in funcs {
+            input.entry.combine(t);
+        }
+        self.0.solve(input)
+    }
+}
+
+#[derive(Clone)]
+pub struct GenericSolver<S> {
     sub_solver: S,
 }
 
-fn term_to_t2<T, T2>(term_map: &HashMap<T, T2>, term: &T) -> T2
-where
-    T: Hash + Eq + Debug,
-    T2: Copy,
-{
-    *term_map.get(term).unwrap_or_else(|| {
-        panic!("Invalid lookup for term that was not passed in during initialization: {term:?}")
-    })
+impl<S> GenericSolver<S> {
+    pub fn new(sub_solver: S) -> Self {
+        Self { sub_solver }
+    }
 }
 
-fn edges_between<T, U>(edges: &mut Vec<HashMap<T, U>>, left: T, right: T) -> &mut U
+impl<S, T> Solver<ContextInsensitiveInput<T>> for GenericSolver<S>
 where
-    T: Hash + Eq + TryInto<usize>,
-    U: Default,
-    <T as TryInto<usize>>::Error: Debug,
+    T: Hash + Eq + Clone + Debug,
+    S: Solver<ContextInsensitiveInput<IntegerTerm>>,
 {
-    edges[left.try_into().expect("Could not convert to usize")]
-        .entry(right)
-        .or_default()
-}
+    type Solution = GenericSolverSolution<S::Solution, T>;
 
-fn offset_term_vec_offsets<T>(
-    term: T,
-    is_function: bool,
-    term_types: &[TermType],
-    offset: usize,
-) -> Option<T>
-where
-    T: Copy + Hash + Eq + Ord + TryInto<usize> + TryFrom<usize> + Add<T, Output = T>,
-    <T as TryInto<usize>>::Error: Debug,
-    <T as TryFrom<usize>>::Error: Debug,
-{
-    let term_type = term_types[term.try_into().unwrap()];
-    match term_type {
-        TermType::Basic if !is_function && offset == 0 => Some(term),
-        TermType::Struct(allowed) if !is_function => {
-            (offset <= allowed).then(|| term + offset.try_into().unwrap())
+    fn solve(self, constrained_terms: ContextInsensitiveInput<T>) -> Self::Solution {
+        let terms = constrained_terms.terms.clone();
+        let mapping = GenericIdMap::from_terms(terms);
+
+        let translated = mapping.translate_constrained_terms(&constrained_terms);
+        let sub_solution = self.sub_solver.solve(translated);
+        GenericSolverSolution {
+            mapping,
+            sub_solution,
         }
-        TermType::Function(allowed) if is_function => {
-            (offset <= allowed).then(|| term + offset.try_into().unwrap())
+    }
+}
+
+impl<S, T, F> Solver<ContextSensitiveInput<T, F>> for GenericSolver<S>
+where
+    T: Hash + Eq + Clone + Debug,
+    F: Hash + Eq + Clone + Debug,
+    S: Solver<ContextSensitiveInput<IntegerTerm, IntegerTerm>>,
+{
+    type Solution = GenericSolverSolution<S::Solution, T, F>;
+
+    fn solve(self, input: ContextSensitiveInput<T, F>) -> Self::Solution {
+        let terms = input
+            .entry
+            .terms
+            .iter()
+            .chain(input.functions.iter().flat_map(|(_, t)| &t.terms))
+            .cloned()
+            .collect();
+        let functions = input.functions.iter().map(|(f, _)| f.clone()).collect();
+        let mapping = GenericIdMap::new(terms, functions);
+
+        let translated_entry = mapping.translate_constrained_terms(&input.entry);
+        let translated_functions = input
+            .functions
+            .iter()
+            .map(|(id, f)| {
+                (
+                    mapping.function_to_integer(id),
+                    mapping.translate_constrained_terms(f),
+                )
+            })
+            .collect();
+        let translated_input = ContextSensitiveInput {
+            entry: translated_entry,
+            functions: translated_functions,
+        };
+        let sub_solution = self.sub_solver.solve(translated_input);
+        GenericSolverSolution {
+            mapping,
+            sub_solution,
         }
-        _ => None,
     }
 }
 
-fn offset_term<T>(term: T, allowed_offsets: &HashMap<T, usize>, offset: usize) -> Option<T>
+pub struct GenericIdMap<T, F = ()> {
+    terms: Vec<T>,
+    term_map: HashMap<T, IntegerTerm>,
+    _functions: Vec<F>,
+    function_map: HashMap<F, IntegerTerm>,
+}
+
+impl<T, F> GenericIdMap<T, F>
 where
-    T: Hash + Eq + Ord + TryFrom<usize> + Add<T, Output = T>,
-    <T as TryFrom<usize>>::Error: Debug,
+    T: Hash + Eq + Clone + Debug,
 {
-    if offset == 0 {
-        Some(term)
-    } else {
-        allowed_offsets.get(&term).and_then(|&max_offset| {
-            (offset <= max_offset)
-                .then(|| term + offset.try_into().expect("Could not convert from usize"))
-        })
+    fn from_terms(terms: Vec<T>) -> Self {
+        let term_map = terms
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(i, t)| (t, i as IntegerTerm))
+            .collect();
+        Self {
+            terms,
+            term_map,
+            _functions: vec![],
+            function_map: HashMap::new(),
+        }
     }
-}
 
-fn offset_terms<T>(
-    terms: impl Iterator<Item = T>,
-    allowed_offsets: &HashMap<T, usize>,
-    offset: usize,
-) -> Vec<T>
-where
-    T: Hash + Eq + Ord + TryInto<usize> + TryFrom<usize> + Add<T, Output = T>,
-    <T as TryFrom<usize>>::Error: Debug,
-{
-    if offset == 0 {
-        terms.collect()
-    } else {
-        terms
-            .filter_map(|t| offset_term(t, allowed_offsets, offset))
-            .collect()
-    }
-}
-
-fn to_usize<T>(v: T) -> usize
-where
-    T: TryInto<usize>,
-{
-    v.try_into()
-        .map_err(|_| ())
-        .expect("Could not convert to usize")
-}
-
-fn from_usize<T>(v: usize) -> T
-where
-    T: TryFrom<usize>,
-{
-    v.try_into()
-        .map_err(|_| ())
-        .expect("Could not convert to usize")
-}
-
-impl<T: Clone, S, T2> GenericSolver<T, S, T2> {
     fn terms_as_nodes(&self) -> Vec<Node<T>> {
         self.terms
             .iter()
@@ -387,27 +503,22 @@ impl<T: Clone, S, T2> GenericSolver<T, S, T2> {
             })
             .collect()
     }
-}
 
-impl<T, S> GenericSolver<T, S, S::Term>
-where
-    T: Hash + Eq + Clone + Debug,
-    S: Solver,
-    S::Term: TryInto<usize> + TryFrom<usize> + Copy,
-{
-    fn term_to_t2(&self, term: &T) -> S::Term {
-        term_to_t2(&self.term_map, term)
+    fn term_to_integer(&self, term: &T) -> IntegerTerm {
+        *self.term_map.get(term).unwrap_or_else(|| {
+            panic!("Invalid lookup for term that was not passed in during initialization: {term:?}")
+        })
     }
 
-    fn t2_to_term(&self, i: S::Term) -> T {
-        self.terms[to_usize(i)].clone()
+    fn integer_to_term(&self, i: IntegerTerm) -> T {
+        self.terms[i as usize].clone()
     }
 
-    fn translate_constraint(&self, c: Constraint<T>) -> Constraint<S::Term> {
+    fn translate_constraint(&self, c: &Constraint<T>) -> Constraint<IntegerTerm> {
         match c {
             Constraint::Inclusion { term, node } => {
-                let term = self.term_to_t2(&term);
-                let node = self.term_to_t2(&node);
+                let term = self.term_to_integer(term);
+                let node = self.term_to_integer(node);
                 cstr!(term in node)
             }
             Constraint::Subset {
@@ -415,9 +526,9 @@ where
                 right,
                 offset,
             } => {
-                let left = self.term_to_t2(&left);
-                let right = self.term_to_t2(&right);
-                cstr!(left + offset <= right)
+                let left = self.term_to_integer(&left);
+                let right = self.term_to_integer(&right);
+                cstr!(left + (*offset) <= right)
             }
             Constraint::UnivCondSubsetLeft {
                 cond_node,
@@ -425,12 +536,12 @@ where
                 offset,
                 is_function,
             } => {
-                let cond_node = self.term_to_t2(&cond_node);
-                let right = self.term_to_t2(&right);
-                if is_function {
-                    cstr!(*fn (cond_node + offset) <= right)
+                let cond_node = self.term_to_integer(&cond_node);
+                let right = self.term_to_integer(&right);
+                if *is_function {
+                    cstr!(*fn (cond_node + (*offset)) <= right)
                 } else {
-                    cstr!(*(cond_node + offset) <= right)
+                    cstr!(*(cond_node + (*offset)) <= right)
                 }
             }
             Constraint::UnivCondSubsetRight {
@@ -439,65 +550,152 @@ where
                 offset,
                 is_function,
             } => {
-                let cond_node = self.term_to_t2(&cond_node);
-                let left = self.term_to_t2(&left);
-                if is_function {
-                    cstr!(left <= *fn (cond_node + offset))
+                let cond_node = self.term_to_integer(&cond_node);
+                let left = self.term_to_integer(&left);
+                if *is_function {
+                    cstr!(left <= *fn (cond_node + (*offset)))
                 } else {
-                    cstr!(left <= *(cond_node + offset))
+                    cstr!(left <= *(cond_node + (*offset)))
                 }
             }
         }
     }
+
+    fn translate_constrained_terms(
+        &self,
+        constrained_terms: &ConstrainedTerms<T>,
+    ) -> ConstrainedTerms<IntegerTerm> {
+        let translated_terms = constrained_terms
+            .terms
+            .iter()
+            .map(|t| self.term_to_integer(t))
+            .collect();
+        let translated_term_types = constrained_terms
+            .term_types
+            .iter()
+            .map(|(t, tt)| (self.term_to_integer(t), *tt))
+            .collect();
+        let translated_constraints = constrained_terms
+            .constraints
+            .iter()
+            .map(|c| self.translate_constraint(c))
+            .collect();
+        ConstrainedTerms {
+            terms: translated_terms,
+            term_types: translated_term_types,
+            constraints: translated_constraints,
+        }
+    }
 }
 
-impl<T, S> Solver for GenericSolver<T, S, S::Term>
+impl<T, F> GenericIdMap<T, F>
 where
     T: Hash + Eq + Clone + Debug,
-    S: Solver,
-    S::Term: TryInto<usize> + TryFrom<usize> + Copy + Debug,
+    F: Hash + Eq + Clone + Debug,
+{
+    fn new(terms: Vec<T>, functions: Vec<F>) -> Self {
+        let term_mapping = GenericIdMap::<T>::from_terms(terms);
+        let function_map = functions
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(i, f)| (f, i as IntegerTerm))
+            .collect();
+        Self {
+            terms: term_mapping.terms,
+            term_map: term_mapping.term_map,
+            _functions: functions,
+            function_map,
+        }
+    }
+
+    fn function_to_integer(&self, function: &F) -> IntegerTerm {
+        *self.function_map.get(function).unwrap_or_else(|| {
+            panic!("Invalid lookup for function that was not passed in during initialization: {function:?}")
+        })
+    }
+
+    fn _integer_to_function(&self, i: IntegerTerm) -> F {
+        self._functions[i as usize].clone()
+    }
+}
+
+pub struct GenericSolverSolution<S, T, F = ()> {
+    mapping: GenericIdMap<T, F>,
+    sub_solution: S,
+}
+
+impl<S, T, F> SolverSolution for GenericSolverSolution<S, T, F>
+where
+    T: Hash + Eq + Clone + Debug,
+    S: SolverSolution<Term = IntegerTerm>,
 {
     type Term = T;
     type TermSet = HashSet<T>;
 
-    fn new(terms: Vec<Self::Term>, term_types: Vec<(Self::Term, TermType)>) -> Self {
-        let length = terms.len();
-        let term_map = terms
-            .iter()
-            .cloned()
-            .enumerate()
-            .map(|(i, t)| (t, from_usize(i)))
-            .collect();
-        let sub_solver = S::new(
-            (0..length)
-                .map(|v| {
-                    v.try_into()
-                        .map_err(|_| ())
-                        .expect("Could not convert to usize")
-                })
-                .collect(),
-            term_types
-                .into_iter()
-                .map(|(term, offset)| (term_to_t2(&term_map, &term), offset))
-                .collect(),
-        );
-        Self {
-            terms,
-            term_map,
-            sub_solver,
+    fn get(&self, node: &Self::Term) -> Self::TermSet {
+        let sol = self.sub_solution.get(&self.mapping.term_to_integer(node));
+        HashSet::from_iter(sol.iter().map(|i| self.mapping.integer_to_term(i)))
+    }
+}
+
+fn edges_between<U>(
+    edges: &mut Vec<HashMap<IntegerTerm, U>>,
+    left: IntegerTerm,
+    right: IntegerTerm,
+) -> &mut U
+where
+    U: Default,
+{
+    edges[usize::try_from(left).expect("Could not convert to usize")]
+        .entry(right)
+        .or_default()
+}
+
+fn offset_term_vec_offsets(
+    term: IntegerTerm,
+    is_function: bool,
+    term_types: &[TermType],
+    offset: usize,
+) -> Option<IntegerTerm> {
+    let term_type = term_types[usize::try_from(term).unwrap()];
+    match term_type {
+        TermType::Basic if !is_function && offset == 0 => Some(term),
+        TermType::Struct(allowed) if !is_function => {
+            (offset <= allowed).then(|| term + u32::try_from(offset).unwrap())
         }
+        TermType::Function(allowed) if is_function => {
+            (offset <= allowed).then(|| term + u32::try_from(offset).unwrap())
+        }
+        _ => None,
     }
+}
 
-    fn add_constraint(&mut self, c: Constraint<T>) {
-        self.sub_solver.add_constraint(self.translate_constraint(c))
+fn offset_term(
+    term: IntegerTerm,
+    allowed_offsets: &HashMap<IntegerTerm, usize>,
+    offset: usize,
+) -> Option<IntegerTerm> {
+    if offset == 0 {
+        Some(term)
+    } else {
+        allowed_offsets.get(&term).and_then(|&max_offset| {
+            (offset <= max_offset)
+                .then(|| term + u32::try_from(offset).expect("Could not convert from usize"))
+        })
     }
+}
 
-    fn get_solution(&self, node: &T) -> HashSet<T> {
-        let sol = self.sub_solver.get_solution(&self.term_to_t2(node));
-        HashSet::from_iter(sol.iter().map(|i| self.t2_to_term(i)))
-    }
-
-    fn finalize(&mut self) {
-        self.sub_solver.finalize();
+fn offset_terms(
+    terms: impl Iterator<Item = IntegerTerm>,
+    allowed_offsets: &HashMap<IntegerTerm, usize>,
+    offset: usize,
+) -> Vec<IntegerTerm> {
+    if offset == 0 {
+        terms.collect()
+    } else {
+        terms
+            .filter_map(|t| offset_term(t, allowed_offsets, offset))
+            .collect()
     }
 }

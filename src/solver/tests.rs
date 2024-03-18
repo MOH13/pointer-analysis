@@ -2,9 +2,9 @@ use core::hash::Hash;
 use hashbrown::{HashMap, HashSet};
 use std::fmt::Debug;
 
-use super::{Constraint, Solver, TermType};
+use super::{Constraint, ContextInsensitiveInput, ContextInsensitiveSolver, Solver, TermType};
 use crate::cstr;
-use crate::solver::TermSetTrait;
+use crate::solver::{SolverSolution, TermSetTrait};
 
 macro_rules! output {
     [ $( $ptr:tt -> { $($target:tt),* } ),* ] => {
@@ -16,19 +16,19 @@ macro_rules! output {
 }
 
 macro_rules! solver_tests {
-    { $( fn $test_name:ident < $solver:ident > ( $($var:ident),+ ) $body:block )* } => {
+    { $( fn $test_name:ident ( $solver:ident, $($var:ident),+ ) $body:block )* } => {
         $(
             mod $test_name {
                 macro_rules! vars {
                     ( $solver_ty:ty ) => {
                         #[allow(unused_assignments)]
                         {
-                            let mut index = 0 as <$solver_ty as Solver>::Term;
+                            let mut index = 0 as <<$solver_ty as Solver<ContextInsensitiveInput<_>>>::Solution as SolverSolution>::Term;
                             $(
                                 let $var = index;
                                 index += 1;
                             )+
-                            type $solver = $solver_ty;
+                            let $solver = <$solver_ty>::new();
                             $body
                         }
                     }
@@ -66,8 +66,8 @@ macro_rules! solver_tests {
                     enum Term {
                         $( $var , )+
                     }
-                    type $solver = $crate::solver::GenericSolver<Term, $crate::solver::BasicHashSolver, <$crate::solver::BasicHashSolver as Solver>::Term>;
                     use Term::*;
+                    let $solver = $crate::solver::BasicHashSolver::new().as_generic();
                     $body
                 }
             }
@@ -76,23 +76,26 @@ macro_rules! solver_tests {
 }
 
 fn solver_test_template<T, S>(
+    solver: S,
     terms: Vec<T>,
     term_types: Vec<(T, TermType)>,
     constraints: impl IntoIterator<Item = Constraint<T>>,
     expected_output: HashMap<T, HashSet<T>>,
 ) where
     T: Eq + Hash + Copy + Debug,
-    S: Solver<Term = T>,
+    S: ContextInsensitiveSolver<T>,
+    S::Solution: SolverSolution<Term = T>,
 {
-    let mut solver = S::new(terms.clone(), term_types);
-    for c in constraints {
-        solver.add_constraint(c);
-    }
-    solver.finalize();
+    let input = ContextInsensitiveInput {
+        terms: terms.clone(),
+        term_types,
+        constraints: constraints.into_iter().collect(),
+    };
+    let sol = solver.solve(input);
 
     let actual_output: HashMap<T, HashSet<T>> = terms
         .into_iter()
-        .map(|t| (t, solver.get_solution(&t).iter().collect()))
+        .map(|t| (t, sol.get(&t).iter().collect()))
         .collect();
 
     assert_eq!(expected_output, actual_output);
@@ -106,7 +109,7 @@ solver_tests! {
     // *z = x
     // z = &w
     // a = null
-    fn simple_ref_store<S>(x, y, z, w, a) {
+    fn simple_ref_store(solver, x, y, z, w, a) {
         let terms = vec![x, y, z, w, a];
         let constraints = [
             cstr!(y in x),
@@ -115,7 +118,7 @@ solver_tests! {
             cstr!(w in z),
         ];
         let expected_output = output![x -> {y}, y -> {y}, z -> {y, w}, w -> {y}, a -> {}];
-        solver_test_template::<_, S>(terms, vec![], constraints, expected_output);
+        solver_test_template(solver, terms, vec![], constraints, expected_output);
     }
 
     // Pseudo code:
@@ -127,7 +130,7 @@ solver_tests! {
     // z = *pg
     // *z = py
     // *pg = py
-    fn field_load_store<S>(x, yf, yg, py, pg, z) {
+    fn field_load_store(solver, x, yf, yg, py, pg, z) {
         let terms = vec![x, yf, yg, py, pg, z];
         let constraints = [
             cstr!(x in yg),
@@ -139,7 +142,7 @@ solver_tests! {
         ];
         let expected_output =
             output![x -> {yf}, yf -> {yf}, yg -> {x, yf}, py -> {yf}, pg -> {yg}, z -> {x, yf}];
-        solver_test_template::<_, S>(terms, vec![(yf, TermType::Struct(1))], constraints, expected_output);
+        solver_test_template(solver, terms, vec![(yf, TermType::Struct(1))], constraints, expected_output);
     }
 
     // Pseudo code:
@@ -149,11 +152,11 @@ solver_tests! {
     // x1 = &x1
     // x2 = x1 + 1
     // x1 = x2
-    fn positive_cycle<S>(x1, x2, y) {
+    fn positive_cycle(solver, x1, x2, y) {
         let terms = vec![x1, x2, y];
         let constraints = [cstr!(x1 in x1), cstr!(x1 + 1 <= x2), cstr!(x2 <= x1)];
         let expected_output = output![x1 -> {x1,x2}, x2 -> {x2}, y -> {}];
-        solver_test_template::<_, S>(terms, vec![(x1, TermType::Struct(1))], constraints, expected_output);
+        solver_test_template(solver, terms, vec![(x1, TermType::Struct(1))], constraints, expected_output);
     }
 
     // Pseudo code:
@@ -163,7 +166,7 @@ solver_tests! {
     // b = malloc { f: 0, g: null }
     // *b = a
     // c = *b
-    fn struct_load_store<S>(x, af, ag, b, hf, hg, cf, cg) {
+    fn struct_load_store(solver, x, af, ag, b, hf, hg, cf, cg) {
         let terms = vec![x, af, ag, b, hf, hg, cf, cg];
         let constraints = [
             cstr!(x in ag),
@@ -184,6 +187,6 @@ solver_tests! {
             cg -> {x}
         ];
         let allowed_offsets = vec![(af, TermType::Struct(1)), (hf, TermType::Struct(1)), (cf, TermType::Struct(1))];
-        solver_test_template::<_, S>(terms, allowed_offsets, constraints, expected_output);
+        solver_test_template(solver, terms, allowed_offsets, constraints, expected_output);
     }
 }

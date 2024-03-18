@@ -92,7 +92,7 @@ impl<'a> PointerContext<'a> {
 }
 
 pub struct PointerModuleVisitor<'a, 'b, O> {
-    original_ptr_types: HashMap<VarIdent<'a>, Rc<StructType>>,
+    original_ptr_types: HashMap<Option<&'a str>, HashMap<VarIdent<'a>, Rc<StructType>>>,
     std_functions: HashSet<&'a str>,
     fresh_counter: usize,
     observer: &'b mut O,
@@ -125,12 +125,18 @@ where
         context: Context<'a, '_>,
     ) -> Option<(VarIdent<'a>, Rc<StructType>)> {
         if let Some((ident, ty, ..)) = self.get_operand_ident_type(operand, context) {
-            let struct_type = self.original_ptr_types.get(&ident).cloned().or_else(|| {
-                StructType::try_from_type(
-                    strip_pointer_type(ty).expect("Expected operand to be a pointer"),
-                    context.structs,
-                )
-            });
+            let pointer_context = PointerContext::from_context(context);
+            let struct_type = self
+                .original_ptr_types
+                .get(&pointer_context.fun_name)
+                .and_then(|types_in_fun| types_in_fun.get(&ident))
+                .cloned()
+                .or_else(|| {
+                    StructType::try_from_type(
+                        strip_pointer_type(ty).expect("Expected operand to be a pointer"),
+                        context.structs,
+                    )
+                });
             return struct_type.map(|st| (ident, st));
         }
         None
@@ -624,10 +630,16 @@ where
             .expect("bitcast and addrspacecast should only take pointer args");
         let struct_type = StructType::try_from_type(src_ty.clone(), context.structs);
 
-        if let Some(st) = self.original_ptr_types.get(&value) {
-            self.original_ptr_types.insert(dest.clone(), st.clone());
+        let pointer_context = PointerContext::from_context(context);
+
+        let ptr_types_in_func = self
+            .original_ptr_types
+            .entry(pointer_context.fun_name)
+            .or_default();
+        if let Some(st) = ptr_types_in_func.get(&value) {
+            ptr_types_in_func.insert(dest.clone(), st.clone());
         } else if let Some(st) = struct_type {
-            self.original_ptr_types.insert(dest.clone(), st);
+            ptr_types_in_func.insert(dest.clone(), st);
         }
 
         let pointer_context = PointerContext::from_context(context);
@@ -752,7 +764,7 @@ where
             .collect();
         let return_struct_type = StructType::try_from_type(return_type, context.structs);
         self.observer
-            .handle_ptr_function(ident, parameters, return_struct_type);
+            .handle_ptr_function(name, ident, parameters, return_struct_type);
     }
 }
 
@@ -1071,6 +1083,7 @@ pub trait PointerModuleObserver<'a> {
     fn init(&mut self, structs: &StructMap);
     fn handle_ptr_function(
         &mut self,
+        fun_name: &'a str,
         name: VarIdent<'a>,
         parameters: Vec<VarIdent<'a>>,
         return_struct_type: Option<Rc<StructType>>,
