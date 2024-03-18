@@ -7,11 +7,12 @@ use roaring::RoaringBitmap;
 
 use super::shared_bitvec::SharedBitVec;
 use super::{
-    edges_between, offset_term, offset_terms, BetterBitVec, Constraint, GenericSolver, Solver,
-    TermSetTrait, TermType, UnivCond,
+    edges_between, offset_term, offset_terms, BetterBitVec, Constraint, ContextInsensitiveInput,
+    GenericSolverSolution, IntegerTerm, Solver, SolverSolution, TermSetTrait, UnivCond,
 };
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
 
+#[derive(Clone)]
 pub struct BasicSolver<T: Clone, U> {
     worklist: VecDeque<(T, T)>,
     sols: Vec<U>,
@@ -28,7 +29,17 @@ macro_rules! add_token {
     };
 }
 
-impl<T: TermSetTrait<Term = u32>> BasicSolver<u32, T> {
+impl<T: TermSetTrait<Term = IntegerTerm>> BasicSolver<IntegerTerm, T> {
+    pub fn new() -> Self {
+        Self {
+            worklist: VecDeque::new(),
+            sols: vec![],
+            edges: vec![],
+            conds: vec![],
+            allowed_offsets: HashMap::new(),
+        }
+    }
+
     fn propagate(&mut self) {
         while let Some((term, node)) = self.worklist.pop_front() {
             for cond in &self.conds[node as usize].clone() {
@@ -56,9 +67,9 @@ impl<T: TermSetTrait<Term = u32>> BasicSolver<u32, T> {
         }
     }
 
-    fn add_edge(&mut self, left: u32, right: u32, offset: usize) {
+    fn add_edge(&mut self, left: IntegerTerm, right: IntegerTerm, offset: usize) {
         let edges = edges_between(&mut self.edges, left, right);
-        if edges.insert(offset as u32) {
+        if edges.insert(offset as IntegerTerm) {
             for t in offset_terms(
                 self.sols[left as usize].iter(),
                 &self.allowed_offsets,
@@ -68,27 +79,8 @@ impl<T: TermSetTrait<Term = u32>> BasicSolver<u32, T> {
             }
         }
     }
-}
 
-impl<T: TermSetTrait<Term = u32>> Solver for BasicSolver<u32, T> {
-    type Term = u32;
-    type TermSet = T;
-
-    fn new(terms: Vec<Self::Term>, term_types: Vec<(Self::Term, TermType)>) -> Self {
-        Self {
-            worklist: VecDeque::new(),
-            sols: vec![T::new(); terms.len()],
-            edges: vec![HashMap::new(); terms.len()],
-            conds: vec![vec![]; terms.len()],
-            // TODO: use term types instead
-            allowed_offsets: term_types
-                .into_iter()
-                .map(|(t, ty)| (t, ty.into_offset()))
-                .collect(),
-        }
-    }
-
-    fn add_constraint(&mut self, c: Constraint<Self::Term>) {
+    fn add_constraint(&mut self, c: Constraint<IntegerTerm>) {
         match c {
             Constraint::Inclusion { term, node } => {
                 add_token!(self, term, node);
@@ -137,42 +129,69 @@ impl<T: TermSetTrait<Term = u32>> Solver for BasicSolver<u32, T> {
         };
         self.propagate();
     }
-
-    fn get_solution(&self, node: &Self::Term) -> Self::TermSet {
-        self.sols[*node as usize].clone()
-    }
-
-    fn finalize(&mut self) {}
 }
 
-pub type BasicHashSolver = BasicSolver<u32, HashSet<u32>>;
-pub type BasicRoaringSolver = BasicSolver<u32, RoaringBitmap>;
-pub type BasicBetterBitVecSolver = BasicSolver<u32, BetterBitVec>;
-pub type BasicSharedBitVecSolver = BasicSolver<u32, SharedBitVec>;
+impl<T: TermSetTrait<Term = IntegerTerm>> Solver<ContextInsensitiveInput<IntegerTerm>>
+    for BasicSolver<IntegerTerm, T>
+{
+    type Solution = Self;
 
-impl<T, S> Graph for GenericSolver<T, BasicSolver<u32, S>, u32>
+    fn solve(mut self, input: ContextInsensitiveInput<IntegerTerm>) -> Self::Solution {
+        self.sols = vec![T::new(); input.terms.len()];
+        self.edges = vec![HashMap::new(); input.terms.len()];
+        self.conds = vec![vec![]; input.terms.len()];
+        self.allowed_offsets = input
+            .term_types
+            .into_iter()
+            .map(|(t, ty)| (t as IntegerTerm, ty.into_offset()))
+            .collect();
+
+        for c in input.constraints {
+            self.add_constraint(c);
+        }
+
+        self
+    }
+}
+
+impl<T: TermSetTrait<Term = IntegerTerm>> SolverSolution for BasicSolver<IntegerTerm, T> {
+    type Term = IntegerTerm;
+
+    type TermSet = T;
+
+    fn get(&self, node: &Self::Term) -> Self::TermSet {
+        self.sols[*node as usize].clone()
+    }
+}
+
+pub type BasicHashSolver = BasicSolver<IntegerTerm, HashSet<IntegerTerm>>;
+pub type BasicRoaringSolver = BasicSolver<IntegerTerm, RoaringBitmap>;
+pub type BasicBetterBitVecSolver = BasicSolver<IntegerTerm, BetterBitVec>;
+pub type BasicSharedBitVecSolver = BasicSolver<IntegerTerm, SharedBitVec>;
+
+impl<T, S, F> Graph for GenericSolverSolution<BasicSolver<IntegerTerm, S>, T, F>
 where
     T: Display + Debug + Clone + PartialEq + Eq + Hash,
-    S: TermSetTrait<Term = u32>,
+    S: TermSetTrait<Term = IntegerTerm>,
 {
     type Node = T;
     type Weight = OffsetWeight;
 
     fn nodes(&self) -> Vec<Node<Self::Node>> {
-        self.terms_as_nodes()
+        self.mapping.terms_as_nodes()
     }
 
     fn edges(&self) -> Vec<Edge<Self::Node, Self::Weight>> {
         let mut edges = vec![];
 
-        for (from, outgoing) in self.sub_solver.edges.iter().enumerate() {
+        for (from, outgoing) in self.sub_solution.edges.iter().enumerate() {
             let from = Node {
-                inner: self.t2_to_term(from as u32),
+                inner: self.mapping.integer_to_term(from as IntegerTerm),
                 id: from,
             };
             for (&to, weights) in outgoing {
                 let to = Node {
-                    inner: self.t2_to_term(to as u32),
+                    inner: self.mapping.integer_to_term(to as IntegerTerm),
                     id: to as usize,
                 };
                 for weight in weights.iter() {
@@ -187,14 +206,14 @@ where
             }
         }
 
-        for from in 0..self.terms.len() {
+        for from in 0..self.mapping.terms.len() {
             let from_node = Node {
-                inner: self.t2_to_term(from as u32),
+                inner: self.mapping.integer_to_term(from as IntegerTerm),
                 id: from,
             };
-            for to in self.sub_solver.get_solution(&(from as u32)).iter() {
+            for to in self.sub_solution.get(&(from as IntegerTerm)).iter() {
                 let to_node = Node {
-                    inner: self.t2_to_term(to),
+                    inner: self.mapping.integer_to_term(to),
                     id: to as usize,
                 };
                 let edge = Edge {

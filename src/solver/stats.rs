@@ -6,7 +6,7 @@ use std::marker::PhantomData;
 
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
 
-use super::{Constraint, Solver, TermSetTrait, TermType};
+use super::{ConstrainedTerms, Constraint, Solver, SolverSolution, TermSetTrait};
 
 pub struct StatSolver<T> {
     terms: Vec<T>,
@@ -65,13 +65,10 @@ impl<T: Hash + Eq + Clone> TermSetTrait for DummyTermSet<T> {
     }
 }
 
-impl<T: Eq + PartialEq + Hash + Clone> Solver for StatSolver<T> {
-    type Term = T;
-    type TermSet = HashSet<T>;
-
-    fn new(terms: Vec<Self::Term>, _term_types: Vec<(Self::Term, TermType)>) -> Self {
+impl<T: Eq + PartialEq + Hash + Clone> StatSolver<T> {
+    pub fn new() -> Self {
         Self {
-            terms,
+            terms: vec![],
             inclusions: vec![],
             subsets: vec![],
             cond_lefts: vec![],
@@ -79,7 +76,7 @@ impl<T: Eq + PartialEq + Hash + Clone> Solver for StatSolver<T> {
         }
     }
 
-    fn add_constraint(&mut self, c: Constraint<Self::Term>) {
+    fn add_constraint(&mut self, c: Constraint<T>) {
         match c {
             Constraint::Inclusion { term, node } => self.inclusions.push((node, term)),
             Constraint::Subset {
@@ -101,12 +98,25 @@ impl<T: Eq + PartialEq + Hash + Clone> Solver for StatSolver<T> {
             } => self.cond_rights.push((cond_node, offset, left)),
         }
     }
+}
 
-    fn get_solution(&self, _node: &Self::Term) -> Self::TermSet {
-        HashSet::new()
-    }
+impl<T: Eq + PartialEq + Hash + Clone> Solver<ConstrainedTerms<T>> for StatSolver<T>
+where
+    T: Hash + Eq + Clone + Debug,
+{
+    type Solution = StatSolver<T>;
 
-    fn finalize(&mut self) {
+    fn solve(mut self, input: ConstrainedTerms<T>) -> Self::Solution {
+        self.terms = input.terms;
+        self.inclusions = vec![];
+        self.subsets = vec![];
+        self.cond_lefts = vec![];
+        self.cond_rights = vec![];
+
+        for c in input.constraints {
+            self.add_constraint(c);
+        }
+
         println!("Terms:\t\t{}", self.terms.len());
         println!("Inclusion:\t{}", self.inclusions.len());
 
@@ -134,6 +144,20 @@ impl<T: Eq + PartialEq + Hash + Clone> Solver for StatSolver<T> {
             + self.cond_lefts.len()
             + self.cond_rights.len();
         println!("Total:\t\t{total}");
+
+        self
+    }
+}
+
+impl<T> SolverSolution for StatSolver<T>
+where
+    T: Hash + Eq + Clone + Debug,
+{
+    type Term = T;
+    type TermSet = HashSet<T>;
+
+    fn get(&self, _node: &Self::Term) -> Self::TermSet {
+        HashSet::new()
     }
 }
 

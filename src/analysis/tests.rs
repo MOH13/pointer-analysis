@@ -13,8 +13,9 @@ use test_generator::test_resources;
 use crate::analysis::PointsToAnalysis;
 use crate::solver::{
     BasicBetterBitVecSolver, BasicHashSolver, BasicRoaringSolver, BasicSharedBitVecSolver,
-    BetterBitVecWavePropagationSolver, GenericSolver, HashWavePropagationSolver,
-    RoaringWavePropagationSolver, SharedBitVecWavePropagationSolver, Solver,
+    BetterBitVecWavePropagationSolver, ContextInsensitiveInput, ContextInsensitiveSolver,
+    HashWavePropagationSolver, IntegerTerm, RoaringWavePropagationSolver,
+    SharedBitVecWavePropagationSolver, Solver,
 };
 
 use super::Cell;
@@ -87,10 +88,9 @@ fn parse_points_to<'a>(
         .collect()
 }
 
-fn run_test_template<S>(resource: &str)
+fn run_test_template<S>(resource: &str, solver: S)
 where
-    S: Solver,
-    S::Term: TryInto<usize> + TryFrom<usize> + Copy + Debug,
+    S: Solver<ContextInsensitiveInput<IntegerTerm>> + Sized,
 {
     dbg!(resource);
     let config_file = File::open(resource).expect("Could not open file");
@@ -115,7 +115,8 @@ where
 
     dbg!(&expected_points_to);
 
-    let result = PointsToAnalysis::run::<GenericSolver<_, S, _>>(&module);
+    let generic_solver = solver.as_context_sensitive().as_generic();
+    let result = PointsToAnalysis::run(generic_solver, &module);
 
     let actual_points_to: HashMap<Cell, HashSet<Cell>> =
         result.get_all_entries().iter_solutions().collect();
@@ -135,40 +136,40 @@ where
 
 #[test_resources("res/**/test_config.json")]
 fn hash(resource: &str) {
-    run_test_template::<BasicHashSolver>(resource)
+    run_test_template(resource, BasicHashSolver::new());
 }
 
 #[test_resources("res/**/test_config.json")]
 fn better_bit_vec(resource: &str) {
-    run_test_template::<BasicBetterBitVecSolver>(resource)
+    run_test_template(resource, BasicBetterBitVecSolver::new())
 }
 
 #[test_resources("res/**/test_config.json")]
 fn roaring(resource: &str) {
-    run_test_template::<BasicRoaringSolver>(resource)
+    run_test_template(resource, BasicRoaringSolver::new())
 }
 
 #[test_resources("res/**/test_config.json")]
 fn shared_bit_vec(resource: &str) {
-    run_test_template::<BasicSharedBitVecSolver>(resource)
+    run_test_template(resource, BasicSharedBitVecSolver::new())
 }
 
 #[test_resources("res/**/test_config.json")]
 fn wave_prop(resource: &str) {
-    run_test_template::<HashWavePropagationSolver>(resource)
+    run_test_template(resource, HashWavePropagationSolver::new())
 }
 
 #[test_resources("res/**/test_config.json")]
 fn roaring_wave_prop(resource: &str) {
-    run_test_template::<RoaringWavePropagationSolver>(resource)
+    run_test_template(resource, RoaringWavePropagationSolver::new())
 }
 
 #[test_resources("res/**/test_config.json")]
 fn shared_bit_vec_wave_prop(resource: &str) {
-    run_test_template::<SharedBitVecWavePropagationSolver>(resource)
+    run_test_template(resource, SharedBitVecWavePropagationSolver::new())
 }
 
 #[test_resources("res/**/test_config.json")]
 fn better_bitvec_wave_prop(resource: &str) {
-    run_test_template::<BetterBitVecWavePropagationSolver>(resource)
+    run_test_template(resource, BetterBitVecWavePropagationSolver::new())
 }
