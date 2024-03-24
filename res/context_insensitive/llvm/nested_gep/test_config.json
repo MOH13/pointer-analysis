@@ -1,0 +1,7 @@
+{
+  "llvm_path": "nested_gep.ll",
+  "points_to": {
+    "global-%struct_instance[0]": [],
+    "global-%struct_instance[1]": ["stack-%a@main", "global-%global_int"]
+  }
+}

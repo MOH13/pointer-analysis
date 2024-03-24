@@ -126,6 +126,7 @@ impl<T: TermSetTrait<Term = IntegerTerm>> BasicSolver<IntegerTerm, T> {
                     self.add_edge(left, t, 0);
                 }
             }
+            Constraint::CallDummy { .. } => {}
         };
         self.propagate();
     }
@@ -169,7 +170,7 @@ pub type BasicRoaringSolver = BasicSolver<IntegerTerm, RoaringBitmap>;
 pub type BasicBetterBitVecSolver = BasicSolver<IntegerTerm, BetterBitVec>;
 pub type BasicSharedBitVecSolver = BasicSolver<IntegerTerm, SharedBitVec>;
 
-impl<T, S, F> Graph for GenericSolverSolution<BasicSolver<IntegerTerm, S>, T, F>
+impl<T, S> Graph for GenericSolverSolution<BasicSolver<IntegerTerm, S>, T>
 where
     T: Display + Debug + Clone + PartialEq + Eq + Hash,
     S: TermSetTrait<Term = IntegerTerm>,

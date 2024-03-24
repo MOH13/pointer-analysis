@@ -34,7 +34,6 @@ quickcheck_macros = "1.0.0"
 
 [build-dependencies]
 build-deps = "0.1.4"
-# debug = true
 
 [[bench]]
 name = "real_world"

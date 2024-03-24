@@ -46,6 +46,8 @@ pub enum SolverMode {
     Wave,
     /// Do not solve (used to test constraint generation speed)
     DryRun,
+    // Solve context sensitively
+    Context,
 }
 
 impl Display for SolverMode {
@@ -54,6 +56,7 @@ impl Display for SolverMode {
             SolverMode::Basic => write!(f, "basic"),
             SolverMode::Wave => write!(f, "wave"),
             SolverMode::DryRun => write!(f, "dry-run"),
+            SolverMode::Context => write!(f, "context"),
         }
     }
 }

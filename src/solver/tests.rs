@@ -60,6 +60,18 @@ macro_rules! solver_tests {
                     vars!($crate::solver::BasicRoaringSolver)
                 }
                 #[test]
+                fn context_insensitive() {
+                    #[allow(non_camel_case_types)]
+                    #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
+                    enum Term {
+                        $( $var , )+
+                    }
+                    use Term::*;
+                    use $crate::solver::AsContextInsensitive;
+                    let $solver = AsContextInsensitive($crate::solver::SharedBitVecContextWavePropagationSolver::new());
+                    $body
+                }
+                #[test]
                 fn generic() {
                     #[allow(non_camel_case_types)]
                     #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
