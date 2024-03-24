@@ -88,14 +88,15 @@ impl<T: Eq + PartialEq + Hash + Clone> StatSolver<T> {
                 cond_node,
                 right,
                 offset,
-                is_function: _, // TODO
+                call_site: _, // TODO
             } => self.cond_lefts.push((cond_node, offset, right)),
             Constraint::UnivCondSubsetRight {
                 cond_node,
                 left,
                 offset,
-                is_function: _,
+                call_site: _,
             } => self.cond_rights.push((cond_node, offset, left)),
+            Constraint::CallDummy { .. } => {}
         }
     }
 }

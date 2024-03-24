@@ -1,0 +1,7 @@
+{
+  "c_path": "basic_context.c",
+  "points_to": {
+    "stack-%ap@main": ["stack-%a@main"],
+    "stack-%bp@main": ["stack-%b@main"]
+  }
+}

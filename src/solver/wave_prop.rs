@@ -525,28 +525,29 @@ impl<T: TermSetTrait<Term = u32>> WavePropagationSolver<T> {
                 cond_node,
                 right,
                 offset,
-                is_function,
+                call_site,
             } => {
                 self.left_conds.push(CondLeftEntry {
                     cond_node,
                     right,
                     offset,
-                    is_function,
+                    is_function: call_site.is_some(),
                 });
             }
             Constraint::UnivCondSubsetRight {
                 cond_node,
                 left,
                 offset,
-                is_function,
+                call_site,
             } => {
                 self.right_conds.push(CondRightEntry {
                     cond_node,
                     left,
                     offset,
-                    is_function,
+                    is_function: call_site.is_some(),
                 });
             }
+            Constraint::CallDummy { .. } => {}
         };
     }
 }
@@ -642,10 +643,10 @@ impl<T: Display> Display for WavePropagationNode<T> {
     }
 }
 
-impl<T, TS, F> GenericSolverSolution<WavePropagationSolver<TS>, T, F>
+impl<T, S> GenericSolverSolution<WavePropagationSolver<S>, T>
 where
     T: Display + Debug + Clone + PartialEq + Eq + Hash,
-    TS: TermSetTrait<Term = IntegerTerm>,
+    S: TermSetTrait<Term = IntegerTerm>,
 {
     fn get_representative_counts(&self) -> HashMap<IntegerTerm, Node<usize>> {
         let mut reps = HashMap::new();
@@ -662,7 +663,7 @@ where
     }
 }
 
-impl<T, S, F> Graph for GenericSolverSolution<WavePropagationSolver<S>, T, F>
+impl<T, S> Graph for GenericSolverSolution<WavePropagationSolver<S>, T>
 where
     T: Display + Debug + Clone + PartialEq + Eq + Hash,
     S: TermSetTrait<Term = IntegerTerm>,

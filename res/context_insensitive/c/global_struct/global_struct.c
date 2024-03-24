@@ -11,8 +11,9 @@ int main()
 {
     int a = 1;
     int b = 2;
-    struct_instance[0].f1 = &a;
-    struct_instance[0].f2 = &b;
+    int i = 0;
+    struct_instance[i].f1 = &a;
+    struct_instance[i].f2 = &b;
 }
 
 // Should get that struct_instance.f1 points to a and struct_instance.f2 points to b

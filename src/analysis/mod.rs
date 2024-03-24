@@ -16,7 +16,8 @@ use crate::module_visitor::pointer::{
 use crate::module_visitor::structs::{StructMap, StructType};
 use crate::module_visitor::{ModuleVisitor, VarIdent};
 use crate::solver::{
-    ConstrainedTerms, Constraint, ContextSensitiveInput, Solver, SolverSolution, TermType,
+    ConstrainedTerms, Constraint, ContextSensitiveInput, FunctionInput, Solver, SolverSolution,
+    TermSetTrait, TermType,
 };
 use crate::visualizer::{visualize, Graph};
 
@@ -26,9 +27,13 @@ mod tests;
 pub struct PointsToAnalysis;
 
 impl PointsToAnalysis {
-    fn solve_module<'a, S>(module: &'a Module, solver: S) -> (S::Solution, Vec<Cell<'a>>)
+    fn solve_module<'a, S, C>(
+        solver: S,
+        module: &'a Module,
+        context_selector: C,
+    ) -> (S::Solution, Vec<Cell<'a>>)
     where
-        S: Solver<ContextSensitiveInput<Cell<'a>, &'a str>> + 'a,
+        S: Solver<ContextSensitiveInput<Cell<'a>, C>> + 'a,
     {
         let mut pre_analyzer = PointsToPreAnalyzer::new();
         PointerModuleVisitor::new(&mut pre_analyzer).visit_module(module);
@@ -42,10 +47,20 @@ impl PointsToAnalysis {
         PointerModuleVisitor::new(&mut constraint_generator).visit_module(module);
 
         let pre_analysis_global = mem::take(pre_analyzer.functions.get_mut(&None).unwrap());
-        let global_constraints =
-            mem::take(constraint_generator.constraints.get_mut(&None).unwrap());
+        let global_constraints = constraint_generator
+            .constraints
+            .get_mut(&None)
+            .map(mem::take)
+            .unwrap_or_default();
 
         let entry = pre_analysis_global.combine_with_constraints(global_constraints);
+
+        let main_function_index = pre_analyzer
+            .functions
+            .iter()
+            .filter_map(|(f, _)| *f)
+            .position(|func_name| func_name == "main")
+            .expect("Could not find a main function");
 
         let functions: Vec<_> = pre_analyzer
             .functions
@@ -58,11 +73,19 @@ impl PointsToAnalysis {
                     .map(mem::take)
                     .unwrap_or_default();
                 let constrained_terms = state.combine_with_constraints(constraints);
-                (func, constrained_terms)
+                FunctionInput {
+                    fun_name: func.into(),
+                    constrained_terms,
+                }
             })
             .collect();
 
-        let input = ContextSensitiveInput { entry, functions };
+        let input = ContextSensitiveInput {
+            global: entry,
+            functions,
+            entrypoints: vec![main_function_index],
+            context_selector,
+        };
 
         let solution = solver.solve(input);
 
@@ -70,25 +93,30 @@ impl PointsToAnalysis {
     }
 
     /// Runs the points-to analysis on LLVM module `module` using `solver`.
-    pub fn run<'a, S>(solver: S, module: &'a Module) -> PointsToResult<'a, S::Solution>
+    pub fn run<'a, S, C>(
+        solver: S,
+        module: &'a Module,
+        context_selector: C,
+    ) -> PointsToResult<'a, S::Solution>
     where
-        S: Solver<ContextSensitiveInput<Cell<'a>, &'a str>> + 'a,
+        S: Solver<ContextSensitiveInput<Cell<'a>, C>> + 'a,
     {
-        let (solution, cells) = Self::solve_module(module, solver);
+        let (solution, cells) = Self::solve_module(solver, module, context_selector);
 
         PointsToResult(solution, cells)
     }
 
-    pub fn run_and_visualize<'a, S>(
+    pub fn run_and_visualize<'a, S, C>(
         solver: S,
         module: &'a Module,
+        context_selector: C,
         dot_output_path: &str,
     ) -> PointsToResult<'a, S::Solution>
     where
-        S: Solver<ContextSensitiveInput<Cell<'a>, &'a str>> + 'a,
+        S: Solver<ContextSensitiveInput<Cell<'a>, C>> + 'a,
         S::Solution: Graph,
     {
-        let (solution, cells) = Self::solve_module(module, solver);
+        let (solution, cells) = Self::solve_module(solver, module, context_selector);
         if let Err(e) = visualize(&solution, dot_output_path) {
             error!("Error visualizing graph: {e}");
         }
@@ -144,7 +172,7 @@ impl<'a, S: SolverSolution> PointsToResult<'a, S> {
 impl<'a, 'b, S, F1, F2> FilteredResults<'a, 'b, S, F1, F2>
 where
     S: SolverSolution<Term = Cell<'a>>,
-    S::TermSet: fmt::Debug + IntoIterator<Item = Cell<'a>> + FromIterator<Cell<'a>> + Clone,
+    S::TermSet: FromIterator<Cell<'a>>,
     F1: Fn(&Cell<'a>, &S::TermSet) -> bool,
     F2: Fn(&Cell<'a>) -> bool,
 {
@@ -153,7 +181,7 @@ where
             .1
             .iter()
             .map(|cell| (cell.clone(), self.result.0.get(cell)))
-            .map(|(cell, set)| (cell, set.into_iter().filter(&self.value_filter).collect()))
+            .map(|(cell, set)| (cell, set.iter().filter(&self.value_filter).collect()))
             .filter(|(cell, set)| {
                 let cell_str = cell.to_string();
                 (self.key_filter)(cell, set)
@@ -167,7 +195,7 @@ where
 impl<'a, S> Display for PointsToResult<'a, S>
 where
     S: SolverSolution<Term = Cell<'a>>,
-    S::TermSet: fmt::Debug + IntoIterator<Item = Cell<'a>> + FromIterator<Cell<'a>> + Clone,
+    S::TermSet: fmt::Debug + IntoIterator<Item = Cell<'a>> + FromIterator<Cell<'a>>,
 {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let filtered = self.get_all_entries();
@@ -179,7 +207,7 @@ where
 impl<'a, 'b, S, F1, F2> Display for FilteredResults<'a, 'b, S, F1, F2>
 where
     S: SolverSolution<Term = Cell<'a>>,
-    S::TermSet: fmt::Debug + IntoIterator<Item = Cell<'a>> + FromIterator<Cell<'a>> + Clone,
+    S::TermSet: fmt::Debug + FromIterator<Cell<'a>>,
     F1: Fn(&Cell<'a>, &S::TermSet) -> bool,
     F2: Fn(&Cell<'a>) -> bool,
 {
@@ -466,6 +494,7 @@ fn first_ident<'a>(base_ident: VarIdent<'a>, struct_type: Option<&StructType>) -
 
 /// Visits a module, generating constraints.
 struct ConstraintGenerator<'a> {
+    call_site_counter: u32,
     constraints: HashMap<Option<&'a str>, Vec<Constraint<Cell<'a>>>>,
     return_struct_types: HashMap<VarIdent<'a>, Option<Rc<StructType>>>,
 }
@@ -506,6 +535,7 @@ fn do_assignment<'a>(
 impl<'a> ConstraintGenerator<'a> {
     fn new() -> Self {
         Self {
+            call_site_counter: 0,
             constraints: HashMap::new(),
             return_struct_types: HashMap::new(),
         }
@@ -517,17 +547,17 @@ impl<'a> PointerModuleObserver<'a> for ConstraintGenerator<'a> {
 
     fn handle_ptr_function(
         &mut self,
-        _fun_name: &'a str,
+        fun_name: &'a str,
         ident: VarIdent<'a>,
         _parameters: Vec<VarIdent<'a>>,
         return_struct_type: Option<Rc<StructType>>,
     ) {
-        let global_constraints = self.constraints.entry(None).or_default();
+        let function_constraints = self.constraints.entry(Some(fun_name)).or_default();
 
         let first_cell = Cell::Return(first_ident(ident.clone(), return_struct_type.as_deref()));
         let var_cell = Cell::Var(ident.clone());
         let c = cstr!(first_cell in var_cell);
-        global_constraints.push(c);
+        function_constraints.push(c);
 
         self.return_struct_types.insert(ident, return_struct_type);
     }
@@ -720,6 +750,12 @@ impl<'a> PointerModuleObserver<'a> for ConstraintGenerator<'a> {
                 return_struct_type,
             } => {
                 let function_cell = Cell::Var(function);
+                let call_site = self.call_site_counter;
+                self.call_site_counter += 1;
+                function_constraints.push(Constraint::CallDummy {
+                    cond_node: function_cell.clone(),
+                    call_site,
+                });
                 for (i, arg) in arguments
                     .iter()
                     .enumerate()
@@ -727,7 +763,7 @@ impl<'a> PointerModuleObserver<'a> for ConstraintGenerator<'a> {
                 {
                     let arg_cell = Cell::Var(arg);
                     let offset = return_struct_type.as_ref().map(|st| st.size).unwrap_or(1) + i;
-                    let c = cstr!(arg_cell <= *fn ((function_cell.clone()) + offset));
+                    let c = cstr!(call_site: arg_cell <= *fn ((function_cell.clone()) + offset));
                     function_constraints.push(c);
                 }
 
@@ -742,7 +778,7 @@ impl<'a> PointerModuleObserver<'a> for ConstraintGenerator<'a> {
                     );
 
                     for (i, cell) in dest_cells.into_iter().enumerate() {
-                        let c = cstr!(*fn ((function_cell.clone()) + i) <= cell);
+                        let c = cstr!(call_site: *fn ((function_cell.clone()) + i) <= cell);
                         function_constraints.push(c);
                     }
                 }

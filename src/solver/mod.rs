@@ -1,12 +1,14 @@
+use arrayvec::ArrayVec;
 use hashbrown::{HashMap, HashSet};
 use roaring::RoaringBitmap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::marker::PhantomData;
-use std::mem;
+use std::rc::Rc;
 
 mod basic;
 mod better_bitvec;
+mod context_wave_prop;
 mod shared_bitvec;
 mod stats;
 #[cfg(test)]
@@ -18,6 +20,7 @@ pub use basic::{
 };
 pub use better_bitvec::BetterBitVec;
 // pub use bit_vec::BasicBitVecSolver;
+pub use context_wave_prop::SharedBitVecContextWavePropagationSolver;
 pub use stats::StatSolver;
 pub use wave_prop::{
     BetterBitVecWavePropagationSolver, HashWavePropagationSolver, RoaringWavePropagationSolver,
@@ -26,7 +29,7 @@ pub use wave_prop::{
 
 use crate::visualizer::Node;
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum Constraint<T> {
     Inclusion {
         term: T,
@@ -41,14 +44,70 @@ pub enum Constraint<T> {
         cond_node: T,
         right: T,
         offset: usize,
-        is_function: bool,
+        call_site: Option<u32>,
     },
     UnivCondSubsetRight {
         cond_node: T,
         left: T,
         offset: usize,
-        is_function: bool,
+        call_site: Option<u32>,
     },
+    CallDummy {
+        cond_node: T,
+        call_site: u32,
+    },
+}
+
+impl<T> Constraint<T> {
+    pub fn map_terms<U, F>(&self, f: F) -> Constraint<U>
+    where
+        F: Fn(&T) -> U,
+    {
+        match self {
+            Self::Inclusion { term, node } => Constraint::Inclusion {
+                term: f(term),
+                node: f(node),
+            },
+            Self::Subset {
+                left,
+                right,
+                offset,
+            } => Constraint::Subset {
+                left: f(left),
+                right: f(right),
+                offset: *offset,
+            },
+            Self::UnivCondSubsetLeft {
+                cond_node,
+                right,
+                offset,
+                call_site,
+            } => Constraint::UnivCondSubsetLeft {
+                cond_node: f(cond_node),
+                right: f(right),
+                offset: *offset,
+                call_site: *call_site,
+            },
+            Self::UnivCondSubsetRight {
+                cond_node,
+                left,
+                offset,
+                call_site,
+            } => Constraint::UnivCondSubsetRight {
+                cond_node: f(cond_node),
+                left: f(left),
+                offset: *offset,
+                call_site: *call_site,
+            },
+            Self::CallDummy {
+                cond_node,
+                call_site,
+            } => Constraint::CallDummy {
+                cond_node: f(cond_node),
+                call_site: *call_site,
+            },
+        }
+    }
 }
 
 #[macro_export]
@@ -78,7 +137,7 @@ macro_rules! cstr {
             cond_node: $cond_node,
             right: $right,
             offset: $offset,
-            is_function: false,
+            call_site: None,
         }
     };
     ($left:tt <= *($cond_node:tt + $offset:tt)) => {
@@ -86,7 +145,7 @@ macro_rules! cstr {
             cond_node: $cond_node,
             left: $left,
             offset: $offset,
-            is_function: false,
+            call_site: None,
         }
     };
     (*$cond_node:tt <= $right:tt) => {
@@ -94,7 +153,7 @@ macro_rules! cstr {
             cond_node: $cond_node,
             right: $right,
             offset: 0,
-            is_function: false,
+            call_site: None,
         }
     };
     ($left:tt <= *$cond_node:tt) => {
@@ -102,23 +161,23 @@ macro_rules! cstr {
             cond_node: $cond_node,
             left: $left,
             offset: 0,
-            is_function: false,
+            call_site: None,
         }
     };
-    (*fn ($cond_node:tt + $offset:tt) <= $right:tt) => {
+    ($call_site:tt : *fn ($cond_node:tt + $offset:tt) <= $right:tt) => {
         $crate::solver::Constraint::UnivCondSubsetLeft {
             cond_node: $cond_node,
             right: $right,
             offset: $offset,
-            is_function: true,
+            call_site: Some($call_site),
         }
     };
-    ($left:tt <= *fn ($cond_node:tt + $offset:tt)) => {
+    ($call_site:tt : $left:tt <= *fn ($cond_node:tt + $offset:tt)) => {
         $crate::solver::Constraint::UnivCondSubsetRight {
             cond_node: $cond_node,
             left: $left,
             offset: $offset,
-            is_function: true,
+            call_site: Some($call_site),
         }
     };
 }
@@ -301,13 +360,61 @@ pub trait SolverInput {
     type Term;
 }
 
-pub struct ContextSensitiveInput<T, F> {
-    pub entry: ConstrainedTerms<T>,
-    pub functions: Vec<(F, ConstrainedTerms<T>)>,
+pub struct FunctionInput<T> {
+    pub fun_name: Rc<str>,
+    pub constrained_terms: ConstrainedTerms<T>,
 }
 
-impl<T, F> SolverInput for ContextSensitiveInput<T, F> {
+pub struct ContextSensitiveInput<T, C> {
+    pub global: ConstrainedTerms<T>,
+    pub functions: Vec<FunctionInput<T>>,
+    pub entrypoints: Vec<usize>,
+    pub context_selector: C,
+}
+
+impl<T, C> SolverInput for ContextSensitiveInput<T, C> {
     type Term = T;
+}
+
+pub trait ContextSelector {
+    type Context: Clone + Debug + PartialEq + Eq + Hash;
+    fn select_context(&self, current: &Self::Context, call_site: u32) -> Self::Context;
+    fn empty(&self) -> Self::Context;
+}
+
+#[derive(Clone)]
+pub struct ContextInsensitiveSelector;
+
+impl ContextSelector for ContextInsensitiveSelector {
+    type Context = ();
+
+    fn select_context(&self, _: &Self::Context, _: u32) -> Self::Context {
+        ()
+    }
+
+    fn empty(&self) -> Self::Context {
+        ()
+    }
+}
+
+#[derive(Clone)]
+pub struct CallStringSelector<const K: usize>;
+
+impl<const K: usize> ContextSelector for CallStringSelector<K> {
+    type Context = ArrayVec<u32, K>;
+
+    fn select_context(&self, current: &Self::Context, call_site: u32) -> Self::Context {
+        let mut context = current.clone();
+        if context.is_full() {
+            context.remove(0);
+        }
+        context.push(call_site);
+        context
+    }
+
+    fn empty(&self) -> Self::Context {
+        ArrayVec::new()
+    }
 }
 
 pub type ContextInsensitiveInput<T> = ConstrainedTerms<T>;
@@ -343,54 +450,97 @@ impl TermType {
     }
 }
 
-pub trait ContextInsensitiveSolver<T>: Solver<ContextInsensitiveInput<T>> {
-    type ContextSensitiveSolver<F>: Solver<ContextSensitiveInput<T, F>>;
+pub trait ContextSensitiveSolver<T, C>: Solver<ContextSensitiveInput<T, C>> {}
 
-    fn as_context_sensitive<F>(self) -> Self::ContextSensitiveSolver<F>;
+impl<S, T, C> ContextSensitiveSolver<T, C> for S where S: Solver<ContextSensitiveInput<T, C>> {}
+
+// pub trait ContextSensitiveExt {
+//     fn with_flat_context(self) -> WithFlatContext<Self>;
+//     fn as_context_insensitive(self) -> AsContextInsensitive<Self>;
+// }
+
+// impl<S, T, C> ContextSensitiveExt for S
+// where
+//     S: ContextSensitiveSolver<T, C> + Sized,
+// {
+//     fn with_flat_context(self) -> WithFlatContext<Self> {
+//         WithFlatContext(self)
+//     }
+
+//     fn as_context_insensitive(self) -> AsContextInsensitive<Self> {
+//         AsContextInsensitive(self)
+//     }
+// }
+
+pub trait ContextInsensitiveSolver<T>: Solver<ContextInsensitiveInput<T>> {
+    type ContextSensitiveSolver<C>: ContextSensitiveSolver<T, C>;
+
+    fn as_context_sensitive<C>(self) -> Self::ContextSensitiveSolver<C>;
 }
 
 impl<S, T> ContextInsensitiveSolver<T> for S
 where
     S: Solver<ContextInsensitiveInput<T>> + Sized,
 {
-    type ContextSensitiveSolver<F> = AsContextSensitive<S, F>;
+    type ContextSensitiveSolver<C> = AsContextSensitive<S, C>;
 
-    fn as_context_sensitive<F>(self) -> Self::ContextSensitiveSolver<F> {
+    fn as_context_sensitive<C>(self) -> Self::ContextSensitiveSolver<C> {
         AsContextSensitive(self, PhantomData)
     }
 }
 
 #[derive(Clone)]
-pub struct AsContextSensitive<S, F>(pub S, PhantomData<F>);
+pub struct AsContextSensitive<S, C>(pub S, PhantomData<C>);
 
-impl<S, T, F> Solver<ContextSensitiveInput<T, F>> for AsContextSensitive<S, F>
+impl<S, T, C> Solver<ContextSensitiveInput<T, C>> for AsContextSensitive<S, C>
 where
     S: Solver<ContextInsensitiveInput<T>>,
 {
     type Solution = S::Solution;
 
-    fn solve(self, mut input: ContextSensitiveInput<T, F>) -> Self::Solution {
-        for (_, t) in input.functions {
-            input.entry.combine(t);
+    fn solve(self, mut input: ContextSensitiveInput<T, C>) -> Self::Solution {
+        for t in input.functions.into_iter().map(|f| f.constrained_terms) {
+            input.global.combine(t);
         }
-        self.0.solve(input.entry)
+        self.0.solve(input.global)
     }
 }
 
-pub struct WithoutContext<S>(pub S);
+#[derive(Clone)]
+pub struct WithFlatContext<S>(pub S);
 
-impl<S, T, F> Solver<ContextSensitiveInput<T, F>> for WithoutContext<S>
+impl<S, T, C> Solver<ContextSensitiveInput<T, C>> for WithFlatContext<S>
 where
-    S: Solver<ContextSensitiveInput<T, F>>,
+    S: Solver<ContextSensitiveInput<T, ContextInsensitiveSelector>>,
 {
     type Solution = S::Solution;
 
-    fn solve(self, mut input: ContextSensitiveInput<T, F>) -> Self::Solution {
-        let funcs = mem::take(&mut input.functions);
-        for (_, t) in funcs {
-            input.entry.combine(t);
-        }
-        self.0.solve(input)
+    fn solve(self, input: ContextSensitiveInput<T, C>) -> Self::Solution {
+        self.0.solve(ContextSensitiveInput {
+            global: input.global,
+            entrypoints: (0..input.functions.len()).collect(),
+            functions: input.functions,
+            context_selector: ContextInsensitiveSelector,
+        })
+    }
+}
+
+#[derive(Clone)]
+pub struct AsContextInsensitive<S>(pub S);
+
+impl<S, T> Solver<ContextInsensitiveInput<T>> for AsContextInsensitive<S>
+where
+    S: ContextSensitiveSolver<T, ContextInsensitiveSelector>,
+{
+    type Solution = S::Solution;
+
+    fn solve(self, input: ContextInsensitiveInput<T>) -> Self::Solution {
+        self.0.solve(ContextSensitiveInput {
+            global: input,
+            functions: vec![],
+            entrypoints: vec![],
+            context_selector: ContextInsensitiveSelector,
+        })
     }
 }
 
@@ -414,7 +564,7 @@ where
 
     fn solve(self, constrained_terms: ContextInsensitiveInput<T>) -> Self::Solution {
         let terms = constrained_terms.terms.clone();
-        let mapping = GenericIdMap::from_terms(terms);
+        let mapping = GenericIdMap::new(terms);
 
         let translated = mapping.translate_constrained_terms(&constrained_terms);
         let sub_solution = self.sub_solver.solve(translated);
@@ -425,39 +575,39 @@ where
     }
 }
 
-impl<S, T, F> Solver<ContextSensitiveInput<T, F>> for GenericSolver<S>
+impl<S, T, C> Solver<ContextSensitiveInput<T, C>> for GenericSolver<S>
 where
     T: Hash + Eq + Clone + Debug,
-    F: Hash + Eq + Clone + Debug,
-    S: Solver<ContextSensitiveInput<IntegerTerm, IntegerTerm>>,
+    S: Solver<ContextSensitiveInput<IntegerTerm, C>>,
 {
-    type Solution = GenericSolverSolution<S::Solution, T, F>;
+    type Solution = GenericSolverSolution<S::Solution, T>;
 
-    fn solve(self, input: ContextSensitiveInput<T, F>) -> Self::Solution {
+    fn solve(self, input: ContextSensitiveInput<T, C>) -> Self::Solution {
         let terms = input
-            .entry
+            .global
             .terms
             .iter()
-            .chain(input.functions.iter().flat_map(|(_, t)| &t.terms))
+            .chain(
+                input
+                    .functions
+                    .iter()
+                    .flat_map(|t| &t.constrained_terms.terms),
+            )
             .cloned()
             .collect();
-        let functions = input.functions.iter().map(|(f, _)| f.clone()).collect();
-        let mapping = GenericIdMap::new(terms, functions);
+        let mapping = GenericIdMap::new(terms);
 
-        let translated_entry = mapping.translate_constrained_terms(&input.entry);
+        let translated_entry = mapping.translate_constrained_terms(&input.global);
         let translated_functions = input
             .functions
             .iter()
-            .map(|(id, f)| {
-                (
-                    mapping.function_to_integer(id),
-                    mapping.translate_constrained_terms(f),
-                )
-            })
+            .map(|f| mapping.translate_function(&f))
             .collect();
         let translated_input = ContextSensitiveInput {
-            entry: translated_entry,
+            global: translated_entry,
             functions: translated_functions,
+            entrypoints: input.entrypoints,
+            context_selector: input.context_selector,
         };
         let sub_solution = self.sub_solver.solve(translated_input);
         GenericSolverSolution {
@@ -467,30 +617,24 @@ where
     }
 }
 
-pub struct GenericIdMap<T, F = ()> {
+#[derive(Clone)]
+pub struct GenericIdMap<T> {
     terms: Vec<T>,
     term_map: HashMap<T, IntegerTerm>,
-    _functions: Vec<F>,
-    function_map: HashMap<F, IntegerTerm>,
 }
 
-impl<T, F> GenericIdMap<T, F>
+impl<T> GenericIdMap<T>
 where
     T: Hash + Eq + Clone + Debug,
 {
-    fn from_terms(terms: Vec<T>) -> Self {
+    fn new(terms: Vec<T>) -> Self {
         let term_map = terms
             .iter()
             .cloned()
             .enumerate()
             .map(|(i, t)| (t, i as IntegerTerm))
             .collect();
-        Self {
-            terms,
-            term_map,
-            _functions: vec![],
-            function_map: HashMap::new(),
-        }
+        Self { terms, term_map }
     }
 
     fn terms_as_nodes(&self) -> Vec<Node<T>> {
@@ -534,12 +678,12 @@ where
                 cond_node,
                 right,
                 offset,
-                is_function,
+                call_site,
             } => {
                 let cond_node = self.term_to_integer(&cond_node);
                 let right = self.term_to_integer(&right);
-                if *is_function {
-                    cstr!(*fn (cond_node + (*offset)) <= right)
+                if let &Some(c) = call_site {
+                    cstr!(c: *fn (cond_node + (*offset)) <= right)
                 } else {
                     cstr!(*(cond_node + (*offset)) <= right)
                 }
@@ -548,16 +692,33 @@ where
                 cond_node,
                 left,
                 offset,
-                is_function,
+                call_site,
             } => {
                 let cond_node = self.term_to_integer(&cond_node);
                 let left = self.term_to_integer(&left);
-                if *is_function {
-                    cstr!(left <= *fn (cond_node + (*offset)))
+                if let &Some(c) = call_site {
+                    cstr!(c: left <= *fn (cond_node + (*offset)))
                 } else {
                     cstr!(left <= *(cond_node + (*offset)))
                 }
             }
+            Constraint::CallDummy {
+                cond_node,
+                call_site,
+            } => {
+                let cond_node = self.term_to_integer(&cond_node);
+                Constraint::CallDummy {
+                    cond_node,
+                    call_site: *call_site,
+                }
+            }
+        }
+    }
+
+    fn translate_function(&self, function: &FunctionInput<T>) -> FunctionInput<IntegerTerm> {
+        FunctionInput {
+            fun_name: function.fun_name.clone(),
+            constrained_terms: self.translate_constrained_terms(&function.constrained_terms),
         }
     }
 
@@ -588,44 +749,12 @@ where
     }
 }
 
-impl<T, F> GenericIdMap<T, F>
-where
-    T: Hash + Eq + Clone + Debug,
-    F: Hash + Eq + Clone + Debug,
-{
-    fn new(terms: Vec<T>, functions: Vec<F>) -> Self {
-        let term_mapping = GenericIdMap::<T>::from_terms(terms);
-        let function_map = functions
-            .iter()
-            .cloned()
-            .enumerate()
-            .map(|(i, f)| (f, i as IntegerTerm))
-            .collect();
-        Self {
-            terms: term_mapping.terms,
-            term_map: term_mapping.term_map,
-            _functions: functions,
-            function_map,
-        }
-    }
-
-    fn function_to_integer(&self, function: &F) -> IntegerTerm {
-        *self.function_map.get(function).unwrap_or_else(|| {
-            panic!("Invalid lookup for function that was not passed in during initialization: {function:?}")
-        })
-    }
-
-    fn _integer_to_function(&self, i: IntegerTerm) -> F {
-        self._functions[i as usize].clone()
-    }
-}
-
-pub struct GenericSolverSolution<S, T, F = ()> {
-    mapping: GenericIdMap<T, F>,
+pub struct GenericSolverSolution<S, T> {
+    mapping: GenericIdMap<T>,
     sub_solution: S,
 }
 
-impl<S, T, F> SolverSolution for GenericSolverSolution<S, T, F>
+impl<S, T> SolverSolution for GenericSolverSolution<S, T>
 where
     T: Hash + Eq + Clone + Debug,
     S: SolverSolution<Term = IntegerTerm>,
