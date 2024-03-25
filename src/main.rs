@@ -75,7 +75,7 @@ fn main() -> io::Result<()> {
     let file_path = args.file_path.clone();
     let module = Module::from_bc_path(&file_path).expect("Error parsing bc file");
 
-    let context_selector = CallStringSelector::<2>;
+    let context_selector = CallStringSelector::<1>;
 
     match (args.solver, args.termset, args.visualize.clone()) {
         // Basic solver

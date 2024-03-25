@@ -12,8 +12,8 @@ use roaring::RoaringBitmap;
 
 use super::shared_bitvec::SharedBitVec;
 use super::{
-    edges_between, BetterBitVec, Constraint, ContextSelector, ContextSensitiveInput, FunctionInput,
-    IntegerTerm, Solver, SolverSolution, TermSetTrait, TermType,
+    edges_between, BetterBitVec, CallSite, Constraint, ContextSelector, ContextSensitiveInput,
+    FunctionInput, IntegerTerm, Solver, SolverSolution, TermSetTrait, TermType,
 };
 use crate::solver::GenericIdMap;
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
@@ -23,7 +23,7 @@ struct CondLeftEntry<C> {
     cond_node: IntegerTerm,
     right: IntegerTerm,
     offset: usize,
-    call_site: Option<u32>,
+    call_site: Option<CallSite>,
     context: C,
 }
 
@@ -32,14 +32,14 @@ struct CondRightEntry<C> {
     cond_node: IntegerTerm,
     left: IntegerTerm,
     offset: usize,
-    call_site: Option<u32>,
+    call_site: Option<CallSite>,
     context: C,
 }
 
 #[derive(Clone)]
 struct CallDummyEntry<C> {
     cond_node: IntegerTerm,
-    call_site: u32,
+    call_site: CallSite,
     context: C,
 }
 
@@ -168,7 +168,7 @@ where
                 self.edges.sols[cond_node as usize].difference(&self.edges.p_cache_call_dummies[i]);
             self.edges.p_cache_call_dummies[i].union_assign(&p_new);
             for t in p_new.iter() {
-                self.offset_term_vec_offsets(t, Some(call_site), 0, &context);
+                self.offset_term_vec_offsets(t, Some(call_site.clone()), 0, &context);
             }
         }
         let left_conds = self.edges.left_conds.clone();
@@ -192,7 +192,9 @@ where
             let p_new = self.edges.sols[cond_node as usize].difference(&self.edges.p_cache_left[i]);
             self.edges.p_cache_left[i].union_assign(&p_new);
             for t in p_new.iter() {
-                if let Some(t) = self.offset_term_vec_offsets(t, call_site, offset, &context) {
+                if let Some(t) =
+                    self.offset_term_vec_offsets(t, call_site.clone(), offset, &context)
+                {
                     let t = get_representative(&mut self.parents, t);
                     if t == right {
                         continue;
@@ -228,7 +230,9 @@ where
                 self.edges.sols[cond_node as usize].difference(&self.edges.p_cache_right[i]);
             self.edges.p_cache_right[i].union_assign(&p_new);
             for t in p_new.iter() {
-                if let Some(t) = self.offset_term_vec_offsets(t, call_site, offset, &context) {
+                if let Some(t) =
+                    self.offset_term_vec_offsets(t, call_site.clone(), offset, &context)
+                {
                     let t = get_representative(&mut self.parents, t);
                     if t == left {
                         continue;
@@ -248,7 +252,7 @@ where
     fn offset_term_vec_offsets(
         &mut self,
         term: IntegerTerm,
-        call_site: Option<u32>,
+        call_site: Option<CallSite>,
         offset: usize,
         context: &C::Context,
     ) -> Option<IntegerTerm> {
@@ -300,7 +304,7 @@ where
                 &TemplateTerm::Global(index) => index,
             });
             self.edges
-                .add_constraint(concrete_constraint, context.clone());
+                .add_constraint(concrete_constraint.clone(), context.clone());
 
             if let Constraint::Subset {
                 left: TemplateTerm::Global(_),
@@ -335,9 +339,19 @@ where
         instantiated_start_index as IntegerTerm + template.function_node_index
     }
 
-    fn get_function_and_relative_index(&self, term: &T) -> (Option<IntegerTerm>, IntegerTerm) {
+    fn get_function_and_relative_index_from_term(
+        &self,
+        term: &T,
+    ) -> (Option<IntegerTerm>, IntegerTerm) {
         let abstract_index = self.mapping.term_to_integer(term);
 
+        self.get_function_and_relative_index_from_abstract_index(abstract_index)
+    }
+
+    fn get_function_and_relative_index_from_abstract_index(
+        &self,
+        abstract_index: IntegerTerm,
+    ) -> (Option<IntegerTerm>, IntegerTerm) {
         let fun_index = match self
             .templates
             .binary_search_by_key(&abstract_index, |t| t.start_index)
@@ -349,10 +363,34 @@ where
         // If global term
         match fun_index {
             Some(i) => (
-                Some(i as u32),
+                Some(i as IntegerTerm),
                 abstract_index - self.templates[i].start_index,
             ),
             None => (None, abstract_index),
+        }
+    }
+
+    fn context_of_concrete_index(&self, index: IntegerTerm) -> C::Context {
+        if self.sentinel_functions.contains_key(&index) {
+            return self.context_selector.empty();
+        }
+
+        let abstract_index = self.abstract_indices[index as usize];
+
+        let (fun_index, relative_index) =
+            self.get_function_and_relative_index_from_abstract_index(abstract_index);
+
+        match fun_index {
+            Some(i) => {
+                let start_index = index - relative_index;
+                self.instantiated_contexts[i as usize]
+                    .iter()
+                    .find(|(_, i)| **i == start_index)
+                    .expect("there should be an instantiated context")
+                    .0
+                    .clone()
+            }
+            None => self.context_selector.empty(),
         }
     }
 
@@ -599,7 +637,7 @@ where
     type TermSet = HashSet<T>;
 
     fn get(&self, term: &T) -> Self::TermSet {
-        let (fun_index, relative_index) = self.get_function_and_relative_index(term);
+        let (fun_index, relative_index) = self.get_function_and_relative_index_from_term(term);
 
         match fun_index {
             Some(i) => self.instantiated_contexts[i as usize]
@@ -1046,14 +1084,15 @@ pub type SharedBitVecContextWavePropagationSolver<C> =
     ContextWavePropagationSolver<SharedBitVec, C>;
 
 #[derive(Clone)]
-pub struct WavePropagationNode<T> {
+pub struct ContextWavePropagationNode<T, C> {
     term: T,
+    context: C,
     count: usize,
 }
 
-impl<T: Display> Display for WavePropagationNode<T> {
+impl<T: Display, C: Display> Display for ContextWavePropagationNode<T, C> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "{} ({})", self.term, self.count)
+        write!(f, "{}: {} ({})", self.context, self.term, self.count)
     }
 }
 
@@ -1065,7 +1104,7 @@ where
 {
     fn get_representative_counts(&self) -> HashMap<IntegerTerm, Node<usize>> {
         let mut reps = HashMap::new();
-        for n in 0..self.mapping.terms.len() {
+        for n in 0..self.edges.sols.len() {
             let rep = get_representative_no_mutation(&self.parents, n as IntegerTerm);
             reps.entry(rep)
                 .or_insert(Node {
@@ -1083,16 +1122,18 @@ where
     T: Display + Debug + Clone + PartialEq + Eq + Hash,
     S: TermSetTrait<Term = IntegerTerm>,
     C: ContextSelector,
+    C::Context: Display,
 {
-    type Node = WavePropagationNode<T>;
+    type Node = ContextWavePropagationNode<T, C::Context>;
     type Weight = OffsetWeight;
 
     fn nodes(&self) -> Vec<Node<Self::Node>> {
         let reps = self.get_representative_counts();
         reps.into_iter()
             .map(|(t, node)| {
-                let inner = WavePropagationNode {
-                    term: self.mapping.integer_to_term(t),
+                let inner = ContextWavePropagationNode {
+                    term: self.concrete_to_input(t),
+                    context: self.context_of_concrete_index(t),
                     count: node.inner,
                 };
                 Node { inner, id: node.id }
@@ -1109,15 +1150,17 @@ where
                 continue;
             }
 
-            let inner = WavePropagationNode {
-                term: self.mapping.integer_to_term(from as u32),
+            let inner = ContextWavePropagationNode {
+                term: self.concrete_to_input(from as IntegerTerm),
+                context: self.context_of_concrete_index(from as IntegerTerm),
                 count: reps.get(&(from as u32)).unwrap().inner,
             };
             let from_node = Node { inner, id: from };
 
             for (to, weights) in outgoing {
-                let inner = WavePropagationNode {
-                    term: self.mapping.integer_to_term(*to),
+                let inner = ContextWavePropagationNode {
+                    term: self.concrete_to_input(*to as IntegerTerm),
+                    context: self.context_of_concrete_index(*to as IntegerTerm),
                     count: reps.get(to).unwrap().inner,
                 };
                 let to_node = Node {

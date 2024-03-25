@@ -16,8 +16,8 @@ use crate::module_visitor::pointer::{
 use crate::module_visitor::structs::{StructMap, StructType};
 use crate::module_visitor::{ModuleVisitor, VarIdent};
 use crate::solver::{
-    ConstrainedTerms, Constraint, ContextSensitiveInput, FunctionInput, Solver, SolverSolution,
-    TermSetTrait, TermType,
+    CallSite, ConstrainedTerms, Constraint, ContextSensitiveInput, FunctionInput, Solver,
+    SolverSolution, TermSetTrait, TermType,
 };
 use crate::visualizer::{visualize, Graph};
 
@@ -519,15 +519,15 @@ fn do_assignment<'a>(
                 &mut value_vec,
             );
             for (value_cell, dest_cell) in value_vec.into_iter().zip(dest_vec) {
-                let c = cstr!(value_cell <= dest_cell);
-                constraints.push(c);
+                let constraint = cstr!(value_cell <= dest_cell);
+                constraints.push(constraint);
             }
         }
         None => {
             let value_cell = value_cell_type(value);
             let dest_cell = dest_cell_type(dest);
-            let c = cstr!(value_cell <= dest_cell);
-            constraints.push(c);
+            let constraint = cstr!(value_cell <= dest_cell);
+            constraints.push(constraint);
         }
     };
 }
@@ -556,8 +556,8 @@ impl<'a> PointerModuleObserver<'a> for ConstraintGenerator<'a> {
 
         let first_cell = Cell::Return(first_ident(ident.clone(), return_struct_type.as_deref()));
         let var_cell = Cell::Var(ident.clone());
-        let c = cstr!(first_cell in var_cell);
-        function_constraints.push(c);
+        let constraint = cstr!(first_cell in var_cell);
+        function_constraints.push(constraint);
 
         self.return_struct_types.insert(ident, return_struct_type);
     }
@@ -572,8 +572,8 @@ impl<'a> PointerModuleObserver<'a> for ConstraintGenerator<'a> {
 
         let global_cell = Cell::Global(first_ident(ident.clone(), struct_type.as_deref()));
         let var_cell = Cell::Var(ident.clone());
-        let c = cstr!(global_cell in var_cell);
-        global_constraints.push(c);
+        let constraint = cstr!(global_cell in var_cell);
+        global_constraints.push(constraint);
 
         if let Some(init_ident) = init_ref {
             do_assignment(
@@ -626,14 +626,15 @@ impl<'a> PointerModuleObserver<'a> for ConstraintGenerator<'a> {
                             &mut value_vec,
                         );
                         for (offset, value_cell) in value_vec.into_iter().enumerate() {
-                            let c = cstr!(value_cell <= *((address_cell.clone()) + offset));
-                            function_constraints.push(c);
+                            let constraint =
+                                cstr!(value_cell <= *((address_cell.clone()) + offset));
+                            function_constraints.push(constraint);
                         }
                     }
                     None => {
                         let value_cell = Cell::Var(value);
-                        let c = cstr!(value_cell <= *address_cell);
-                        function_constraints.push(c);
+                        let constraint = cstr!(value_cell <= *address_cell);
+                        function_constraints.push(constraint);
                     }
                 };
             }
@@ -649,14 +650,14 @@ impl<'a> PointerModuleObserver<'a> for ConstraintGenerator<'a> {
                         let mut dest_vec = vec![];
                         get_and_push_cells(dest, struct_type.as_deref(), Cell::Var, &mut dest_vec);
                         for (offset, dest_cell) in dest_vec.into_iter().enumerate() {
-                            let c = cstr!(*((address_cell.clone()) + offset) <= dest_cell);
-                            function_constraints.push(c);
+                            let constraint = cstr!(*((address_cell.clone()) + offset) <= dest_cell);
+                            function_constraints.push(constraint);
                         }
                     }
                     None => {
                         let dest_cell = Cell::Var(dest);
-                        let c = cstr!(*address_cell <= dest_cell);
-                        function_constraints.push(c);
+                        let constraint = cstr!(*address_cell <= dest_cell);
+                        function_constraints.push(constraint);
                     }
                 };
             }
@@ -664,8 +665,8 @@ impl<'a> PointerModuleObserver<'a> for ConstraintGenerator<'a> {
             PointerInstruction::Alloca { dest, struct_type } => {
                 let stack_cell = Cell::Stack(first_ident(dest.clone(), struct_type.as_deref()));
                 let var_cell = Cell::Var(dest);
-                let c = cstr!(stack_cell in var_cell);
-                function_constraints.push(c);
+                let constraint = cstr!(stack_cell in var_cell);
+                function_constraints.push(constraint);
             }
 
             PointerInstruction::Malloc { dest } => {
@@ -674,8 +675,8 @@ impl<'a> PointerModuleObserver<'a> for ConstraintGenerator<'a> {
                     offset: 0,
                 });
                 let var_cell = Cell::Var(dest);
-                let c = cstr!(heap_cell in var_cell);
-                function_constraints.push(c);
+                let constraint = cstr!(heap_cell in var_cell);
+                function_constraints.push(constraint);
             }
 
             // Flat gep
@@ -692,8 +693,8 @@ impl<'a> PointerModuleObserver<'a> for ConstraintGenerator<'a> {
                     panic!("Got flat gep with more than one index");
                 }
                 let offset = indices[0];
-                let c = cstr!(address_cell + offset <= dest_cell);
-                function_constraints.push(c);
+                let constraint = cstr!(address_cell + offset <= dest_cell);
+                function_constraints.push(constraint);
             }
 
             PointerInstruction::Gep {
@@ -722,8 +723,8 @@ impl<'a> PointerModuleObserver<'a> for ConstraintGenerator<'a> {
 
                 let dest_cell = Cell::Var(dest);
                 let address_cell = Cell::Var(address);
-                let c = cstr!(address_cell + offset <= dest_cell);
-                function_constraints.push(c);
+                let constraint = cstr!(address_cell + offset <= dest_cell);
+                function_constraints.push(constraint);
             }
 
             PointerInstruction::Phi {
@@ -749,12 +750,20 @@ impl<'a> PointerModuleObserver<'a> for ConstraintGenerator<'a> {
                 arguments,
                 return_struct_type,
             } => {
-                let function_cell = Cell::Var(function);
-                let call_site = self.call_site_counter;
-                self.call_site_counter += 1;
+                let function_cell = Cell::Var(function.clone());
+                let call_site = if let Some(dest) = dest.clone() {
+                    CallSite(dest.to_string().into())
+                } else {
+                    let fun_name = context.fun_name.expect("no calls outside functions");
+                    let counter = self.call_site_counter;
+                    self.call_site_counter += 1;
+                    let function_string = function.to_string();
+                    let function_str = function_string.split("@").next().unwrap();
+                    CallSite(format!("{fun_name} called {function_str}#{}", counter).into())
+                };
                 function_constraints.push(Constraint::CallDummy {
                     cond_node: function_cell.clone(),
-                    call_site,
+                    call_site: call_site.clone(),
                 });
                 for (i, arg) in arguments
                     .iter()
@@ -763,8 +772,9 @@ impl<'a> PointerModuleObserver<'a> for ConstraintGenerator<'a> {
                 {
                     let arg_cell = Cell::Var(arg);
                     let offset = return_struct_type.as_ref().map(|st| st.size).unwrap_or(1) + i;
-                    let c = cstr!(call_site: arg_cell <= *fn ((function_cell.clone()) + offset));
-                    function_constraints.push(c);
+                    let c = call_site.clone();
+                    let constraint = cstr!(c: arg_cell <= *fn ((function_cell.clone()) + offset));
+                    function_constraints.push(constraint);
                 }
 
                 // Constraints for function return
@@ -778,8 +788,9 @@ impl<'a> PointerModuleObserver<'a> for ConstraintGenerator<'a> {
                     );
 
                     for (i, cell) in dest_cells.into_iter().enumerate() {
-                        let c = cstr!(call_site: *fn ((function_cell.clone()) + i) <= cell);
-                        function_constraints.push(c);
+                        let c = call_site.clone();
+                        let constraint = cstr!(c: *fn ((function_cell.clone()) + i) <= cell);
+                        function_constraints.push(constraint);
                     }
                 }
             }
