@@ -5,9 +5,9 @@ use either::Either;
 use hashbrown::{HashMap, HashSet};
 use llvm_ir::function::{FunctionDeclaration, Parameter, ParameterAttribute};
 use llvm_ir::instruction::{
-    AddrSpaceCast, Alloca, BitCast, Call, ExtractElement, ExtractValue, Freeze, GetElementPtr,
-    InlineAssembly, InsertElement, InsertValue, IntToPtr, Load, Phi, Select, ShuffleVector, Store,
-    VAArg,
+    AddrSpaceCast, Alloca, BitCast, Call, CmpXchg, ExtractElement, ExtractValue, Freeze,
+    GetElementPtr, InlineAssembly, InsertElement, InsertValue, IntToPtr, Load, Phi, Select,
+    ShuffleVector, Store, VAArg,
 };
 use llvm_ir::module::GlobalVariable;
 use llvm_ir::terminator::{Invoke, Ret};
@@ -446,8 +446,16 @@ where
             Either::Right(op) => self
                 .get_operand_ident_type(op, context)
                 .expect("Functions should always be relevant"),
-            _ => {
+            Either::Left(asm) => {
                 warn!("Inline assembly not handled");
+                if !is_ptr_type(&asm.ty) && !is_struct_type(&asm.ty) {
+                    return;
+                }
+                let Some(dest) = dest.map(|d| VarIdent::new_local(d, &caller.name)) else {
+                    return;
+                };
+                let struct_type = StructType::try_from_type(asm.ty.clone(), context.structs);
+                self.handle_unused_fresh(dest, struct_type, pointer_context);
                 return;
             }
         };
@@ -1042,6 +1050,51 @@ where
                 let dest = VarIdent::new_local(dest, &function.name);
                 self.handle_unused_fresh(dest, None, pointer_context);
                 warn!("Unhandled IntToPtr");
+            }
+
+            Instruction::CmpXchg(CmpXchg {
+                address,
+                replacement,
+                dest,
+                ..
+            }) => {
+                let (address, ptr_ty, _) = self
+                    .get_operand_ident_type(address, context)
+                    .expect("CmpXchg address should always be a pointer");
+                let val_ty =
+                    strip_pointer_type(ptr_ty).expect("CmpXchg address should always be a pointer");
+                let i1_ty = context.module.types.int(1);
+                let out_ty = context
+                    .module
+                    .types
+                    .struct_of(vec![val_ty.clone(), i1_ty], false);
+                let out_struct_type = StructType::try_from_type(out_ty, context.structs);
+                let dest_ident = VarIdent::new_local(dest, &function.name);
+                let dest = VarIdent::Offset {
+                    base: Rc::new(dest_ident.clone()),
+                    offset: 0,
+                };
+
+                self.handle_unused_fresh(dest_ident, out_struct_type, pointer_context);
+                if is_ptr_type(&val_ty) {
+                    let (replacement, ..) = self
+                        .get_operand_ident_type(replacement, context)
+                        .expect("replacement type should be val_ty");
+                    let load_instr = PointerInstruction::Load {
+                        dest,
+                        address: address.clone(),
+                        struct_type: None,
+                    };
+                    let store_instr = PointerInstruction::Store {
+                        address,
+                        value: replacement,
+                        struct_type: None,
+                    };
+                    self.observer
+                        .handle_ptr_instruction(load_instr, pointer_context);
+                    self.observer
+                        .handle_ptr_instruction(store_instr, pointer_context);
+                }
             }
 
             Instruction::LandingPad(_) => warn!("Unhandled LandingPad"),
