@@ -207,25 +207,25 @@ where
             }
         }
 
-        for from in 0..self.mapping.terms.len() {
-            let from_node = Node {
-                inner: self.mapping.integer_to_term(from as IntegerTerm),
-                id: from,
-            };
-            for to in self.sub_solution.get(&(from as IntegerTerm)).iter() {
-                let to_node = Node {
-                    inner: self.mapping.integer_to_term(to),
-                    id: to as usize,
-                };
-                let edge = Edge {
-                    from: from_node.clone(),
-                    to: to_node.clone(),
-                    weight: OffsetWeight(0),
-                    kind: EdgeKind::Inclusion,
-                };
-                edges.push(edge);
-            }
-        }
+        // for from in 0..self.mapping.terms.len() {
+        //     let from_node = Node {
+        //         inner: self.mapping.integer_to_term(from as IntegerTerm),
+        //         id: from,
+        //     };
+        //     for to in self.sub_solution.get(&(from as IntegerTerm)).iter() {
+        //         let to_node = Node {
+        //             inner: self.mapping.integer_to_term(to),
+        //             id: to as usize,
+        //         };
+        //         let edge = Edge {
+        //             from: from_node.clone(),
+        //             to: to_node.clone(),
+        //             weight: OffsetWeight(0),
+        //             kind: EdgeKind::Inclusion,
+        //         };
+        //         edges.push(edge);
+        //     }
+        // }
 
         edges
     }
