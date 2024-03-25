@@ -95,6 +95,7 @@ impl Clone for SharedBitVec {
 pub struct InnerBitVec {
     segments: SmallVec<[Segment; BACKING_ARRAY_SIZE]>,
     len: u32,
+    last_accessed_chunk_index: u32,
 }
 
 impl Clone for InnerBitVec {
@@ -102,6 +103,7 @@ impl Clone for InnerBitVec {
         Self {
             segments: self.segments.clone(),
             len: self.len,
+            last_accessed_chunk_index: 0,
         }
     }
 
@@ -130,25 +132,39 @@ impl InnerBitVec {
         let start_index = start_index_of_term(term);
         let index_in_chunk = index_in_chunk(term);
 
-        let segment = match self
-            .segments
-            .binary_search_by_key(&start_index, |segment| segment.start_index)
+        let segment = if self.segments.len() > self.last_accessed_chunk_index as usize
+            && self.segments[self.last_accessed_chunk_index as usize].start_index == start_index
         {
-            Ok(i) => {
-                if self.segments[i].chunk.data[index_in_chunk] {
-                    return false;
-                }
-                &mut self.segments[i]
+            if self.segments[self.last_accessed_chunk_index as usize]
+                .chunk
+                .data[index_in_chunk]
+            {
+                return false;
             }
-            Err(i) => {
-                self.segments.insert(
-                    i,
-                    Segment {
-                        start_index,
-                        chunk: Rc::default(),
-                    },
-                );
-                &mut self.segments[i]
+            &mut self.segments[self.last_accessed_chunk_index as usize]
+        } else {
+            match self
+                .segments
+                .binary_search_by_key(&start_index, |segment| segment.start_index)
+            {
+                Ok(i) => {
+                    if self.segments[i].chunk.data[index_in_chunk] {
+                        return false;
+                    }
+                    self.last_accessed_chunk_index = i as u32;
+                    &mut self.segments[i]
+                }
+                Err(i) => {
+                    self.segments.insert(
+                        i,
+                        Segment {
+                            start_index,
+                            chunk: Rc::default(),
+                        },
+                    );
+                    self.last_accessed_chunk_index = i as u32;
+                    &mut self.segments[i]
+                }
             }
         };
 

@@ -1,9 +1,11 @@
 use arrayvec::ArrayVec;
+use core::fmt;
 use hashbrown::{HashMap, HashSet};
 use roaring::RoaringBitmap;
-use std::fmt::Debug;
-use std::hash::Hash;
+use std::fmt::{Debug, Display, Formatter};
+use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
+use std::ptr;
 use std::rc::Rc;
 
 mod basic;
@@ -29,7 +31,7 @@ pub use wave_prop::{
 
 use crate::visualizer::Node;
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub enum Constraint<T> {
     Inclusion {
         term: T,
@@ -44,17 +46,17 @@ pub enum Constraint<T> {
         cond_node: T,
         right: T,
         offset: usize,
-        call_site: Option<u32>,
+        call_site: Option<CallSite>,
     },
     UnivCondSubsetRight {
         cond_node: T,
         left: T,
         offset: usize,
-        call_site: Option<u32>,
+        call_site: Option<CallSite>,
     },
     CallDummy {
         cond_node: T,
-        call_site: u32,
+        call_site: CallSite,
     },
 }
 
@@ -86,7 +88,7 @@ impl<T> Constraint<T> {
                 cond_node: f(cond_node),
                 right: f(right),
                 offset: *offset,
-                call_site: *call_site,
+                call_site: call_site.clone(),
             },
             Self::UnivCondSubsetRight {
                 cond_node,
@@ -97,14 +99,14 @@ impl<T> Constraint<T> {
                 cond_node: f(cond_node),
                 left: f(left),
                 offset: *offset,
-                call_site: *call_site,
+                call_site: call_site.clone(),
             },
             Self::CallDummy {
                 cond_node,
                 call_site,
             } => Constraint::CallDummy {
                 cond_node: f(cond_node),
-                call_site: *call_site,
+                call_site: call_site.clone(),
             },
         }
     }
@@ -378,7 +380,7 @@ impl<T, C> SolverInput for ContextSensitiveInput<T, C> {
 
 pub trait ContextSelector {
     type Context: Clone + Debug + PartialEq + Eq + Hash;
-    fn select_context(&self, current: &Self::Context, call_site: u32) -> Self::Context;
+    fn select_context(&self, current: &Self::Context, call_site: CallSite) -> Self::Context;
     fn empty(&self) -> Self::Context;
 }
 
@@ -388,7 +390,7 @@ pub struct ContextInsensitiveSelector;
 impl ContextSelector for ContextInsensitiveSelector {
     type Context = ();
 
-    fn select_context(&self, _: &Self::Context, _: u32) -> Self::Context {
+    fn select_context(&self, _: &Self::Context, _: CallSite) -> Self::Context {
         ()
     }
 
@@ -397,23 +399,59 @@ impl ContextSelector for ContextInsensitiveSelector {
     }
 }
 
+#[derive(Clone, Eq, Debug)]
+pub struct CallSite(pub Rc<str>);
+
+impl PartialEq for CallSite {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Hash for CallSite {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        ptr::hash(self.0.as_ptr(), state);
+    }
+}
+
+impl Display for CallSite {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "{}", &self.0)
+    }
+}
+
 #[derive(Clone)]
 pub struct CallStringSelector<const K: usize>;
 
-impl<const K: usize> ContextSelector for CallStringSelector<K> {
-    type Context = ArrayVec<u32, K>;
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+pub struct CallStringContext<const K: usize>(ArrayVec<CallSite, K>);
 
-    fn select_context(&self, current: &Self::Context, call_site: u32) -> Self::Context {
+impl<const K: usize> ContextSelector for CallStringSelector<K> {
+    type Context = CallStringContext<K>;
+
+    fn select_context(&self, current: &Self::Context, call_site: CallSite) -> Self::Context {
         let mut context = current.clone();
-        if context.is_full() {
-            context.remove(0);
+        if context.0.is_full() {
+            context.0.remove(0);
         }
-        context.push(call_site);
+        context.0.push(call_site);
         context
     }
 
     fn empty(&self) -> Self::Context {
-        ArrayVec::new()
+        CallStringContext(ArrayVec::new())
+    }
+}
+
+impl<const K: usize> Display for CallStringContext<K> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let string = self
+            .0
+            .iter()
+            .map(CallSite::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        writeln!(f, "[{string}]",)
     }
 }
 
@@ -682,7 +720,7 @@ where
             } => {
                 let cond_node = self.term_to_integer(&cond_node);
                 let right = self.term_to_integer(&right);
-                if let &Some(c) = call_site {
+                if let Some(c) = call_site.clone() {
                     cstr!(c: *fn (cond_node + (*offset)) <= right)
                 } else {
                     cstr!(*(cond_node + (*offset)) <= right)
@@ -696,7 +734,7 @@ where
             } => {
                 let cond_node = self.term_to_integer(&cond_node);
                 let left = self.term_to_integer(&left);
-                if let &Some(c) = call_site {
+                if let Some(c) = call_site.clone() {
                     cstr!(c: left <= *fn (cond_node + (*offset)))
                 } else {
                     cstr!(left <= *(cond_node + (*offset)))
@@ -709,7 +747,7 @@ where
                 let cond_node = self.term_to_integer(&cond_node);
                 Constraint::CallDummy {
                     cond_node,
-                    call_site: *call_site,
+                    call_site: call_site.clone(),
                 }
             }
         }

@@ -102,13 +102,26 @@ impl<'a> VarIdent<'a> {
     }
 }
 
+// impl<'a> ToOwned for VarIdent<'a> {
+//     type Owned = OwnedVarIdent;
+
+//     fn to_owned(&self) -> Self::Owned {
+//         match self {
+//             Self::Local { reg_name, fun_name } => write!(f, "{reg_name}@{fun_name}"),
+//             Self::Global { name } => write!(f, "{name}"),
+//             Self::Fresh { index } => write!(f, "fresh_{index}"),
+//             Self::Offset { base, offset } => write!(f, "{base}[{offset}]"),
+//         }
+//     }
+// }
+
 impl<'a> Display for VarIdent<'a> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
-            VarIdent::Local { reg_name, fun_name } => write!(f, "{reg_name}@{fun_name}"),
-            VarIdent::Global { name } => write!(f, "{name}"),
-            VarIdent::Fresh { index } => write!(f, "fresh_{index}"),
-            VarIdent::Offset { base, offset } => write!(f, "{base}[{offset}]"),
+            Self::Local { reg_name, fun_name } => write!(f, "{reg_name}@{fun_name}"),
+            Self::Global { name } => write!(f, "{name}"),
+            Self::Fresh { index } => write!(f, "fresh_{index}"),
+            Self::Offset { base, offset } => write!(f, "{base}[{offset}]"),
         }
     }
 }
@@ -152,6 +165,13 @@ impl<'a> FromStr for VarIdent<'a> {
             }
         }
     }
+}
+
+pub enum OwnedVarIdent {
+    Local { reg_name: Name, fun_name: String },
+    Global { name: String },
+    Fresh { index: usize },
+    Offset { base: Rc<Self>, offset: usize },
 }
 
 fn strip_array_types(ty: TypeRef) -> (TypeRef, usize) {
