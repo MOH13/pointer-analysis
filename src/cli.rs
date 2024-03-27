@@ -48,6 +48,8 @@ pub enum SolverMode {
     DryRun,
     // Solve context sensitively
     Context,
+    // Justification
+    Justify,
 }
 
 impl Display for SolverMode {
@@ -57,6 +59,7 @@ impl Display for SolverMode {
             SolverMode::Wave => write!(f, "wave"),
             SolverMode::DryRun => write!(f, "dry-run"),
             SolverMode::Context => write!(f, "context"),
+            SolverMode::Justify => write!(f, "justify"),
         }
     }
 }

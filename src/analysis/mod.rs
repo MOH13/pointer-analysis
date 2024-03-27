@@ -457,10 +457,16 @@ impl<'a> PointerModuleObserver<'a> for PointsToPreAnalyzer<'a> {
                 );
             }
 
-            PointerInstruction::Malloc { dest } => {
+            PointerInstruction::Malloc { dest, single } => {
                 function_state.cells.push(Cell::Var(dest.clone()));
-                let num_cells = self.num_cells_per_malloc;
+                if single {
+                    let cell = Cell::Heap(dest);
+                    function_state.cells.push(cell.clone());
+                    return;
+                }
+
                 let base_rc = Rc::new(dest);
+                let num_cells = self.num_cells_per_malloc;
                 for i in 0..num_cells {
                     let cell = Cell::Heap(VarIdent::Offset {
                         base: base_rc.clone(),
@@ -669,11 +675,15 @@ impl<'a> PointerModuleObserver<'a> for ConstraintGenerator<'a> {
                 function_constraints.push(constraint);
             }
 
-            PointerInstruction::Malloc { dest } => {
-                let heap_cell = Cell::Heap(VarIdent::Offset {
-                    base: Rc::new(dest.clone()),
-                    offset: 0,
-                });
+            PointerInstruction::Malloc { dest, single } => {
+                let heap_cell = if single {
+                    Cell::Heap(dest.clone())
+                } else {
+                    Cell::Heap(VarIdent::Offset {
+                        base: Rc::new(dest.clone()),
+                        offset: 0,
+                    })
+                };
                 let var_cell = Cell::Var(dest);
                 let constraint = cstr!(heap_cell in var_cell);
                 function_constraints.push(constraint);
