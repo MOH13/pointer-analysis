@@ -5,10 +5,9 @@ use llvm_ir::Module;
 use pointer_analysis::analysis::{Cell, PointsToAnalysis, PointsToResult};
 use pointer_analysis::cli::{Args, SolverMode, TermSet};
 use pointer_analysis::solver::{
-    BasicBetterBitVecSolver, BasicSharedBitVecSolver, CallStringSelector,
-    ContextInsensitiveSelector, ContextInsensitiveSolver, RoaringWavePropagationSolver,
-    SharedBitVecContextWavePropagationSolver, SharedBitVecWavePropagationSolver, Solver,
-    SolverSolution, TermSetTrait,
+    BasicBetterBitVecSolver, BasicSharedBitVecSolver, CallStringSelector, ContextInsensitiveSolver,
+    JustificationSolver, RoaringWavePropagationSolver, SharedBitVecContextWavePropagationSolver,
+    SharedBitVecWavePropagationSolver, Solver, SolverSolution, TermSetTrait,
 };
 use pointer_analysis::solver::{BasicHashSolver, BasicRoaringSolver, StatSolver};
 use pointer_analysis::solver::{BetterBitVecWavePropagationSolver, HashWavePropagationSolver};
@@ -194,6 +193,37 @@ fn main() -> io::Result<()> {
                 None => PointsToAnalysis::run(solver, &module, context_selector),
             };
             show_output(result, &args);
+        }
+        (SolverMode::Justify, ..) => {
+            let solver = JustificationSolver::new().as_context_sensitive();
+            let justifier = PointsToAnalysis::run(solver, &module, context_selector).0;
+            loop {
+                let mut input = String::new();
+                print!("Enter node to justify: ");
+                io::stdout().flush()?;
+                io::stdin().read_line(&mut input)?;
+                let cleaned_input = input.trim();
+                if cleaned_input == "" {
+                    continue;
+                }
+                let Ok(node) = cleaned_input.parse() else {
+                    println!("Could not parse node");
+                    continue;
+                };
+                input.clear();
+                print!("Enter term to justify: ");
+                io::stdout().flush()?;
+                io::stdin().read_line(&mut input)?;
+                let cleaned_input = input.trim();
+                if cleaned_input == "" {
+                    continue;
+                }
+                let Ok(term) = cleaned_input.parse() else {
+                    println!("Could not parse term");
+                    continue;
+                };
+                justifier.justify(node, term);
+            }
         }
     }
 

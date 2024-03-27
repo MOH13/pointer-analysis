@@ -53,7 +53,7 @@ pub enum PointerInstruction<'a> {
         struct_type: Option<Rc<StructType>>,
     },
     /// x = malloc()
-    Malloc { dest: VarIdent<'a> },
+    Malloc { dest: VarIdent<'a>, single: bool },
     /// x = gep y, o1, o2, ..
     Gep {
         dest: VarIdent<'a>,
@@ -576,9 +576,18 @@ where
 
             // TODO: What if someone defines their own function called malloc?
             //       Maybe look at function signature?
-            "malloc" | "calloc" | "strdup" | "strndup" => {
+            "malloc" | "calloc" => {
                 let instr = PointerInstruction::Malloc {
                     dest: dest.expect("malloc should have a destination"),
+                    single: false,
+                };
+                self.observer.handle_ptr_instruction(instr, pointer_context);
+            }
+
+            "strdup" | "strndup" => {
+                let instr = PointerInstruction::Malloc {
+                    dest: dest.expect("malloc should have a destination"),
+                    single: true,
                 };
                 self.observer.handle_ptr_instruction(instr, pointer_context);
             }
