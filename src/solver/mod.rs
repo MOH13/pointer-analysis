@@ -19,6 +19,7 @@ mod wave_prop;
 
 pub use basic::{
     BasicBetterBitVecSolver, BasicHashSolver, BasicRoaringSolver, BasicSharedBitVecSolver,
+    JustificationSolver,
 };
 pub use better_bitvec::BetterBitVec;
 // pub use bit_vec::BasicBitVecSolver;
@@ -31,7 +32,7 @@ pub use wave_prop::{
 
 use crate::visualizer::Node;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Constraint<T> {
     Inclusion {
         term: T,
@@ -314,7 +315,7 @@ impl TermSetTrait for RoaringBitmap {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ConstrainedTerms<T> {
     pub terms: Vec<T>,
     pub term_types: Vec<(T, TermType)>,
