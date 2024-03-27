@@ -51,7 +51,7 @@ enum TemplateTerm {
 
 struct TemplateSentinelInfo {
     pointer_node: IntegerTerm,
-    offset: usize,
+    term_type: TermType,
 }
 
 #[derive(Clone)]
@@ -262,10 +262,13 @@ where
             TermType::Struct(allowed) if call_site.is_none() => {
                 (offset <= allowed).then(|| term + offset as IntegerTerm)
             }
-            TermType::Function(allowed) => {
+            TermType::Function(allowed, func_type) => {
                 let Some(call_site) = call_site else {
                     return None;
                 };
+                // if func_type != call_site.0.func_type_index {
+                //     return None;
+                // }
                 let new_context = self.context_selector.select_context(context, call_site);
                 let f_index = *self
                     .sentinel_functions
@@ -455,14 +458,15 @@ where
             let abstract_index = mapping.term_to_integer(term);
             if function_terms_set.contains(&abstract_index) {
                 let relative_index = abstract_index - start_index;
-                if let TermType::Function(offset) = types[relative_index as usize] {
+                let term_type = types[relative_index as usize];
+                if matches!(term_type, TermType::Function(_, _)) {
                     if sentinel_info_and_function_node.is_some() {
                         panic!("Multiple function terms found");
                     }
                     sentinel_info_and_function_node = Some((
                         TemplateSentinelInfo {
                             pointer_node: mapping.term_to_integer(node),
-                            offset,
+                            term_type,
                         },
                         relative_index,
                     ));
@@ -543,7 +547,7 @@ where
         {
             let sentinel_index = sols.len() as IntegerTerm;
             sols.push(S::new());
-            term_types.push(TermType::Function(sentinel_info.offset));
+            term_types.push(sentinel_info.term_type);
             sols[sentinel_info.pointer_node as usize].insert(sentinel_index);
             subset.push(HashMap::new());
             rev_subset.push(HashSet::new());

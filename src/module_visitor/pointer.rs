@@ -71,6 +71,7 @@ pub enum PointerInstruction<'a> {
     Call {
         dest: Option<VarIdent<'a>>,
         function: VarIdent<'a>,
+        func_type_id: u32,
         arguments: Vec<Option<VarIdent<'a>>>,
         return_struct_type: Option<Rc<StructType>>,
     },
@@ -91,8 +92,12 @@ impl<'a> PointerContext<'a> {
     }
 }
 
+type FunctionType<'a> = (TypeRef, Box<[TypeRef]>);
+
 pub struct PointerModuleVisitor<'a, 'b, O> {
     original_ptr_types: HashMap<Option<&'a str>, HashMap<VarIdent<'a>, Rc<StructType>>>,
+    func_type_indices: HashMap<FunctionType<'a>, u32>,
+    func_type_counter: u32,
     std_functions: HashSet<&'a str>,
     fresh_counter: usize,
     observer: &'b mut O,
@@ -105,6 +110,8 @@ where
     pub fn new(observer: &'b mut O) -> Self {
         Self {
             original_ptr_types: HashMap::new(),
+            func_type_indices: HashMap::new(),
+            func_type_counter: 0,
             std_functions: STD_FUNCTIONS.clone(),
             fresh_counter: 0,
             observer,
@@ -429,6 +436,16 @@ where
         self.observer.handle_ptr_instruction(instr, pointer_context);
     }
 
+    fn get_func_type_index(&mut self, func_type: FunctionType) -> u32 {
+        if let Some(&index) = self.func_type_indices.get(&func_type) {
+            return index;
+        }
+        let counter = self.func_type_counter;
+        self.func_type_counter += 1;
+        self.func_type_indices.insert(func_type, counter);
+        counter
+    }
+
     fn handle_call(
         &mut self,
         function: &'a Either<InlineAssembly, Operand>,
@@ -442,7 +459,7 @@ where
         let pointer_context = PointerContext::from_context(context);
 
         // TODO: Filter out irrelevant function calls
-        let (function, ty, _) = match function {
+        let (function_ident, ty, _) = match function {
             Either::Right(op) => self
                 .get_operand_ident_type(op, context)
                 .expect("Functions should always be relevant"),
@@ -465,7 +482,7 @@ where
             .as_ref()
         {
             Type::FuncType { result_type, .. } => strip_array_types(result_type.clone()).0,
-            _ => panic!("Unexpected type {ty} of function {function}"),
+            _ => panic!("Unexpected type {ty} of function {function_ident}"),
         };
         let return_struct_type = StructType::try_from_type(result_ty.clone(), context.structs);
 
@@ -483,7 +500,7 @@ where
             })
             .collect();
 
-        if let VarIdent::Global { name } = &function {
+        if let VarIdent::Global { name } = &function_ident {
             if self.std_functions.contains(&**name) {
                 self.handle_std_function(
                     &**name,
@@ -506,9 +523,12 @@ where
             }
         }
 
+        let func_type_index = self.get_func_type_index(get_func_type(function));
+
         let instr = PointerInstruction::Call {
             dest,
-            function,
+            function: function_ident,
+            func_type_id: func_type_index,
             arguments: argument_idents,
             return_struct_type,
         };
@@ -766,13 +786,22 @@ where
         let ident = VarIdent::Global {
             name: Cow::Owned(String::from(name)),
         };
-        let parameters = parameters
+        let parameter_idents = parameters
             .iter()
             .map(|p| VarIdent::new_local(&p.name, name))
             .collect();
-        let return_struct_type = StructType::try_from_type(return_type, context.structs);
-        self.observer
-            .handle_ptr_function(name, ident, parameters, return_struct_type);
+        let return_struct_type = StructType::try_from_type(return_type.clone(), context.structs);
+        let func_type_index = self.get_func_type_index((
+            return_type,
+            parameters.iter().map(|p| p.ty.clone()).collect(),
+        ));
+        self.observer.handle_ptr_function(
+            name,
+            ident,
+            func_type_index,
+            parameter_idents,
+            return_struct_type,
+        );
     }
 }
 
@@ -1132,12 +1161,43 @@ where
     }
 }
 
+fn get_func_type<'a>(function: &'a Either<InlineAssembly, Operand>) -> FunctionType {
+    let t = match function {
+        Either::Left(asm) => asm.ty.clone(),
+        Either::Right(op) => match op {
+            Operand::LocalOperand { ty, .. } => strip_pointer_type(ty.clone())
+                .or_else(|| panic!("Got non-pointer type {ty}"))
+                .unwrap(),
+            Operand::ConstantOperand(constant) => match constant.as_ref() {
+                Constant::GlobalReference { ty, .. } => ty.clone(),
+                Constant::BitCast(llvm_ir::constant::BitCast { to_type, .. }) => {
+                    strip_pointer_type(to_type.clone())
+                        .or_else(|| panic!("Got non-pointer type {to_type}"))
+                        .unwrap()
+                }
+                _ => panic!("Cannot get function type of non-global-reference constant {constant}"),
+            },
+            Operand::MetadataOperand => unreachable!(),
+        },
+    };
+    if let Type::FuncType {
+        result_type,
+        param_types,
+        ..
+    } = t.clone().as_ref()
+    {
+        return (result_type.clone(), param_types.iter().cloned().collect());
+    }
+    panic!("Tried to get func_type of a non-function-pointer {function:?}");
+}
+
 pub trait PointerModuleObserver<'a> {
     fn init(&mut self, structs: &StructMap);
     fn handle_ptr_function(
         &mut self,
         fun_name: &'a str,
         name: VarIdent<'a>,
+        type_index: u32,
         parameters: Vec<VarIdent<'a>>,
         return_struct_type: Option<Rc<StructType>>,
     );

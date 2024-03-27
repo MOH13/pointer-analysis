@@ -370,6 +370,7 @@ impl<'a> PointerModuleObserver<'a> for PointsToPreAnalyzer<'a> {
         &mut self,
         fun_name: &'a str,
         ident: VarIdent<'a>,
+        type_index: u32,
         parameters: Vec<VarIdent<'a>>,
         return_struct_type: Option<Rc<StructType>>,
     ) {
@@ -390,7 +391,7 @@ impl<'a> PointerModuleObserver<'a> for PointsToPreAnalyzer<'a> {
         let first_cell = Cell::Return(first_ident(ident.clone(), return_struct_type.as_deref()));
         function_state
             .term_types
-            .push((first_cell, TermType::Function(offset)));
+            .push((first_cell, TermType::Function(offset, type_index)));
 
         let global_state = self.functions.entry(None).or_default();
 
@@ -549,6 +550,7 @@ impl<'a> PointerModuleObserver<'a> for ConstraintGenerator<'a> {
         &mut self,
         fun_name: &'a str,
         ident: VarIdent<'a>,
+        _type_index: u32,
         _parameters: Vec<VarIdent<'a>>,
         return_struct_type: Option<Rc<StructType>>,
     ) {
@@ -747,20 +749,22 @@ impl<'a> PointerModuleObserver<'a> for ConstraintGenerator<'a> {
             PointerInstruction::Call {
                 dest,
                 function,
+                func_type_id,
                 arguments,
                 return_struct_type,
             } => {
                 let function_cell = Cell::Var(function.clone());
-                let call_site = if let Some(dest) = dest.clone() {
-                    CallSite(dest.to_string().into())
+                let call_site_desc = if let Some(dest) = dest.clone() {
+                    dest.to_string()
                 } else {
                     let fun_name = context.fun_name.expect("no calls outside functions");
                     let counter = self.call_site_counter;
                     self.call_site_counter += 1;
                     let function_string = function.to_string();
                     let function_str = function_string.split("@").next().unwrap();
-                    CallSite(format!("{fun_name} called {function_str}#{}", counter).into())
+                    format!("{fun_name} called {function_str}#{}", counter)
                 };
+                let call_site = CallSite::new(call_site_desc, func_type_id);
                 function_constraints.push(Constraint::CallDummy {
                     cond_node: function_cell.clone(),
                     call_site: call_site.clone(),

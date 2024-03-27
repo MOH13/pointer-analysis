@@ -384,23 +384,47 @@ pub trait ContextSelector {
     fn empty(&self) -> Self::Context;
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ContextInsensitiveContext;
+
+impl Display for ContextInsensitiveContext {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "()")
+    }
+}
+
 #[derive(Clone)]
 pub struct ContextInsensitiveSelector;
 
 impl ContextSelector for ContextInsensitiveSelector {
-    type Context = ();
+    type Context = ContextInsensitiveContext;
 
     fn select_context(&self, _: &Self::Context, _: CallSite) -> Self::Context {
-        ()
+        ContextInsensitiveContext
     }
 
     fn empty(&self) -> Self::Context {
-        ()
+        ContextInsensitiveContext
     }
 }
 
+#[derive(PartialEq, Eq, Clone, Debug)]
+pub struct CallSiteInner {
+    pub desc: String,
+    pub func_type_index: u32,
+}
+
 #[derive(Clone, Eq, Debug)]
-pub struct CallSite(pub Rc<str>);
+pub struct CallSite(pub Rc<CallSiteInner>);
+
+impl CallSite {
+    pub fn new(desc: String, func_type: u32) -> Self {
+        CallSite(Rc::new(CallSiteInner {
+            desc,
+            func_type_index: func_type,
+        }))
+    }
+}
 
 impl PartialEq for CallSite {
     fn eq(&self, other: &Self) -> bool {
@@ -410,13 +434,13 @@ impl PartialEq for CallSite {
 
 impl Hash for CallSite {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        ptr::hash(self.0.as_ptr(), state);
+        ptr::hash(Rc::as_ptr(&self.0), state);
     }
 }
 
 impl Display for CallSite {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "{}", &self.0)
+        write!(f, "{}", &self.0.desc)
     }
 }
 
@@ -472,14 +496,14 @@ pub trait SolverSolution {
 pub enum TermType {
     Basic,
     Struct(usize),
-    Function(usize),
+    Function(usize, u32),
 }
 
 impl TermType {
     pub fn into_offset(self) -> usize {
         match self {
             TermType::Basic => 0,
-            TermType::Struct(offset) | TermType::Function(offset) => offset,
+            TermType::Struct(offset) | TermType::Function(offset, _) => offset,
         }
     }
 
@@ -831,7 +855,8 @@ fn offset_term_vec_offsets(
         TermType::Struct(allowed) if !is_function => {
             (offset <= allowed).then(|| term + u32::try_from(offset).unwrap())
         }
-        TermType::Function(allowed) if is_function => {
+        // TODO: Filter on function type
+        TermType::Function(allowed, _) if is_function => {
             (offset <= allowed).then(|| term + u32::try_from(offset).unwrap())
         }
         _ => None,
