@@ -306,7 +306,7 @@ where
 }
 
 pub struct Justifier<T> {
-    solution: GenericSolverSolution<BasicSolver<IntegerTerm, SharedBitVec>, T>,
+    solution: GenericSolverSolution<BasicSolver<IntegerTerm, HashSet<IntegerTerm>>, T>,
     rev_edges: Vec<HashMap<IntegerTerm, Offsets>>,
     constraints: HashSet<Constraint<IntegerTerm>>,
     loads: HashMap<IntegerTerm, Vec<(IntegerTerm, usize, Option<CallSite>)>>,
@@ -365,7 +365,7 @@ where
                         .unwrap_or(&0);
                     if visited.contains(&(*from, from_t))
                         || allowed < w as usize
-                        || !self.solution.sub_solution.sols[*from as usize].contains(from_t)
+                        || !self.solution.sub_solution.sols[*from as usize].contains(&from_t)
                     {
                         continue;
                     }
@@ -459,7 +459,7 @@ where
                     .get(&pred)
                     .unwrap_or(&0)
                     < *offset
-                    || !self.solution.sub_solution.sols[*cond_node as usize].contains(pred)
+                    || !self.solution.sub_solution.sols[*cond_node as usize].contains(&pred)
                 {
                     continue;
                 }
@@ -509,7 +509,7 @@ where
                     .get(&pred)
                     .unwrap_or(&0)
                     < *offset
-                    || !self.solution.sub_solution.sols[*cond_node as usize].contains(pred)
+                    || !self.solution.sub_solution.sols[*cond_node as usize].contains(&pred)
                 {
                     continue;
                 }
