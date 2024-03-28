@@ -95,6 +95,8 @@ pub struct PointerModuleVisitor<'a, 'b, O> {
     original_ptr_types: HashMap<Option<&'a str>, HashMap<VarIdent<'a>, Rc<StructType>>>,
     std_functions: HashSet<&'a str>,
     fresh_counter: usize,
+    malloc_wrappers: &'b HashSet<String>,
+    realloc_wrappers: &'b HashSet<String>,
     observer: &'b mut O,
 }
 
@@ -102,11 +104,17 @@ impl<'a, 'b, O> PointerModuleVisitor<'a, 'b, O>
 where
     O: PointerModuleObserver<'a>,
 {
-    pub fn new(observer: &'b mut O) -> Self {
+    pub fn new(
+        observer: &'b mut O,
+        malloc_wrappers: &'b HashSet<String>,
+        realloc_wrappers: &'b HashSet<String>,
+    ) -> Self {
         Self {
             original_ptr_types: HashMap::new(),
             std_functions: STD_FUNCTIONS.clone(),
             fresh_counter: 0,
+            malloc_wrappers,
+            realloc_wrappers,
             observer,
         }
     }
@@ -503,6 +511,18 @@ where
                 }
 
                 return;
+            } else if self.malloc_wrappers.contains(&**name) {
+                self.handle_malloc(dest, false, pointer_context);
+                return;
+            } else if self.realloc_wrappers.contains(&**name) {
+                let arg = argument_idents
+                    .get(0)
+                    .cloned()
+                    .expect("Expected at least 1 argument to realloc wrapper")
+                    .expect("Expected a VarIdent for the first argument of realloc wrapper");
+                let dest = dest.expect("Expected a destination for realloc wrapper");
+                self.handle_assign(dest, arg, return_struct_type, pointer_context);
+                return;
             }
         }
 
@@ -554,42 +574,20 @@ where
                 };
             }
 
-            // TODO: What if someone defines their own function called malloc?
-            //       Maybe look at function signature?
-            "malloc" | "calloc" => {
-                let instr = PointerInstruction::Malloc {
-                    dest: dest.expect("malloc should have a destination"),
-                    single: false,
-                };
-                self.observer.handle_ptr_instruction(instr, pointer_context);
-            }
+            "malloc" | "calloc" => self.handle_malloc(dest, false, pointer_context),
 
-            "strdup" | "strndup" => {
-                let instr = PointerInstruction::Malloc {
-                    dest: dest.expect("malloc should have a destination"),
-                    single: true,
-                };
-                self.observer.handle_ptr_instruction(instr, pointer_context);
-            }
+            "strdup" | "strndup" => self.handle_malloc(dest, true, pointer_context),
 
             "llvm.memmove.p0i8.p0i8.i64" | "realloc" | "memchr" => {
-                if let Some(dest) = dest {
-                    let src = argument_idents
-                        .get(0)
-                        .cloned()
-                        .expect(&format!("Expected at least 1 argument to {function}"))
-                        .expect(&format!(
-                            "Expected a VarIdent for the first argument of {function}"
-                        ));
-
-                    warn!("Potentially unsound handling of function '{function}'");
-                    let instr = PointerInstruction::Assign {
-                        dest: dest,
-                        value: src,
-                        struct_type: dest_struct_type,
-                    };
-                    self.observer.handle_ptr_instruction(instr, pointer_context);
-                }
+                let src = argument_idents
+                    .get(0)
+                    .cloned()
+                    .expect(&format!("Expected at least 1 argument to {function}"))
+                    .expect(&format!(
+                        "Expected a VarIdent for the first argument of {function}"
+                    ));
+                let dest = dest.expect(&format!("Expected a destination for {function}"));
+                self.handle_assign(dest, src, dest_struct_type, pointer_context);
             }
 
             "free" | "strlen" | "strchr" | "strtol" | "strtoul" | "strcmp" | "strcasecmp"
@@ -607,6 +605,19 @@ where
                 panic!("Missing std function handling for '{function}'");
             }
         }
+    }
+
+    fn handle_malloc(
+        &mut self,
+        dest: Option<VarIdent<'a>>,
+        single: bool,
+        context: PointerContext<'a>,
+    ) {
+        let instr = PointerInstruction::Malloc {
+            dest: dest.expect("malloc should have a destination"),
+            single,
+        };
+        self.observer.handle_ptr_instruction(instr, context);
     }
 
     fn handle_join(

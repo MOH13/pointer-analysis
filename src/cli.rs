@@ -36,6 +36,12 @@ pub struct Args {
     /// Visualize constraint graph after solving (creates a Graphviz DOT file at given path)
     #[arg(short = 'v', long)]
     pub visualize: Option<String>,
+    /// List of functions to treat as malloc
+    #[arg(short, long)]
+    pub malloc_wrappers: Vec<String>,
+    /// List of functions to treat as realloc
+    #[arg(short, long)]
+    pub realloc_wrappers: Vec<String>,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]

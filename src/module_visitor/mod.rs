@@ -167,13 +167,6 @@ impl<'a> FromStr for VarIdent<'a> {
     }
 }
 
-pub enum OwnedVarIdent {
-    Local { reg_name: Name, fun_name: String },
-    Global { name: String },
-    Fresh { index: usize },
-    Offset { base: Rc<Self>, offset: usize },
-}
-
 fn strip_array_types(ty: TypeRef) -> (TypeRef, usize) {
     match ty.as_ref() {
         Type::ArrayType { element_type, .. } | Type::VectorType { element_type, .. } => {

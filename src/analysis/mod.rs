@@ -24,6 +24,12 @@ use crate::visualizer::{visualize, Graph};
 #[cfg(test)]
 mod tests;
 
+#[derive(Default)]
+pub struct Config {
+    pub malloc_wrappers: HashSet<String>,
+    pub realloc_wrappers: HashSet<String>,
+}
+
 pub struct PointsToAnalysis;
 
 impl PointsToAnalysis {
@@ -31,12 +37,18 @@ impl PointsToAnalysis {
         solver: S,
         module: &'a Module,
         context_selector: C,
+        config: Config,
     ) -> (S::Solution, Vec<Cell<'a>>)
     where
         S: Solver<ContextSensitiveInput<Cell<'a>, C>> + 'a,
     {
         let mut pre_analyzer = PointsToPreAnalyzer::new();
-        PointerModuleVisitor::new(&mut pre_analyzer).visit_module(module);
+        PointerModuleVisitor::new(
+            &mut pre_analyzer,
+            &config.malloc_wrappers,
+            &config.realloc_wrappers,
+        )
+        .visit_module(module);
         let cells_copy = pre_analyzer
             .functions
             .iter()
@@ -44,7 +56,12 @@ impl PointsToAnalysis {
             .collect();
 
         let mut constraint_generator = ConstraintGenerator::new();
-        PointerModuleVisitor::new(&mut constraint_generator).visit_module(module);
+        PointerModuleVisitor::new(
+            &mut constraint_generator,
+            &config.malloc_wrappers,
+            &config.realloc_wrappers,
+        )
+        .visit_module(module);
 
         let pre_analysis_global = mem::take(pre_analyzer.functions.get_mut(&None).unwrap());
         let global_constraints = constraint_generator
@@ -97,11 +114,12 @@ impl PointsToAnalysis {
         solver: S,
         module: &'a Module,
         context_selector: C,
+        config: Config,
     ) -> PointsToResult<'a, S::Solution>
     where
         S: Solver<ContextSensitiveInput<Cell<'a>, C>> + 'a,
     {
-        let (solution, cells) = Self::solve_module(solver, module, context_selector);
+        let (solution, cells) = Self::solve_module(solver, module, context_selector, config);
 
         PointsToResult(solution, cells)
     }
@@ -110,13 +128,14 @@ impl PointsToAnalysis {
         solver: S,
         module: &'a Module,
         context_selector: C,
+        config: Config,
         dot_output_path: &str,
     ) -> PointsToResult<'a, S::Solution>
     where
         S: Solver<ContextSensitiveInput<Cell<'a>, C>> + 'a,
         S::Solution: Graph,
     {
-        let (solution, cells) = Self::solve_module(solver, module, context_selector);
+        let (solution, cells) = Self::solve_module(solver, module, context_selector, config);
         if let Err(e) = visualize(&solution, dot_output_path) {
             error!("Error visualizing graph: {e}");
         }

@@ -2,7 +2,7 @@ mod macros;
 
 use clap::Parser;
 use llvm_ir::Module;
-use pointer_analysis::analysis::{Cell, PointsToAnalysis, PointsToResult};
+use pointer_analysis::analysis::{Cell, Config, PointsToAnalysis, PointsToResult};
 use pointer_analysis::cli::{Args, SolverMode, TermSet};
 use pointer_analysis::solver::{
     BasicBetterBitVecSolver, BasicSharedBitVecSolver, CallStringSelector, ContextInsensitiveSolver,
@@ -74,17 +74,25 @@ fn main() -> io::Result<()> {
     let file_path = args.file_path.clone();
     let module = Module::from_bc_path(&file_path).expect("Error parsing bc file");
 
-    let context_selector = CallStringSelector::<1>;
+    let context_selector = CallStringSelector::<2>;
+    let config = Config {
+        malloc_wrappers: args.malloc_wrappers.iter().cloned().collect(),
+        realloc_wrappers: args.realloc_wrappers.iter().cloned().collect(),
+    };
 
     match (args.solver, args.termset, args.visualize.clone()) {
         // Basic solver
         (SolverMode::Basic, TermSet::Hash, visualize) => {
             let solver = BasicHashSolver::new().as_context_sensitive().as_generic();
             let result = match visualize {
-                Some(path) => {
-                    PointsToAnalysis::run_and_visualize(solver, &module, context_selector, &path)
-                }
-                None => PointsToAnalysis::run(solver, &module, context_selector),
+                Some(path) => PointsToAnalysis::run_and_visualize(
+                    solver,
+                    &module,
+                    context_selector,
+                    config,
+                    &path,
+                ),
+                None => PointsToAnalysis::run(solver, &module, context_selector, config),
             };
             show_output(result, &args);
         }
@@ -93,10 +101,14 @@ fn main() -> io::Result<()> {
                 .as_context_sensitive()
                 .as_generic();
             let result = match visualize {
-                Some(path) => {
-                    PointsToAnalysis::run_and_visualize(solver, &module, context_selector, &path)
-                }
-                None => PointsToAnalysis::run(solver, &module, context_selector),
+                Some(path) => PointsToAnalysis::run_and_visualize(
+                    solver,
+                    &module,
+                    context_selector,
+                    config,
+                    &path,
+                ),
+                None => PointsToAnalysis::run(solver, &module, context_selector, config),
             };
             show_output(result, &args);
         }
@@ -105,10 +117,14 @@ fn main() -> io::Result<()> {
                 .as_context_sensitive()
                 .as_generic();
             let result = match visualize {
-                Some(path) => {
-                    PointsToAnalysis::run_and_visualize(solver, &module, context_selector, &path)
-                }
-                None => PointsToAnalysis::run(solver, &module, context_selector),
+                Some(path) => PointsToAnalysis::run_and_visualize(
+                    solver,
+                    &module,
+                    context_selector,
+                    config,
+                    &path,
+                ),
+                None => PointsToAnalysis::run(solver, &module, context_selector, config),
             };
             show_output(result, &args);
         }
@@ -117,10 +133,14 @@ fn main() -> io::Result<()> {
                 .as_context_sensitive()
                 .as_generic();
             let result = match visualize {
-                Some(path) => {
-                    PointsToAnalysis::run_and_visualize(solver, &module, context_selector, &path)
-                }
-                None => PointsToAnalysis::run(solver, &module, context_selector),
+                Some(path) => PointsToAnalysis::run_and_visualize(
+                    solver,
+                    &module,
+                    context_selector,
+                    config,
+                    &path,
+                ),
+                None => PointsToAnalysis::run(solver, &module, context_selector, config),
             };
             show_output(result, &args);
         }
@@ -131,10 +151,14 @@ fn main() -> io::Result<()> {
                 .as_context_sensitive()
                 .as_generic();
             let result = match visualize {
-                Some(path) => {
-                    PointsToAnalysis::run_and_visualize(solver, &module, context_selector, &path)
-                }
-                None => PointsToAnalysis::run(solver, &module, context_selector),
+                Some(path) => PointsToAnalysis::run_and_visualize(
+                    solver,
+                    &module,
+                    context_selector,
+                    config,
+                    &path,
+                ),
+                None => PointsToAnalysis::run(solver, &module, context_selector, config),
             };
             show_output(result, &args);
         }
@@ -143,10 +167,14 @@ fn main() -> io::Result<()> {
                 .as_context_sensitive()
                 .as_generic();
             let result = match visualize {
-                Some(path) => {
-                    PointsToAnalysis::run_and_visualize(solver, &module, context_selector, &path)
-                }
-                None => PointsToAnalysis::run(solver, &module, context_selector),
+                Some(path) => PointsToAnalysis::run_and_visualize(
+                    solver,
+                    &module,
+                    context_selector,
+                    config,
+                    &path,
+                ),
+                None => PointsToAnalysis::run(solver, &module, context_selector, config),
             };
             show_output(result, &args);
         }
@@ -155,10 +183,14 @@ fn main() -> io::Result<()> {
                 .as_context_sensitive()
                 .as_generic();
             let result = match visualize {
-                Some(path) => {
-                    PointsToAnalysis::run_and_visualize(solver, &module, context_selector, &path)
-                }
-                None => PointsToAnalysis::run(solver, &module, context_selector),
+                Some(path) => PointsToAnalysis::run_and_visualize(
+                    solver,
+                    &module,
+                    context_selector,
+                    config,
+                    &path,
+                ),
+                None => PointsToAnalysis::run(solver, &module, context_selector, config),
             };
             show_output(result, &args);
         }
@@ -167,36 +199,48 @@ fn main() -> io::Result<()> {
                 .as_context_sensitive()
                 .as_generic();
             let result = match visualize {
-                Some(path) => {
-                    PointsToAnalysis::run_and_visualize(solver, &module, context_selector, &path)
-                }
-                None => PointsToAnalysis::run(solver, &module, context_selector),
+                Some(path) => PointsToAnalysis::run_and_visualize(
+                    solver,
+                    &module,
+                    context_selector,
+                    config,
+                    &path,
+                ),
+                None => PointsToAnalysis::run(solver, &module, context_selector, config),
             };
             show_output(result, &args);
         }
         (SolverMode::Context, _, visualize) => {
             let solver = SharedBitVecContextWavePropagationSolver::new();
             let result = match visualize {
-                Some(path) => {
-                    PointsToAnalysis::run_and_visualize(solver, &module, context_selector, &path)
-                }
-                None => PointsToAnalysis::run(solver, &module, context_selector),
+                Some(path) => PointsToAnalysis::run_and_visualize(
+                    solver,
+                    &module,
+                    context_selector,
+                    config,
+                    &path,
+                ),
+                None => PointsToAnalysis::run(solver, &module, context_selector, config),
             };
             show_output(result, &args);
         }
         (SolverMode::DryRun, _, visualize) => {
             let solver = StatSolver::new().as_context_sensitive();
             let result = match visualize {
-                Some(path) => {
-                    PointsToAnalysis::run_and_visualize(solver, &module, context_selector, &path)
-                }
-                None => PointsToAnalysis::run(solver, &module, context_selector),
+                Some(path) => PointsToAnalysis::run_and_visualize(
+                    solver,
+                    &module,
+                    context_selector,
+                    config,
+                    &path,
+                ),
+                None => PointsToAnalysis::run(solver, &module, context_selector, config),
             };
             show_output(result, &args);
         }
         (SolverMode::Justify, ..) => {
             let solver = JustificationSolver::new().as_context_sensitive();
-            let justifier = PointsToAnalysis::run(solver, &module, context_selector).0;
+            let justifier = PointsToAnalysis::run(solver, &module, context_selector, config).0;
             loop {
                 let mut input = String::new();
                 print!("Enter node to justify: ");
