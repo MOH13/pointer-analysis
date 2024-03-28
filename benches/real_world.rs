@@ -1,5 +1,5 @@
 use llvm_ir::Module;
-use pointer_analysis::analysis::PointsToAnalysis;
+use pointer_analysis::analysis::{Config, PointsToAnalysis};
 use pointer_analysis::solver::{
     BasicBetterBitVecSolver, BasicHashSolver, BasicRoaringSolver, BasicSharedBitVecSolver,
     BetterBitVecWavePropagationSolver, CallStringSelector, ContextInsensitiveSelector,
@@ -34,6 +34,7 @@ where
                     solver.clone(),
                     &module,
                     context_selector.clone(),
+                    Config::default(),
                 ))
             });
         });

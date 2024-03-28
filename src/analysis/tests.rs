@@ -10,13 +10,13 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use test_generator::test_resources;
 
-use crate::analysis::PointsToAnalysis;
+use crate::analysis::{Config, PointsToAnalysis};
 use crate::solver::{
     BasicBetterBitVecSolver, BasicHashSolver, BasicRoaringSolver, BasicSharedBitVecSolver,
-    BetterBitVecWavePropagationSolver, CallStringSelector, ContextInsensitiveSelector,
-    ContextInsensitiveSolver, ContextSensitiveInput, GenericSolver, HashWavePropagationSolver,
-    RoaringWavePropagationSolver, SharedBitVecContextWavePropagationSolver,
-    SharedBitVecWavePropagationSolver, Solver, SolverSolution, TermSetTrait, WithFlatContext,
+    BetterBitVecWavePropagationSolver, CallStringSelector, ContextInsensitiveSolver,
+    ContextSensitiveInput, GenericSolver, HashWavePropagationSolver, RoaringWavePropagationSolver,
+    SharedBitVecContextWavePropagationSolver, SharedBitVecWavePropagationSolver, Solver,
+    SolverSolution, TermSetTrait,
 };
 
 use super::Cell;
@@ -117,7 +117,7 @@ where
 
     dbg!(&expected_points_to);
 
-    let result = PointsToAnalysis::run(solver, &module, CallStringSelector::<2>);
+    let result = PointsToAnalysis::run(solver, &module, CallStringSelector::<2>, Config::default());
 
     let actual_points_to: HashMap<Cell, HashSet<Cell>> = result
         .get_all_entries()

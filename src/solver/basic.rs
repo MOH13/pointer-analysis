@@ -291,7 +291,7 @@ where
             for (&to, weights) in outgoing {
                 rev_edges[to as usize]
                     .entry(from as IntegerTerm)
-                    .or_insert_with(SharedBitVec::new)
+                    .or_insert_with(HashSet::new)
                     .union_assign(weights);
             }
         }
@@ -306,8 +306,8 @@ where
 }
 
 pub struct Justifier<T> {
-    solution: GenericSolverSolution<BasicSolver<IntegerTerm, SharedBitVec>, T>,
-    rev_edges: Vec<HashMap<IntegerTerm, SharedBitVec>>,
+    solution: GenericSolverSolution<BasicSolver<IntegerTerm, HashSet<IntegerTerm>>, T>,
+    rev_edges: Vec<HashMap<IntegerTerm, HashSet<IntegerTerm>>>,
     constraints: HashSet<Constraint<IntegerTerm>>,
     loads: HashMap<IntegerTerm, Vec<(IntegerTerm, usize, Option<CallSite>)>>,
     stores: HashMap<IntegerTerm, Vec<(IntegerTerm, usize, Option<CallSite>)>>,
@@ -353,7 +353,7 @@ where
             //         .collect::<Vec<_>>()
             // );
             for (from, weights) in &self.rev_edges[v as usize] {
-                for w in weights.iter() {
+                for &w in weights.iter() {
                     let Some(from_t) = t.checked_sub(w) else {
                         continue;
                     };
@@ -365,7 +365,7 @@ where
                         .unwrap_or(&0);
                     if visited.contains(&(*from, from_t))
                         || allowed < w as usize
-                        || !self.solution.sub_solution.sols[*from as usize].contains(from_t)
+                        || !self.solution.sub_solution.sols[*from as usize].contains(&from_t)
                     {
                         continue;
                     }
@@ -459,7 +459,7 @@ where
                     .get(&pred)
                     .unwrap_or(&0)
                     < *offset
-                    || !self.solution.sub_solution.sols[*cond_node as usize].contains(pred)
+                    || !self.solution.sub_solution.sols[*cond_node as usize].contains(&pred)
                 {
                     continue;
                 }
@@ -509,7 +509,7 @@ where
                     .get(&pred)
                     .unwrap_or(&0)
                     < *offset
-                    || !self.solution.sub_solution.sols[*cond_node as usize].contains(pred)
+                    || !self.solution.sub_solution.sols[*cond_node as usize].contains(&pred)
                 {
                     continue;
                 }
