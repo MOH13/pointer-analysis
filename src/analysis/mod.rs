@@ -40,7 +40,13 @@ impl PointsToAnalysis {
         let cells_copy = pre_analyzer
             .functions
             .iter()
-            .flat_map(|(_, content)| content.cells.clone())
+            .flat_map(|(_, content)| {
+                content
+                    .return_and_parameter_cells
+                    .iter()
+                    .chain(&content.cells)
+            })
+            .cloned()
             .collect();
 
         let mut constraint_generator = ConstraintGenerator::new();
@@ -53,7 +59,7 @@ impl PointsToAnalysis {
             .map(mem::take)
             .unwrap_or_default();
 
-        let entry = pre_analysis_global.combine_with_constraints(global_constraints);
+        let (_, entry) = pre_analysis_global.combine_with_constraints(global_constraints);
 
         let main_function_index = pre_analyzer
             .functions
@@ -72,9 +78,11 @@ impl PointsToAnalysis {
                     .get_mut(&Some(func))
                     .map(mem::take)
                     .unwrap_or_default();
-                let constrained_terms = state.combine_with_constraints(constraints);
+                let (return_and_parameter_terms, constrained_terms) =
+                    state.combine_with_constraints(constraints);
                 FunctionInput {
                     fun_name: func.into(),
+                    return_and_parameter_terms,
                     constrained_terms,
                 }
             })
@@ -102,6 +110,14 @@ impl PointsToAnalysis {
         S: Solver<ContextSensitiveInput<Cell<'a>, C>> + 'a,
     {
         let (solution, cells) = Self::solve_module(solver, module, context_selector);
+
+        let mut counts: Vec<_> = cells.iter().map(|c| solution.get(c).len()).collect();
+        let max = counts.iter().copied().max().unwrap_or(0);
+        let mean = counts.iter().sum::<usize>() as f64 / counts.len() as f64;
+        let median = counts.select_nth_unstable(cells.len() / 2).1;
+        println!("Max: {max}");
+        println!("Mean: {mean}");
+        println!("Median: {median}");
 
         PointsToResult(solution, cells)
     }
@@ -269,6 +285,7 @@ impl<'a> Debug for Cell<'a> {
 #[derive(Default)]
 struct PointsToPreAnalyzerFunctionState<'a> {
     dests_already_added: HashSet<VarIdent<'a>>,
+    return_and_parameter_cells: Vec<Cell<'a>>,
     cells: Vec<Cell<'a>>,
     term_types: Vec<(Cell<'a>, TermType)>,
 }
@@ -277,12 +294,15 @@ impl<'a> PointsToPreAnalyzerFunctionState<'a> {
     fn combine_with_constraints(
         self,
         constraints: Vec<Constraint<Cell<'a>>>,
-    ) -> ConstrainedTerms<Cell<'a>> {
-        ConstrainedTerms {
-            terms: self.cells,
-            term_types: self.term_types,
-            constraints: constraints,
-        }
+    ) -> (Vec<Cell<'a>>, ConstrainedTerms<Cell<'a>>) {
+        (
+            self.return_and_parameter_cells,
+            ConstrainedTerms {
+                terms: self.cells,
+                term_types: self.term_types,
+                constraints: constraints,
+            },
+        )
     }
 }
 
@@ -380,12 +400,14 @@ impl<'a> PointerModuleObserver<'a> for PointsToPreAnalyzer<'a> {
             ident.clone(),
             return_struct_type.as_deref(),
             Cell::Return,
-            &mut function_state.cells,
+            &mut function_state.return_and_parameter_cells,
         ) + parameters.len()
             - 1;
 
         for param in &parameters {
-            function_state.cells.push(Cell::Var(param.clone()));
+            function_state
+                .return_and_parameter_cells
+                .push(Cell::Var(param.clone()));
         }
 
         let first_cell = Cell::Return(first_ident(ident.clone(), return_struct_type.as_deref()));
@@ -777,6 +799,8 @@ impl<'a> PointerModuleObserver<'a> for ConstraintGenerator<'a> {
                 let call_site = CallSite::new(call_site_desc, func_type_id);
                 function_constraints.push(Constraint::CallDummy {
                     cond_node: function_cell.clone(),
+                    arguments: vec![],
+                    result_node: function_cell.clone(),
                     call_site: call_site.clone(),
                 });
                 for (i, arg) in arguments

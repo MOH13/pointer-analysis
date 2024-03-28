@@ -13,7 +13,7 @@ use roaring::RoaringBitmap;
 use super::shared_bitvec::SharedBitVec;
 use super::{
     edges_between, offset_term_vec_offsets, BetterBitVec, Constraint, ContextInsensitiveInput,
-    GenericSolverSolution, IntegerTerm, Solver, SolverSolution, TermSetTrait, TermType,
+    GenericSolverSolution, IntegerTerm, Offsets, Solver, SolverSolution, TermSetTrait, TermType,
 };
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
 
@@ -36,65 +36,13 @@ struct CondRightEntry {
 #[derive(Clone)]
 pub struct WavePropagationSolver<T> {
     sols: Vec<T>,
-    edges: Vec<HashMap<IntegerTerm, Edges>>,
+    edges: Vec<HashMap<IntegerTerm, Offsets>>,
     rev_edges: Vec<HashSet<IntegerTerm>>,
     left_conds: Vec<CondLeftEntry>,
     right_conds: Vec<CondRightEntry>,
     term_types: Vec<TermType>,
     parents: Vec<IntegerTerm>,
     top_order: Vec<IntegerTerm>,
-}
-
-#[derive(Clone, Default)]
-struct Edges {
-    zero: bool,
-    offsets: Vec<usize>,
-}
-
-impl Edges {
-    fn contains(&self, offset: usize) -> bool {
-        if offset == 0 {
-            return self.zero;
-        }
-        return self.offsets.contains(&offset);
-    }
-
-    fn insert(&mut self, offset: usize) -> bool {
-        if offset == 0 {
-            if !self.zero {
-                self.zero = true;
-                true
-            } else {
-                false
-            }
-        } else {
-            match self.offsets.binary_search(&offset) {
-                Ok(_) => false,
-                Err(i) => {
-                    self.offsets.insert(i, offset);
-                    true
-                }
-            }
-        }
-    }
-
-    fn union_assign(&mut self, other: &Self) {
-        self.zero = other.zero;
-        for offset in &other.offsets {
-            self.insert(*offset);
-        }
-    }
-
-    fn len(&self) -> usize {
-        self.zero as usize + self.offsets.len()
-    }
-
-    fn iter(&self) -> impl Iterator<Item = usize> + '_ {
-        self.zero
-            .then_some(0)
-            .into_iter()
-            .chain(self.offsets.iter().copied())
-    }
 }
 
 struct SCC<T> {
@@ -576,20 +524,14 @@ impl<T: TermSetTrait<Term = IntegerTerm>> Solver<ContextInsensitiveInput<Integer
 
         self.run_wave_propagation();
 
-        println!("Max: {}", self.sols.iter().map(|s| s.len()).max().unwrap());
-        println!(
-            "Mean: {}",
-            self.sols.iter().map(|s| s.len() as f64).sum::<f64>() / self.sols.len() as f64
-        );
-        println!(
-            "Median: {}",
-            self.sols
-                .iter()
-                .map(|s| s.len())
-                .collect::<Vec<usize>>()
-                .select_nth_unstable(self.sols.len() / 2)
-                .1
-        );
+        for i in 0..self.sols.len() {
+            let parent = self.parents[i];
+            if parent != i as u32 {
+                assert!(self.sols[i].len() == 0, "{i}, parent {parent}");
+                assert!(self.edges[i].len() == 0);
+                assert!(self.rev_edges[i].len() == 0);
+            }
+        }
 
         self
     }
@@ -608,7 +550,7 @@ impl<T: TermSetTrait<Term = IntegerTerm>> SolverSolution for WavePropagationSolv
 fn get_representative_no_mutation(parents: &Vec<IntegerTerm>, child: IntegerTerm) -> IntegerTerm {
     let mut node = child;
     loop {
-        let parent = parents[child as usize];
+        let parent = parents[node as usize];
         if parent == node {
             return node;
         }

@@ -33,6 +33,9 @@ pub struct Args {
     /// Don't print warnings
     #[arg(short = 'q', long, default_value_t = false)]
     pub quiet: bool,
+    /// Print information about term set sizes
+    #[arg(short = 'c', long, default_value_t = false)]
+    pub count_terms: bool,
     /// Visualize constraint graph after solving (creates a Graphviz DOT file at given path)
     #[arg(short = 'v', long)]
     pub visualize: Option<String>,

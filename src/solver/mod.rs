@@ -57,6 +57,8 @@ pub enum Constraint<T> {
     },
     CallDummy {
         cond_node: T,
+        arguments: Vec<T>,
+        result_node: T,
         call_site: CallSite,
     },
 }
@@ -104,9 +106,13 @@ impl<T> Constraint<T> {
             },
             Self::CallDummy {
                 cond_node,
+                arguments,
+                result_node,
                 call_site,
             } => Constraint::CallDummy {
                 cond_node: f(cond_node),
+                arguments: arguments.iter().map(&f).collect(),
+                result_node: f(result_node),
                 call_site: call_site.clone(),
             },
         }
@@ -363,11 +369,14 @@ pub trait SolverInput {
     type Term;
 }
 
+#[derive(Debug)]
 pub struct FunctionInput<T> {
     pub fun_name: Rc<str>,
+    pub return_and_parameter_terms: Vec<T>,
     pub constrained_terms: ConstrainedTerms<T>,
 }
 
+#[derive(Debug)]
 pub struct ContextSensitiveInput<T, C> {
     pub global: ConstrainedTerms<T>,
     pub functions: Vec<FunctionInput<T>>,
@@ -379,7 +388,7 @@ impl<T, C> SolverInput for ContextSensitiveInput<T, C> {
     type Term = T;
 }
 
-pub trait ContextSelector {
+pub trait ContextSelector: Debug {
     type Context: Clone + Debug + PartialEq + Eq + Hash;
     fn select_context(&self, current: &Self::Context, call_site: CallSite) -> Self::Context;
     fn empty(&self) -> Self::Context;
@@ -394,7 +403,7 @@ impl Display for ContextInsensitiveContext {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ContextInsensitiveSelector;
 
 impl ContextSelector for ContextInsensitiveSelector {
@@ -445,7 +454,7 @@ impl Display for CallSite {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CallStringSelector<const K: usize>;
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
@@ -562,8 +571,9 @@ where
     type Solution = S::Solution;
 
     fn solve(self, mut input: ContextSensitiveInput<T, C>) -> Self::Solution {
-        for t in input.functions.into_iter().map(|f| f.constrained_terms) {
-            input.global.combine(t);
+        for f in input.functions.into_iter() {
+            input.global.terms.extend(f.return_and_parameter_terms);
+            input.global.combine(f.constrained_terms);
         }
         self.0.solve(input.global)
     }
@@ -642,6 +652,7 @@ impl<S, T, C> Solver<ContextSensitiveInput<T, C>> for GenericSolver<S>
 where
     T: Hash + Eq + Clone + Debug,
     S: Solver<ContextSensitiveInput<IntegerTerm, C>>,
+    C: ContextSelector,
 {
     type Solution = GenericSolverSolution<S::Solution, T>;
 
@@ -650,12 +661,11 @@ where
             .global
             .terms
             .iter()
-            .chain(
-                input
-                    .functions
+            .chain(input.functions.iter().flat_map(|t| {
+                t.return_and_parameter_terms
                     .iter()
-                    .flat_map(|t| &t.constrained_terms.terms),
-            )
+                    .chain(&t.constrained_terms.terms)
+            }))
             .cloned()
             .collect();
         let mapping = GenericIdMap::new(terms);
@@ -767,11 +777,17 @@ where
             }
             Constraint::CallDummy {
                 cond_node,
+                arguments,
+                result_node,
                 call_site,
             } => {
                 let cond_node = self.term_to_integer(&cond_node);
+                let arguments = arguments.iter().map(|a| self.term_to_integer(a)).collect();
+                let result_node = self.term_to_integer(&result_node);
                 Constraint::CallDummy {
                     cond_node,
+                    arguments,
+                    result_node,
                     call_site: call_site.clone(),
                 }
             }
@@ -781,6 +797,11 @@ where
     fn translate_function(&self, function: &FunctionInput<T>) -> FunctionInput<IntegerTerm> {
         FunctionInput {
             fun_name: function.fun_name.clone(),
+            return_and_parameter_terms: function
+                .return_and_parameter_terms
+                .iter()
+                .map(|t| self.term_to_integer(t))
+                .collect(),
             constrained_terms: self.translate_constrained_terms(&function.constrained_terms),
         }
     }
@@ -890,5 +911,57 @@ fn offset_terms(
         terms
             .filter_map(|t| offset_term(t, allowed_offsets, offset))
             .collect()
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct Offsets {
+    zero: bool,
+    offsets: Vec<usize>,
+}
+
+impl Offsets {
+    pub fn contains(&self, offset: usize) -> bool {
+        if offset == 0 {
+            return self.zero;
+        }
+        return self.offsets.contains(&offset);
+    }
+
+    pub fn insert(&mut self, offset: usize) -> bool {
+        if offset == 0 {
+            if !self.zero {
+                self.zero = true;
+                true
+            } else {
+                false
+            }
+        } else {
+            match self.offsets.binary_search(&offset) {
+                Ok(_) => false,
+                Err(i) => {
+                    self.offsets.insert(i, offset);
+                    true
+                }
+            }
+        }
+    }
+
+    pub fn union_assign(&mut self, other: &Self) {
+        self.zero = other.zero;
+        for offset in &other.offsets {
+            self.insert(*offset);
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.zero as usize + self.offsets.len()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = usize> + '_ {
+        self.zero
+            .then_some(0)
+            .into_iter()
+            .chain(self.offsets.iter().copied())
     }
 }

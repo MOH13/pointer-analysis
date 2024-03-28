@@ -9,7 +9,7 @@ use roaring::RoaringBitmap;
 use super::shared_bitvec::SharedBitVec;
 use super::{
     edges_between, offset_term, offset_terms, BetterBitVec, CallSite, Constraint,
-    ContextInsensitiveInput, GenericSolverSolution, IntegerTerm, Solver, SolverSolution,
+    ContextInsensitiveInput, GenericSolverSolution, IntegerTerm, Offsets, Solver, SolverSolution,
     TermSetTrait, UnivCond,
 };
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
@@ -18,7 +18,7 @@ use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
 pub struct BasicSolver<T: Clone, U> {
     worklist: VecDeque<(T, T)>,
     sols: Vec<U>,
-    edges: Vec<HashMap<T, U>>,
+    edges: Vec<HashMap<T, Offsets>>,
     conds: Vec<Vec<UnivCond<T>>>,
     allowed_offsets: HashMap<T, usize>,
 }
@@ -71,7 +71,7 @@ impl<T: TermSetTrait<Term = IntegerTerm>> BasicSolver<IntegerTerm, T> {
 
     fn add_edge(&mut self, left: IntegerTerm, right: IntegerTerm, offset: usize) {
         let edges = edges_between(&mut self.edges, left, right);
-        if edges.insert(offset as IntegerTerm) {
+        if edges.insert(offset) {
             for t in offset_terms(
                 self.sols[left as usize].iter(),
                 &self.allowed_offsets,
@@ -201,7 +201,7 @@ where
                     let edge = Edge {
                         from: from.clone(),
                         to: to.clone(),
-                        weight: OffsetWeight(weight),
+                        weight: OffsetWeight(weight as u32),
                         kind: EdgeKind::Subset,
                     };
                     edges.push(edge);
@@ -286,12 +286,12 @@ where
                 _ => {}
             }
         }
-        let mut rev_edges = vec![HashMap::new(); input.terms.len()];
+        let mut rev_edges = vec![HashMap::<IntegerTerm, Offsets>::new(); input.terms.len()];
         for (from, outgoing) in solution.sub_solution.edges.iter().enumerate() {
             for (&to, weights) in outgoing {
                 rev_edges[to as usize]
                     .entry(from as IntegerTerm)
-                    .or_insert_with(SharedBitVec::new)
+                    .or_default()
                     .union_assign(weights);
             }
         }
@@ -307,7 +307,7 @@ where
 
 pub struct Justifier<T> {
     solution: GenericSolverSolution<BasicSolver<IntegerTerm, SharedBitVec>, T>,
-    rev_edges: Vec<HashMap<IntegerTerm, SharedBitVec>>,
+    rev_edges: Vec<HashMap<IntegerTerm, Offsets>>,
     constraints: HashSet<Constraint<IntegerTerm>>,
     loads: HashMap<IntegerTerm, Vec<(IntegerTerm, usize, Option<CallSite>)>>,
     stores: HashMap<IntegerTerm, Vec<(IntegerTerm, usize, Option<CallSite>)>>,
@@ -354,7 +354,7 @@ where
             // );
             for (from, weights) in &self.rev_edges[v as usize] {
                 for w in weights.iter() {
-                    let Some(from_t) = t.checked_sub(w) else {
+                    let Some(from_t) = t.checked_sub(w as u32) else {
                         continue;
                     };
                     let allowed = *self

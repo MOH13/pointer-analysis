@@ -13,7 +13,7 @@ use roaring::RoaringBitmap;
 use super::shared_bitvec::SharedBitVec;
 use super::{
     edges_between, BetterBitVec, CallSite, Constraint, ContextSelector, ContextSensitiveInput,
-    FunctionInput, IntegerTerm, Solver, SolverSolution, TermSetTrait, TermType,
+    FunctionInput, IntegerTerm, Offsets, Solver, SolverSolution, TermSetTrait, TermType,
 };
 use crate::solver::GenericIdMap;
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
@@ -60,7 +60,6 @@ struct FunctionTemplate {
     start_index: u32,
     types: Vec<TermType>,
     constraints: Vec<Constraint<TemplateTerm>>,
-    function_node_index: u32,
 }
 
 #[derive(Clone)]
@@ -266,9 +265,9 @@ where
                 let Some(call_site) = call_site else {
                     return None;
                 };
-                // if func_type != call_site.0.func_type_index {
-                //     return None;
-                // }
+                if func_type != call_site.0.func_type_index {
+                    return None;
+                }
                 let new_context = self.context_selector.select_context(context, call_site);
                 let f_index = *self
                     .sentinel_functions
@@ -285,7 +284,7 @@ where
     fn get_or_instantiate_function(&mut self, f_index: usize, context: C::Context) -> IntegerTerm {
         let template = &self.templates[f_index];
         if let Some(start_index) = self.instantiated_contexts[f_index].get(&context) {
-            return *start_index + template.function_node_index;
+            return *start_index;
         }
 
         let instantiated_start_index = self.term_count();
@@ -339,7 +338,7 @@ where
         self.instantiated_contexts[f_index]
             .insert(context, instantiated_start_index as IntegerTerm);
 
-        instantiated_start_index as IntegerTerm + template.function_node_index
+        instantiated_start_index as IntegerTerm
     }
 
     fn get_function_and_relative_index_from_term(
@@ -433,12 +432,14 @@ where
 {
     let FunctionInput {
         fun_name,
+        return_and_parameter_terms,
         constrained_terms,
     } = function;
 
-    let start_index = mapping.term_to_integer(&constrained_terms.terms[0]);
+    let start_index = mapping.term_to_integer(&return_and_parameter_terms[0]);
 
-    let mut types = vec![TermType::Basic; constrained_terms.terms.len()];
+    let mut types =
+        vec![TermType::Basic; return_and_parameter_terms.len() + constrained_terms.terms.len()];
 
     for (t, tt) in &constrained_terms.term_types {
         types[(mapping.term_to_integer(&t) - start_index) as usize] = *tt;
@@ -447,11 +448,12 @@ where
     let function_terms_set: HashSet<_> = constrained_terms
         .terms
         .iter()
+        .chain(return_and_parameter_terms)
         .map(|t| mapping.term_to_integer(t))
         .collect();
 
     let mut constraints = vec![];
-    let mut sentinel_info_and_function_node = None;
+    let mut sentinel_info = None;
 
     for c in &constrained_terms.constraints {
         if let Constraint::Inclusion { term, node } = &c {
@@ -460,16 +462,13 @@ where
                 let relative_index = abstract_index - start_index;
                 let term_type = types[relative_index as usize];
                 if matches!(term_type, TermType::Function(_, _)) {
-                    if sentinel_info_and_function_node.is_some() {
+                    if sentinel_info.is_some() {
                         panic!("Multiple function terms found");
                     }
-                    sentinel_info_and_function_node = Some((
-                        TemplateSentinelInfo {
-                            pointer_node: mapping.term_to_integer(node),
-                            term_type,
-                        },
-                        relative_index,
-                    ));
+                    sentinel_info = Some(TemplateSentinelInfo {
+                        pointer_node: mapping.term_to_integer(node),
+                        term_type,
+                    });
                     continue;
                 }
             }
@@ -484,8 +483,7 @@ where
         }));
     }
 
-    let (sentinel, function_node_index) =
-        sentinel_info_and_function_node.expect("No function term found");
+    let sentinel = sentinel_info.expect("No function term found");
 
     (
         FunctionTemplate {
@@ -493,7 +491,6 @@ where
             start_index,
             types,
             constraints,
-            function_node_index,
         },
         sentinel,
     )
@@ -512,12 +509,11 @@ where
             .global
             .terms
             .iter()
-            .chain(
-                input
-                    .functions
+            .chain(input.functions.iter().flat_map(|t| {
+                t.return_and_parameter_terms
                     .iter()
-                    .flat_map(|t| &t.constrained_terms.terms),
-            )
+                    .chain(&t.constrained_terms.terms)
+            }))
             .cloned()
             .collect();
         let mapping = GenericIdMap::new(terms);
@@ -551,8 +547,7 @@ where
             sols[sentinel_info.pointer_node as usize].insert(sentinel_index);
             subset.push(HashMap::new());
             rev_subset.push(HashSet::new());
-            abstract_indices
-                .push(template.start_index + template.function_node_index as IntegerTerm);
+            abstract_indices.push(template.start_index);
 
             templates.push(template);
             sentinel_functions.insert(sentinel_index, i as IntegerTerm);
@@ -605,27 +600,6 @@ where
         }
 
         state.run_wave_propagation();
-
-        println!(
-            "Max: {}",
-            state.edges.sols.iter().map(|s| s.len()).max().unwrap()
-        );
-        println!(
-            "Mean: {}",
-            state.edges.sols.iter().map(|s| s.len() as f64).sum::<f64>()
-                / state.term_count() as f64
-        );
-        println!(
-            "Median: {}",
-            state
-                .edges
-                .sols
-                .iter()
-                .map(|s| s.len())
-                .collect::<Vec<usize>>()
-                .select_nth_unstable(state.term_count() / 2)
-                .1
-        );
 
         state
     }
@@ -725,6 +699,8 @@ where
             }
             Constraint::CallDummy {
                 cond_node,
+                arguments,
+                result_node,
                 call_site,
             } => {
                 self.call_dummies.push(CallDummyEntry {
@@ -743,58 +719,6 @@ where
             self.rev_subset[right as usize].insert(left);
         }
         res
-    }
-}
-
-#[derive(Clone, Default)]
-struct Offsets {
-    zero: bool,
-    offsets: Vec<usize>,
-}
-
-impl Offsets {
-    fn contains(&self, offset: usize) -> bool {
-        if offset == 0 {
-            return self.zero;
-        }
-        return self.offsets.contains(&offset);
-    }
-
-    fn insert(&mut self, offset: usize) -> bool {
-        if offset == 0 {
-            if !self.zero {
-                self.zero = true;
-                true
-            } else {
-                false
-            }
-        } else {
-            match self.offsets.binary_search(&offset) {
-                Ok(_) => false,
-                Err(i) => {
-                    self.offsets.insert(i, offset);
-                    true
-                }
-            }
-        }
-    }
-
-    fn union_assign(&mut self, other: &Self) {
-        self.zero = other.zero;
-        for offset in &other.offsets {
-            self.insert(*offset);
-        }
-    }
-
-    fn len(&self) -> usize {
-        self.zero as usize + self.offsets.len()
-    }
-
-    fn iter(&self) -> impl Iterator<Item = usize> + '_ {
-        self.zero
-            .then_some(0)
-            .into_iter()
-            .chain(self.offsets.iter().copied())
     }
 }
 
@@ -1061,7 +985,7 @@ where
 fn get_representative_no_mutation(parents: &Vec<IntegerTerm>, child: IntegerTerm) -> IntegerTerm {
     let mut node = child;
     loop {
-        let parent = parents[child as usize];
+        let parent = parents[node as usize];
         if parent == node {
             return node;
         }

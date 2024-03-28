@@ -1,0 +1,8 @@
+{
+    "c_path": "global_argument1.c",
+    "points_to": {
+        "stack-%z@main": [
+            "global-%x"
+        ]
+    }
+}
