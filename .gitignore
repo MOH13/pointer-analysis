@@ -8,3 +8,5 @@ source.ll
 *.dot
 *.svg
 heaptrack.*
+perf.data
+perf.data.old
