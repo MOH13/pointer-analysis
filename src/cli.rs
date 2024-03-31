@@ -34,7 +34,7 @@ pub struct Args {
     #[arg(short = 'q', long, default_value_t = false)]
     pub quiet: bool,
     /// Print information about term set sizes
-    #[arg(short = 'c', long, default_value_t = false)]
+    #[arg(short = 'C', long, default_value_t = false)]
     pub count_terms: bool,
     /// Visualize constraint graph after solving (creates a Graphviz DOT file at given path)
     #[arg(short = 'v', long)]
@@ -45,6 +45,9 @@ pub struct Args {
     /// List of functions to treat as realloc
     #[arg(short, long)]
     pub realloc_wrappers: Vec<String>,
+    /// Set call string length when using context-sensitivity (range: 0 - 2)
+    #[arg(short = 'c', long, default_value_t = 1)]
+    pub call_string: usize,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]

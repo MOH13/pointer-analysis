@@ -74,10 +74,11 @@ fn main() -> io::Result<()> {
     let file_path = args.file_path.clone();
     let module = Module::from_bc_path(&file_path).expect("Error parsing bc file");
 
-    let context_selector = CallStringSelector::<2>;
+    let context_selector = CallStringSelector::<2>::with_call_string_length(args.call_string);
     let config = Config {
         malloc_wrappers: args.malloc_wrappers.iter().cloned().collect(),
         realloc_wrappers: args.realloc_wrappers.iter().cloned().collect(),
+        count_terms: args.count_terms,
     };
 
     match (args.solver, args.termset, args.visualize.clone()) {
@@ -89,10 +90,10 @@ fn main() -> io::Result<()> {
                     solver,
                     &module,
                     context_selector,
-                    config,
+                    &config,
                     &path,
                 ),
-                None => PointsToAnalysis::run(solver, &module, context_selector, config),
+                None => PointsToAnalysis::run(solver, &module, context_selector, &config),
             };
             show_output(result, &args);
         }
@@ -105,10 +106,10 @@ fn main() -> io::Result<()> {
                     solver,
                     &module,
                     context_selector,
-                    config,
+                    &config,
                     &path,
                 ),
-                None => PointsToAnalysis::run(solver, &module, context_selector, config),
+                None => PointsToAnalysis::run(solver, &module, context_selector, &config),
             };
             show_output(result, &args);
         }
@@ -121,10 +122,10 @@ fn main() -> io::Result<()> {
                     solver,
                     &module,
                     context_selector,
-                    config,
+                    &config,
                     &path,
                 ),
-                None => PointsToAnalysis::run(solver, &module, context_selector, config),
+                None => PointsToAnalysis::run(solver, &module, context_selector, &config),
             };
             show_output(result, &args);
         }
@@ -137,10 +138,10 @@ fn main() -> io::Result<()> {
                     solver,
                     &module,
                     context_selector,
-                    config,
+                    &config,
                     &path,
                 ),
-                None => PointsToAnalysis::run(solver, &module, context_selector, config),
+                None => PointsToAnalysis::run(solver, &module, context_selector, &config),
             };
             show_output(result, &args);
         }
@@ -155,10 +156,10 @@ fn main() -> io::Result<()> {
                     solver,
                     &module,
                     context_selector,
-                    config,
+                    &config,
                     &path,
                 ),
-                None => PointsToAnalysis::run(solver, &module, context_selector, config),
+                None => PointsToAnalysis::run(solver, &module, context_selector, &config),
             };
             show_output(result, &args);
         }
@@ -171,10 +172,10 @@ fn main() -> io::Result<()> {
                     solver,
                     &module,
                     context_selector,
-                    config,
+                    &config,
                     &path,
                 ),
-                None => PointsToAnalysis::run(solver, &module, context_selector, config),
+                None => PointsToAnalysis::run(solver, &module, context_selector, &config),
             };
             show_output(result, &args);
         }
@@ -187,10 +188,10 @@ fn main() -> io::Result<()> {
                     solver,
                     &module,
                     context_selector,
-                    config,
+                    &config,
                     &path,
                 ),
-                None => PointsToAnalysis::run(solver, &module, context_selector, config),
+                None => PointsToAnalysis::run(solver, &module, context_selector, &config),
             };
             show_output(result, &args);
         }
@@ -203,10 +204,10 @@ fn main() -> io::Result<()> {
                     solver,
                     &module,
                     context_selector,
-                    config,
+                    &config,
                     &path,
                 ),
-                None => PointsToAnalysis::run(solver, &module, context_selector, config),
+                None => PointsToAnalysis::run(solver, &module, context_selector, &config),
             };
             show_output(result, &args);
         }
@@ -217,10 +218,10 @@ fn main() -> io::Result<()> {
                     solver,
                     &module,
                     context_selector,
-                    config,
+                    &config,
                     &path,
                 ),
-                None => PointsToAnalysis::run(solver, &module, context_selector, config),
+                None => PointsToAnalysis::run(solver, &module, context_selector, &config),
             };
             show_output(result, &args);
         }
@@ -231,16 +232,16 @@ fn main() -> io::Result<()> {
                     solver,
                     &module,
                     context_selector,
-                    config,
+                    &config,
                     &path,
                 ),
-                None => PointsToAnalysis::run(solver, &module, context_selector, config),
+                None => PointsToAnalysis::run(solver, &module, context_selector, &config),
             };
             show_output(result, &args);
         }
         (SolverMode::Justify, ..) => {
             let solver = JustificationSolver::new().as_context_sensitive();
-            let justifier = PointsToAnalysis::run(solver, &module, context_selector, config).0;
+            let justifier = PointsToAnalysis::run(solver, &module, context_selector, &config).0;
             loop {
                 let mut input = String::new();
                 print!("Enter node to justify: ");

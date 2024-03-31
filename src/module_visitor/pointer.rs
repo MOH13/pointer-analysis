@@ -570,7 +570,7 @@ where
 
         match function {
             // Special behavior for struct assignments (that are compiled to memcpy)
-            "llvm.memcpy.p0i8.p0i8.i64" => {
+            "llvm.memcpy.p0i8.p0i8.i64" | "llvm.memmove.p0i8.p0i8.i64" => {
                 let dest = self.get_original_type(&arguments[0].0, context);
                 let src = self.get_original_type(&arguments[1].0, context);
 
@@ -596,9 +596,9 @@ where
 
             "malloc" | "calloc" => self.handle_malloc(dest, false, pointer_context),
 
-            "strdup" | "strndup" => self.handle_malloc(dest, true, pointer_context),
+            "strdup" | "strndup" | "fopen" => self.handle_malloc(dest, true, pointer_context),
 
-            "llvm.memmove.p0i8.p0i8.i64" | "realloc" | "memchr" => {
+            "realloc" | "memchr" => {
                 let src = argument_idents
                     .get(0)
                     .cloned()
@@ -610,9 +610,21 @@ where
                 self.handle_assign(dest, src, dest_struct_type, pointer_context);
             }
 
+            "freopen" => {
+                let src = argument_idents
+                    .get(2)
+                    .cloned()
+                    .expect(&format!("Expected at least 3 arguments to {function}"))
+                    .expect(&format!(
+                        "Expected a VarIdent for the third argument of {function}"
+                    ));
+                let dest = dest.expect(&format!("Expected a destination for {function}"));
+                self.handle_assign(dest, src, dest_struct_type, pointer_context);
+            }
+
             "free" | "strlen" | "strchr" | "strtol" | "strtoul" | "strcmp" | "strcasecmp"
             | "strncmp" | "fputc" | "fputs" | "fgets" | "fwrite" | "fcntl" | "fsetxattr"
-            | "fclose" | "fopen" | "freopen" | "fprintf" | "clock_gettime" | "gettimeofday" => (),
+            | "fclose" | "fprintf" | "clock_gettime" | "gettimeofday" => (),
 
             _ => {
                 if function.starts_with("llvm.lifetime")

@@ -3,8 +3,8 @@ use pointer_analysis::analysis::{Config, PointsToAnalysis};
 use pointer_analysis::solver::{
     BasicBetterBitVecSolver, BasicHashSolver, BasicRoaringSolver, BasicSharedBitVecSolver,
     BetterBitVecWavePropagationSolver, CallStringSelector, ContextInsensitiveSelector,
-    ContextInsensitiveSolver, ContextSensitiveSolver, HashWavePropagationSolver, IntegerTerm,
-    RoaringWavePropagationSolver, SharedBitVecContextWavePropagationSolver,
+    ContextInsensitiveSolver, ContextSelector, ContextSensitiveSolver, HashWavePropagationSolver,
+    IntegerTerm, RoaringWavePropagationSolver, SharedBitVecContextWavePropagationSolver,
     SharedBitVecWavePropagationSolver,
 };
 
@@ -13,7 +13,7 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 fn bench_template<S, C>(name: &str, solver: S, context_selector: C, c: &mut Criterion)
 where
     S: ContextSensitiveSolver<IntegerTerm, C> + Clone,
-    C: Clone,
+    C: ContextSelector + Clone,
 {
     let solver = solver.as_generic();
     for entry in glob::glob("benchmarks/*/bench.bc").unwrap() {
@@ -34,7 +34,7 @@ where
                     solver.clone(),
                     &module,
                     context_selector.clone(),
-                    Config::default(),
+                    &Config::default(),
                 ))
             });
         });
@@ -103,7 +103,7 @@ fn shared_bitvec_wave_prop(c: &mut Criterion) {
 
 fn context(c: &mut Criterion) {
     let solver = SharedBitVecContextWavePropagationSolver::new();
-    bench_template("ContextTest", solver, CallStringSelector::<1>, c);
+    bench_template("ContextTest", solver, CallStringSelector::<1>::new(), c);
 }
 
 criterion_group! {

@@ -28,6 +28,7 @@ mod tests;
 pub struct Config {
     pub malloc_wrappers: HashSet<String>,
     pub realloc_wrappers: HashSet<String>,
+    pub count_terms: bool,
 }
 
 pub struct PointsToAnalysis;
@@ -37,7 +38,7 @@ impl PointsToAnalysis {
         solver: S,
         module: &'a Module,
         context_selector: C,
-        config: Config,
+        config: &Config,
     ) -> (S::Solution, Vec<Cell<'a>>)
     where
         S: Solver<ContextSensitiveInput<Cell<'a>, C>> + 'a,
@@ -122,20 +123,22 @@ impl PointsToAnalysis {
         solver: S,
         module: &'a Module,
         context_selector: C,
-        config: Config,
+        config: &Config,
     ) -> PointsToResult<'a, S::Solution>
     where
         S: Solver<ContextSensitiveInput<Cell<'a>, C>> + 'a,
     {
         let (solution, cells) = Self::solve_module(solver, module, context_selector, config);
 
-        let mut counts: Vec<_> = cells.iter().map(|c| solution.get(c).len()).collect();
-        let max = counts.iter().copied().max().unwrap_or(0);
-        let mean = counts.iter().sum::<usize>() as f64 / counts.len() as f64;
-        let median = counts.select_nth_unstable(cells.len() / 2).1;
-        println!("Max: {max}");
-        println!("Mean: {mean}");
-        println!("Median: {median}");
+        if config.count_terms {
+            let mut counts: Vec<_> = cells.iter().map(|c| solution.get(c).len()).collect();
+            let max = counts.iter().copied().max().unwrap_or(0);
+            let mean = counts.iter().sum::<usize>() as f64 / counts.len() as f64;
+            let median = counts.select_nth_unstable(cells.len() / 2).1;
+            println!("Max: {max}");
+            println!("Mean: {mean}");
+            println!("Median: {median}");
+        }
 
         PointsToResult(solution, cells)
     }
@@ -144,7 +147,7 @@ impl PointsToAnalysis {
         solver: S,
         module: &'a Module,
         context_selector: C,
-        config: Config,
+        config: &Config,
         dot_output_path: &str,
     ) -> PointsToResult<'a, S::Solution>
     where

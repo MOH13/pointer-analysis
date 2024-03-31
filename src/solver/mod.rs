@@ -455,17 +455,40 @@ impl Display for CallSite {
 }
 
 #[derive(Clone, Debug)]
-pub struct CallStringSelector<const K: usize>;
+pub struct CallStringSelector<const MAX: usize> {
+    call_string_length: usize,
+}
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
-pub struct CallStringContext<const K: usize>(ArrayVec<CallSite, K>);
+pub struct CallStringContext<const MAX: usize>(ArrayVec<CallSite, MAX>);
+
+impl<const MAX: usize> CallStringSelector<MAX> {
+    /// Construct a `CallStringSelector` with `call_string_length = 0`
+    pub fn new() -> Self {
+        Self::with_call_string_length(MAX)
+    }
+
+    pub fn with_call_string_length(length: usize) -> Self {
+        if length as usize > MAX {
+            panic!("Length should be less than or equal to MAX");
+        }
+        Self {
+            call_string_length: length,
+        }
+    }
+}
 
 impl<const K: usize> ContextSelector for CallStringSelector<K> {
     type Context = CallStringContext<K>;
 
     fn select_context(&self, current: &Self::Context, call_site: CallSite) -> Self::Context {
         let mut context = current.clone();
-        if context.0.is_full() {
+
+        if self.call_string_length == 0 {
+            return context;
+        }
+
+        if context.0.len() == self.call_string_length {
             context.0.remove(0);
         }
         context.0.push(call_site);

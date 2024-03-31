@@ -117,7 +117,12 @@ where
 
     dbg!(&expected_points_to);
 
-    let result = PointsToAnalysis::run(solver, &module, CallStringSelector::<2>, Config::default());
+    let result = PointsToAnalysis::run(
+        solver,
+        &module,
+        CallStringSelector::<2>::new(),
+        &Config::default(),
+    );
 
     let actual_points_to: HashMap<Cell, HashSet<Cell>> = result
         .get_all_entries()
