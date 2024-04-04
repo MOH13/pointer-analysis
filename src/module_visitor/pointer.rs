@@ -213,28 +213,36 @@ where
                 vector: operand, ..
             }) => self.unroll_constant(operand, context),
 
-            Constant::AddrSpaceCast(constant::AddrSpaceCast { operand, .. }) => {
-                let (value, src_ty, degree) = self.unroll_constant(operand, context);
-                match value {
-                    Some(value) => {
-                        let fresh = self.add_fresh_ident();
-                        self.handle_bitcast(fresh.clone(), value, src_ty.clone(), context);
-                        (Some(fresh), src_ty, degree)
-                    }
-                    None => (None, src_ty, degree),
-                }
-            }
-
-            Constant::BitCast(constant::BitCast { operand, to_type }) => {
+            Constant::AddrSpaceCast(constant::AddrSpaceCast { operand, to_type }) => {
                 let (value, src_ty, _) = self.unroll_constant(operand, context);
                 let (dest_ty, degree) = strip_array_types(to_type.clone());
                 match value {
                     Some(value) => {
                         let fresh = self.add_fresh_ident();
-                        self.handle_bitcast(fresh.clone(), value, src_ty, context);
+                        self.handle_bitcast(
+                            fresh.clone(),
+                            value,
+                            dest_ty.clone(),
+                            src_ty.clone(),
+                            context,
+                        );
                         (Some(fresh), dest_ty, degree)
                     }
                     None => (None, dest_ty, degree),
+                }
+            }
+
+            Constant::BitCast(constant::BitCast { operand, to_type }) => {
+                let (value, src_ty, _) = self.unroll_constant(operand, context);
+                // TODO: is this necessary?
+                // let (dest_ty, degree) = strip_array_types(to_type.clone());
+                match value {
+                    Some(value) => {
+                        let fresh = self.add_fresh_ident();
+                        self.handle_bitcast(fresh.clone(), value, to_type.clone(), src_ty, context);
+                        (Some(fresh), to_type.clone(), 0)
+                    }
+                    None => (None, to_type.clone(), 0),
                 }
             }
 
@@ -575,22 +583,8 @@ where
                 let src = self.get_original_type(&arguments[1].0, context);
 
                 // Assume src_ty and dest_ty are same
-                if let (Some((dest_ident, _)), Some((src_ident, src_ty))) = (dest, src) {
-                    let intermediate_ident = self.add_fresh_ident();
-                    let src_load = PointerInstruction::Load {
-                        dest: intermediate_ident.clone(),
-                        address: src_ident,
-                        struct_type: Some(src_ty.clone()),
-                    };
-                    let dest_store = PointerInstruction::Store {
-                        address: dest_ident,
-                        value: intermediate_ident,
-                        struct_type: Some(src_ty),
-                    };
-                    self.observer
-                        .handle_ptr_instruction(src_load, pointer_context);
-                    self.observer
-                        .handle_ptr_instruction(dest_store, pointer_context);
+                if let (Some((dest_ident, _)), Some((src_ident, src_struct_type))) = (dest, src) {
+                    self.handle_memcpy(dest_ident, src_ident, src_struct_type, pointer_context);
                 };
             }
 
@@ -679,10 +673,35 @@ where
         self.observer.handle_ptr_instruction(instr, context)
     }
 
+    fn handle_memcpy(
+        &mut self,
+        dest: VarIdent<'a>,
+        src: VarIdent<'a>,
+        struct_type: Rc<StructType>,
+        pointer_context: PointerContext<'a>,
+    ) {
+        let intermediate_ident = self.add_fresh_ident();
+        let src_load = PointerInstruction::Load {
+            dest: intermediate_ident.clone(),
+            address: src,
+            struct_type: Some(struct_type.clone()),
+        };
+        let dest_store = PointerInstruction::Store {
+            address: dest,
+            value: intermediate_ident,
+            struct_type: Some(struct_type),
+        };
+        self.observer
+            .handle_ptr_instruction(src_load, pointer_context);
+        self.observer
+            .handle_ptr_instruction(dest_store, pointer_context);
+    }
+
     fn handle_bitcast(
         &mut self,
         dest: VarIdent<'a>,
         value: VarIdent<'a>,
+        dest_ty: TypeRef,
         src_ty: TypeRef,
         context: Context<'a, '_>,
     ) {
@@ -703,6 +722,25 @@ where
         }
 
         let pointer_context = PointerContext::from_context(context);
+        if let Type::IntegerType { bits: 8 } = src_ty.as_ref() {
+            let dest_ty = strip_pointer_type(dest_ty)
+                .expect("bitcast and addrspacecast should only take pointer args");
+            if let Some(struct_type) = StructType::try_from_type(dest_ty.clone(), context.structs) {
+                let instr = PointerInstruction::Alloca {
+                    dest: dest.clone(),
+                    struct_type: Some(struct_type.clone()),
+                };
+                self.observer.handle_ptr_instruction(instr, pointer_context);
+                self.handle_memcpy(
+                    dest.clone(),
+                    value.clone(),
+                    struct_type.clone(),
+                    pointer_context,
+                );
+                self.handle_memcpy(value, dest, struct_type, pointer_context);
+                return;
+            }
+        }
         // Always a pointer type, so no struct type
         self.handle_assign(dest, value, None, pointer_context);
     }
@@ -997,11 +1035,22 @@ where
                 self.observer.handle_ptr_instruction(instr, pointer_context);
             }
 
-            Instruction::BitCast(BitCast { operand, dest, .. })
-            | Instruction::AddrSpaceCast(AddrSpaceCast { operand, dest, .. }) => {
+            Instruction::BitCast(BitCast {
+                operand,
+                dest,
+                to_type,
+                ..
+            })
+            | Instruction::AddrSpaceCast(AddrSpaceCast {
+                operand,
+                dest,
+                to_type,
+                ..
+            }) => {
                 if let Some((value, src_ty, _)) = self.get_operand_ident_type(operand, context) {
                     let dest = VarIdent::new_local(dest, &function.name);
-                    self.handle_bitcast(dest, value, src_ty, context);
+                    let (dest_ty, _) = strip_array_types(to_type.clone());
+                    self.handle_bitcast(dest, value, dest_ty, src_ty, context);
                 };
             }
 
@@ -1110,7 +1159,7 @@ where
             Instruction::IntToPtr(IntToPtr { dest, .. }) => {
                 let dest = VarIdent::new_local(dest, &function.name);
                 self.handle_unused_fresh(dest, None, pointer_context);
-                warn!("Unhandled IntToPtr");
+                warn!("IntToPtr detected");
             }
 
             Instruction::CmpXchg(CmpXchg {

@@ -364,6 +364,53 @@ fn get_and_push_cells<'a>(
     }
 }
 
+fn push_term_types<'a>(
+    base_ident: VarIdent<'a>,
+    struct_type: Option<&StructType>,
+    ident_to_cell: fn(VarIdent<'a>) -> Cell<'a>,
+    term_types: &mut Vec<(Cell<'a>, TermType)>,
+    first_offset: Option<usize>,
+) {
+    match struct_type {
+        Some(StructType { fields, .. }) => {
+            let base_rc = Rc::new(base_ident);
+
+            let num_sub_cells = count_cells(struct_type);
+            let mut first_offset = first_offset.or_else(|| num_sub_cells.checked_sub(1));
+
+            for (i, field) in fields.iter().enumerate() {
+                let offset_ident = VarIdent::Offset {
+                    base: base_rc.clone(),
+                    offset: i,
+                };
+                first_offset = first_offset.filter(|_| i == 0);
+                push_term_types(
+                    offset_ident,
+                    field.st.as_deref(),
+                    ident_to_cell,
+                    term_types,
+                    first_offset,
+                );
+            }
+        }
+
+        None => {
+            if let Some(offset) = first_offset {
+                term_types.push((ident_to_cell(base_ident), TermType::Struct(offset)));
+            }
+        }
+    }
+}
+
+fn count_cells(struct_type: Option<&StructType>) -> usize {
+    match struct_type {
+        Some(StructType { fields, .. }) => {
+            fields.iter().map(|f| count_cells(f.st.as_deref())).sum()
+        }
+        None => 1,
+    }
+}
+
 impl<'a> PointsToPreAnalyzer<'a> {
     fn new() -> Self {
         Self {
@@ -387,19 +434,26 @@ impl<'a> PointsToPreAnalyzer<'a> {
         {
             return;
         }
-        let added = get_and_push_cells(
-            base_ident,
+        get_and_push_cells(
+            base_ident.clone(),
             struct_type,
             ident_to_cell,
             &mut function_state.cells,
         );
-        for (i, cell) in function_state.cells.iter().rev().take(added).enumerate() {
-            if i > 0 {
-                function_state
-                    .term_types
-                    .push((cell.clone(), TermType::Struct(i)));
-            }
-        }
+        push_term_types(
+            base_ident,
+            struct_type,
+            ident_to_cell,
+            &mut function_state.term_types,
+            None,
+        );
+        // for (i, cell) in function_state.cells.iter().rev().take(added).enumerate() {
+        //     if i > 0 {
+        //         function_state
+        //             .term_types
+        //             .push((cell.clone(), TermType::Struct(i)));
+        //     }
+        // }
     }
 }
 
