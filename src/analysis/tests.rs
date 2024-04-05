@@ -12,11 +12,10 @@ use test_generator::test_resources;
 
 use crate::analysis::{Config, PointsToAnalysis};
 use crate::solver::{
-    BasicBetterBitVecSolver, BasicHashSolver, BasicRoaringSolver, BasicSharedBitVecSolver,
-    BetterBitVecWavePropagationSolver, CallStringSelector, ContextInsensitiveSolver,
-    ContextSensitiveInput, GenericSolver, HashWavePropagationSolver, RoaringWavePropagationSolver,
-    SharedBitVecContextWavePropagationSolver, SharedBitVecWavePropagationSolver, Solver,
-    SolverSolution, TermSetTrait,
+    BasicHashSolver, BasicRoaringSolver, BasicSharedBitVecSolver, CallStringSelector,
+    ContextInsensitiveSolver, ContextSensitiveInput, GenericSolver, HashWavePropagationSolver,
+    RoaringWavePropagationSolver, SharedBitVecContextWavePropagationSolver,
+    SharedBitVecWavePropagationSolver, Solver, SolverSolution, TermSetTrait,
 };
 
 use super::Cell;
@@ -152,16 +151,6 @@ fn hash(resource: &str) {
 }
 
 #[test_resources("res/context_insensitive/**/test_config.json")]
-fn better_bit_vec(resource: &str) {
-    run_test_template::<GenericSolver<_>>(
-        resource,
-        BasicBetterBitVecSolver::new()
-            .as_context_sensitive()
-            .as_generic(),
-    )
-}
-
-#[test_resources("res/context_insensitive/**/test_config.json")]
 fn roaring(resource: &str) {
     run_test_template::<GenericSolver<_>>(
         resource,
@@ -206,16 +195,6 @@ fn shared_bit_vec_wave_prop(resource: &str) {
     run_test_template::<GenericSolver<_>>(
         resource,
         SharedBitVecWavePropagationSolver::new()
-            .as_context_sensitive()
-            .as_generic(),
-    )
-}
-
-#[test_resources("res/context_insensitive/**/test_config.json")]
-fn better_bitvec_wave_prop(resource: &str) {
-    run_test_template::<GenericSolver<_>>(
-        resource,
-        BetterBitVecWavePropagationSolver::new()
             .as_context_sensitive()
             .as_generic(),
     )

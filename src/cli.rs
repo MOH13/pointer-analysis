@@ -78,8 +78,6 @@ impl Display for SolverMode {
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
 pub enum TermSet {
-    /// Bitvec
-    BitVec,
     /// Hashset
     Hash,
     /// Roaring bitmap
@@ -91,7 +89,6 @@ pub enum TermSet {
 impl Display for TermSet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TermSet::BitVec => write!(f, "bitvec"),
             TermSet::Hash => write!(f, "hash"),
             TermSet::Roaring => write!(f, "roaring"),
             TermSet::SharedBitVec => write!(f, "shared bitvec"),

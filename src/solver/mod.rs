@@ -9,7 +9,6 @@ use std::ptr;
 use std::rc::Rc;
 
 mod basic;
-mod better_bitvec;
 mod context_wave_prop;
 mod shared_bitvec;
 mod stats;
@@ -18,16 +17,13 @@ mod tests;
 mod wave_prop;
 
 pub use basic::{
-    BasicBetterBitVecSolver, BasicHashSolver, BasicRoaringSolver, BasicSharedBitVecSolver,
-    JustificationSolver,
+    BasicHashSolver, BasicRoaringSolver, BasicSharedBitVecSolver, JustificationSolver,
 };
-pub use better_bitvec::BetterBitVec;
 // pub use bit_vec::BasicBitVecSolver;
 pub use context_wave_prop::SharedBitVecContextWavePropagationSolver;
 pub use stats::StatSolver;
 pub use wave_prop::{
-    BetterBitVecWavePropagationSolver, HashWavePropagationSolver, RoaringWavePropagationSolver,
-    SharedBitVecWavePropagationSolver,
+    HashWavePropagationSolver, RoaringWavePropagationSolver, SharedBitVecWavePropagationSolver,
 };
 
 use crate::visualizer::Node;
@@ -57,6 +53,7 @@ pub enum Constraint<T> {
     },
     CallDummy {
         cond_node: T,
+        // TODO: do something with this?
         arguments: Vec<T>,
         result_node: T,
         call_site: CallSite,
@@ -199,7 +196,7 @@ enum UnivCond<T: Clone> {
     SubsetRight { left: T, offset: usize },
 }
 
-pub trait TermSetTrait: Clone + Default {
+pub trait TermSetTrait: Clone + Default + PartialEq {
     type Term;
 
     fn new() -> Self;

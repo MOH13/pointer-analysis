@@ -1,11 +1,10 @@
 use llvm_ir::Module;
 use pointer_analysis::analysis::{Config, PointsToAnalysis};
 use pointer_analysis::solver::{
-    BasicBetterBitVecSolver, BasicHashSolver, BasicRoaringSolver, BasicSharedBitVecSolver,
-    BetterBitVecWavePropagationSolver, CallStringSelector, ContextInsensitiveSelector,
-    ContextInsensitiveSolver, ContextSelector, ContextSensitiveSolver, HashWavePropagationSolver,
-    IntegerTerm, RoaringWavePropagationSolver, SharedBitVecContextWavePropagationSolver,
-    SharedBitVecWavePropagationSolver,
+    BasicHashSolver, BasicRoaringSolver, BasicSharedBitVecSolver, CallStringSelector,
+    ContextInsensitiveSelector, ContextInsensitiveSolver, ContextSelector, ContextSensitiveSolver,
+    HashWavePropagationSolver, IntegerTerm, RoaringWavePropagationSolver,
+    SharedBitVecContextWavePropagationSolver, SharedBitVecWavePropagationSolver,
 };
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
@@ -46,16 +45,6 @@ fn hash(c: &mut Criterion) {
     bench_template("HashWorklist", solver, ContextInsensitiveSelector, c);
 }
 
-fn better_bit_vec(c: &mut Criterion) {
-    let solver = BasicBetterBitVecSolver::new().as_context_sensitive();
-    bench_template(
-        "BetterBitVecWorklist",
-        solver,
-        ContextInsensitiveSelector,
-        c,
-    );
-}
-
 fn roaring(c: &mut Criterion) {
     let solver = BasicRoaringSolver::new().as_context_sensitive();
     bench_template("RoaringWorklist", solver, ContextInsensitiveSelector, c);
@@ -81,16 +70,6 @@ fn roaring_wave_prop(c: &mut Criterion) {
     bench_template("RoaringWaveProp", solver, ContextInsensitiveSelector, c);
 }
 
-fn better_bitvec_wave_prop(c: &mut Criterion) {
-    let solver = BetterBitVecWavePropagationSolver::new().as_context_sensitive();
-    bench_template(
-        "BetterBitVecWaveProp",
-        solver,
-        ContextInsensitiveSelector,
-        c,
-    );
-}
-
 fn shared_bitvec_wave_prop(c: &mut Criterion) {
     let solver = SharedBitVecWavePropagationSolver::new().as_context_sensitive();
     bench_template(
@@ -110,12 +89,10 @@ criterion_group! {
     name = benches;
     config = Criterion::default().sample_size(10);
     targets = hash,
-    better_bit_vec,
     roaring,
     shared_bitvec,
     hash_wave_prop,
     roaring_wave_prop,
-    better_bitvec_wave_prop,
     shared_bitvec_wave_prop,
     context,
 }

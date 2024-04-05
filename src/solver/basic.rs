@@ -8,9 +8,8 @@ use roaring::RoaringBitmap;
 
 use super::shared_bitvec::SharedBitVec;
 use super::{
-    edges_between, offset_term, offset_terms, BetterBitVec, CallSite, Constraint,
-    ContextInsensitiveInput, GenericSolverSolution, IntegerTerm, Offsets, Solver, SolverSolution,
-    TermSetTrait, UnivCond,
+    edges_between, offset_term, offset_terms, CallSite, Constraint, ContextInsensitiveInput,
+    GenericSolverSolution, IntegerTerm, Offsets, Solver, SolverSolution, TermSetTrait, UnivCond,
 };
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
 
@@ -169,7 +168,6 @@ impl<T: TermSetTrait<Term = IntegerTerm>> SolverSolution for BasicSolver<Integer
 
 pub type BasicHashSolver = BasicSolver<IntegerTerm, HashSet<IntegerTerm>>;
 pub type BasicRoaringSolver = BasicSolver<IntegerTerm, RoaringBitmap>;
-pub type BasicBetterBitVecSolver = BasicSolver<IntegerTerm, BetterBitVec>;
 pub type BasicSharedBitVecSolver = BasicSolver<IntegerTerm, SharedBitVec>;
 
 impl<T, S> Graph for GenericSolverSolution<BasicSolver<IntegerTerm, S>, T>

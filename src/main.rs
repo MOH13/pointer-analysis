@@ -4,13 +4,13 @@ use clap::Parser;
 use llvm_ir::Module;
 use pointer_analysis::analysis::{Cell, Config, PointsToAnalysis, PointsToResult};
 use pointer_analysis::cli::{Args, SolverMode, TermSet};
+use pointer_analysis::solver::HashWavePropagationSolver;
+use pointer_analysis::solver::{BasicHashSolver, BasicRoaringSolver, StatSolver};
 use pointer_analysis::solver::{
-    BasicBetterBitVecSolver, BasicSharedBitVecSolver, CallStringSelector, ContextInsensitiveSolver,
-    JustificationSolver, RoaringWavePropagationSolver, SharedBitVecContextWavePropagationSolver,
+    BasicSharedBitVecSolver, CallStringSelector, ContextInsensitiveSolver, JustificationSolver,
+    RoaringWavePropagationSolver, SharedBitVecContextWavePropagationSolver,
     SharedBitVecWavePropagationSolver, Solver, SolverSolution, TermSetTrait,
 };
-use pointer_analysis::solver::{BasicHashSolver, BasicRoaringSolver, StatSolver};
-use pointer_analysis::solver::{BetterBitVecWavePropagationSolver, HashWavePropagationSolver};
 use std::fmt::Debug;
 use std::io;
 use std::io::Write;
@@ -113,22 +113,6 @@ fn main() -> io::Result<()> {
             };
             show_output(result, &args);
         }
-        (SolverMode::Basic, TermSet::BitVec, visualize) => {
-            let solver = BasicBetterBitVecSolver::new()
-                .as_context_sensitive()
-                .as_generic();
-            let result = match visualize {
-                Some(path) => PointsToAnalysis::run_and_visualize(
-                    solver,
-                    &module,
-                    context_selector,
-                    &config,
-                    &path,
-                ),
-                None => PointsToAnalysis::run(solver, &module, context_selector, &config),
-            };
-            show_output(result, &args);
-        }
         (SolverMode::Basic, TermSet::SharedBitVec, visualize) => {
             let solver = BasicSharedBitVecSolver::new()
                 .as_context_sensitive()
@@ -181,22 +165,6 @@ fn main() -> io::Result<()> {
         }
         (SolverMode::Wave, TermSet::SharedBitVec, visualize) => {
             let solver = SharedBitVecWavePropagationSolver::new()
-                .as_context_sensitive()
-                .as_generic();
-            let result = match visualize {
-                Some(path) => PointsToAnalysis::run_and_visualize(
-                    solver,
-                    &module,
-                    context_selector,
-                    &config,
-                    &path,
-                ),
-                None => PointsToAnalysis::run(solver, &module, context_selector, &config),
-            };
-            show_output(result, &args);
-        }
-        (SolverMode::Wave, TermSet::BitVec, visualize) => {
-            let solver = BetterBitVecWavePropagationSolver::new()
                 .as_context_sensitive()
                 .as_generic();
             let result = match visualize {

@@ -12,8 +12,8 @@ use roaring::RoaringBitmap;
 
 use super::shared_bitvec::SharedBitVec;
 use super::{
-    edges_between, BetterBitVec, CallSite, Constraint, ContextSelector, ContextSensitiveInput,
-    FunctionInput, IntegerTerm, Offsets, Solver, SolverSolution, TermSetTrait, TermType,
+    edges_between, CallSite, Constraint, ContextSelector, ContextSensitiveInput, FunctionInput,
+    IntegerTerm, Offsets, Solver, SolverSolution, TermSetTrait, TermType,
 };
 use crate::solver::GenericIdMap;
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
@@ -95,12 +95,12 @@ impl<T, S, C> ContextWavePropagationSolverState<T, S, C>
 where
     C: ContextSelector,
     T: Hash + Eq + Clone + Debug,
-    S: TermSetTrait<Term = u32>,
+    S: TermSetTrait<Term = u32> + Debug,
 {
     fn run_wave_propagation(&mut self) {
         SCC::run(self).apply_to_graph(self);
 
-        let mut iters = 0usize;
+        let mut iters = 0u64;
 
         let mut changed = true;
         while changed {
@@ -113,7 +113,9 @@ where
             changed = self.wave_propagate_iteration();
 
             changed |= self.add_edges_after_wave_prop(&mut nodes_with_new_outgoing);
+            println!("Iteration {iters}");
         }
+
         println!("SCC count: {}", self.top_order.len());
         println!("Iterations: {}", iters);
     }
@@ -167,7 +169,9 @@ where
                 self.edges.sols[cond_node as usize].difference(&self.edges.p_cache_call_dummies[i]);
             self.edges.p_cache_call_dummies[i].union_assign(&p_new);
             for t in p_new.iter() {
-                self.offset_term_vec_offsets(t, Some(call_site.clone()), 0, &context);
+                changed |= self
+                    .offset_term_vec_offsets(t, Some(call_site.clone()), 0, &context)
+                    .is_some();
             }
         }
         let left_conds = self.edges.left_conds.clone();
@@ -499,7 +503,7 @@ where
 impl<T, S, C> Solver<ContextSensitiveInput<T, C>> for ContextWavePropagationSolver<S, C>
 where
     T: Hash + Eq + Clone + Debug,
-    S: TermSetTrait<Term = IntegerTerm>,
+    S: TermSetTrait<Term = IntegerTerm> + Debug,
     C: ContextSelector,
 {
     type Solution = ContextWavePropagationSolverState<T, S, C>;
@@ -608,7 +612,7 @@ where
 impl<T, S, C> SolverSolution for ContextWavePropagationSolverState<T, S, C>
 where
     T: Hash + Eq + Clone + Debug,
-    S: TermSetTrait<Term = IntegerTerm>,
+    S: TermSetTrait<Term = IntegerTerm> + Debug,
     C: ContextSelector,
 {
     type Term = T;
@@ -699,8 +703,8 @@ where
             }
             Constraint::CallDummy {
                 cond_node,
-                arguments,
-                result_node,
+                arguments: _,
+                result_node: _,
                 call_site,
             } => {
                 self.call_dummies.push(CallDummyEntry {
@@ -739,7 +743,8 @@ struct SCC<T, S, C> {
 
 impl<T, S, C> SCC<T, S, C>
 where
-    S: TermSetTrait<Term = IntegerTerm> + Default + Clone,
+    S: TermSetTrait<Term = IntegerTerm> + Debug,
+    T: Hash + Eq + Clone + Debug,
     C: ContextSelector,
 {
     fn visit(&mut self, v: IntegerTerm, solver: &ContextWavePropagationSolverState<T, S, C>) {
@@ -906,12 +911,25 @@ where
         let child_sols = mem::take(&mut state.edges.sols[child as usize]);
         state.edges.sols[parent as usize].union_assign(&child_sols);
 
+        let p_old = &state.edges.p_old[parent as usize];
+        let p_old_vec = Lazy::new(|| p_old.iter().collect::<Vec<IntegerTerm>>());
         let child_edges = mem::take(&mut state.edges.subset[child as usize]);
 
         for (&other, offsets) in &child_edges {
             debug_assert_ne!(0, offsets.len());
 
             let other = if other == child { parent } else { other };
+
+            let other_term_set = &mut state.edges.sols[other as usize];
+            for offset in offsets.iter() {
+                propagate_terms_into(
+                    p_old,
+                    p_old_vec.iter().copied(),
+                    offset,
+                    other_term_set,
+                    &state.term_types,
+                )
+            }
 
             state.edges.subset[parent as usize]
                 .entry(other)
@@ -947,6 +965,7 @@ where
         }
 
         state.parents[child as usize] = parent;
+        state.edges.p_old[child as usize] = S::new();
     }
 
     // Collapse cycles and update topological order
@@ -1003,11 +1022,9 @@ fn get_representative(parents: &mut Vec<IntegerTerm>, child: IntegerTerm) -> Int
     representative
 }
 
-pub type HashContextWavePropagationSolver<C> =
-    ContextWavePropagationSolver<HashSet<IntegerTerm>, C>;
-pub type RoaringContextWavePropagationSolver<C> = ContextWavePropagationSolver<RoaringBitmap, C>;
-pub type BetterBitVecContextWavePropagationSolver<C> =
-    ContextWavePropagationSolver<BetterBitVec, C>;
+// pub type HashContextWavePropagationSolver<C> =
+//     ContextWavePropagationSolver<HashSet<IntegerTerm>, C>;
+// pub type RoaringContextWavePropagationSolver<C> = ContextWavePropagationSolver<RoaringBitmap, C>;
 pub type SharedBitVecContextWavePropagationSolver<C> =
     ContextWavePropagationSolver<SharedBitVec, C>;
 
@@ -1048,7 +1065,7 @@ where
 impl<T, S, C> Graph for ContextWavePropagationSolverState<T, S, C>
 where
     T: Display + Debug + Clone + PartialEq + Eq + Hash,
-    S: TermSetTrait<Term = IntegerTerm>,
+    S: TermSetTrait<Term = IntegerTerm> + Debug,
     C: ContextSelector,
     C::Context: Display,
 {

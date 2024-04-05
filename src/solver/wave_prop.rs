@@ -12,7 +12,7 @@ use roaring::RoaringBitmap;
 
 use super::shared_bitvec::SharedBitVec;
 use super::{
-    edges_between, offset_term_vec_offsets, BetterBitVec, Constraint, ContextInsensitiveInput,
+    edges_between, offset_term_vec_offsets, Constraint, ContextInsensitiveInput,
     GenericSolverSolution, IntegerTerm, Offsets, Solver, SolverSolution, TermSetTrait, TermType,
 };
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
@@ -570,7 +570,6 @@ fn get_representative(parents: &mut Vec<IntegerTerm>, child: IntegerTerm) -> Int
 
 pub type HashWavePropagationSolver = WavePropagationSolver<HashSet<IntegerTerm>>;
 pub type RoaringWavePropagationSolver = WavePropagationSolver<RoaringBitmap>;
-pub type BetterBitVecWavePropagationSolver = WavePropagationSolver<BetterBitVec>;
 pub type SharedBitVecWavePropagationSolver = WavePropagationSolver<SharedBitVec>;
 
 #[derive(Clone)]

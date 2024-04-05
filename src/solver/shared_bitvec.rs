@@ -58,7 +58,7 @@ impl BitOr for Chunk {
     }
 }
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(Eq, Debug)]
 pub enum SharedBitVec {
     Array(ArrayVec<Term, ARRAY_VEC_SIZE>),
     BitVec(InnerBitVec),
@@ -91,7 +91,28 @@ impl Clone for SharedBitVec {
     }
 }
 
-#[derive(Default, PartialEq, Eq, Debug)]
+impl PartialEq for SharedBitVec {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Array(terms1), Self::Array(term2)) => terms1 == term2,
+            (Self::BitVec(inner1), Self::BitVec(inner2)) => inner1 == inner2,
+            (Self::BitVec(inner), Self::Array(terms))
+            | (Self::Array(terms), Self::BitVec(inner)) => {
+                if terms.len() != inner.len as usize {
+                    return false;
+                }
+                for term in terms {
+                    if !inner.contains(*term) {
+                        return false;
+                    }
+                }
+                true
+            }
+        }
+    }
+}
+
+#[derive(Default, Eq, Debug)]
 pub struct InnerBitVec {
     segments: SmallVec<[Segment; BACKING_ARRAY_SIZE]>,
     len: u32,
@@ -196,6 +217,12 @@ impl InnerBitVec {
         chunk.len -= 1;
         self.len -= 1;
         true
+    }
+}
+
+impl PartialEq for InnerBitVec {
+    fn eq(&self, other: &Self) -> bool {
+        self.segments == other.segments
     }
 }
 
