@@ -61,9 +61,9 @@ pub enum Constraint<T> {
 }
 
 impl<T> Constraint<T> {
-    pub fn map_terms<U, F>(&self, f: F) -> Constraint<U>
+    pub fn map_terms<U, F>(&self, mut f: F) -> Constraint<U>
     where
-        F: Fn(&T) -> U,
+        F: FnMut(&T) -> U,
     {
         match self {
             Self::Inclusion { term, node } => Constraint::Inclusion {
@@ -108,7 +108,7 @@ impl<T> Constraint<T> {
                 call_site,
             } => Constraint::CallDummy {
                 cond_node: f(cond_node),
-                arguments: arguments.iter().map(&f).collect(),
+                arguments: arguments.iter().map(&mut f).collect(),
                 result_node: f(result_node),
                 call_site: call_site.clone(),
             },

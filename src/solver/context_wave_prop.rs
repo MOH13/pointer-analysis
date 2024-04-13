@@ -8,7 +8,6 @@ use bitvec::bitvec;
 use bitvec::prelude::*;
 use hashbrown::{HashMap, HashSet};
 use once_cell::unsync::Lazy;
-use roaring::RoaringBitmap;
 
 use super::shared_bitvec::SharedBitVec;
 use super::{
@@ -304,13 +303,13 @@ where
             .extend((0..num_instantiated).map(|i| template.start_index + i as u32));
         self.edges.p_old.resize_with(new_len, S::new);
 
-        for constraint in &template.constraints {
+        let constraints = template.constraints.clone();
+        for constraint in constraints {
             let concrete_constraint = constraint.map_terms(|tt| match tt {
                 &TemplateTerm::Internal(index) => instantiated_start_index as IntegerTerm + index,
                 &TemplateTerm::Global(index) => index,
             });
-            self.edges
-                .add_constraint(concrete_constraint.clone(), context.clone());
+            self.add_constraint(concrete_constraint.clone(), context.clone());
 
             if let Constraint::Subset {
                 left: TemplateTerm::Global(_),
@@ -327,6 +326,8 @@ where
                 else {
                     unreachable!();
                 };
+                let left = get_representative(&mut self.parents, left);
+                let right = get_representative(&mut self.parents, right);
                 let left_sols = self.edges.sols[left as usize].clone();
                 let left_sols_iter = left_sols.iter();
                 let right_sols = &mut self.edges.sols[right as usize];
@@ -403,6 +404,11 @@ where
     fn concrete_to_input(&self, term: IntegerTerm) -> T {
         self.mapping
             .integer_to_term(self.abstract_indices[term as usize])
+    }
+
+    fn add_constraint(&mut self, c: Constraint<IntegerTerm>, context: C::Context) {
+        let c = c.map_terms(|&t| get_representative(&mut self.parents, t));
+        self.edges.add_constraint(c, context);
     }
 }
 
@@ -593,7 +599,7 @@ where
         };
 
         for c in input.global.constraints {
-            state.edges.add_constraint(
+            state.add_constraint(
                 state.mapping.translate_constraint(&c),
                 empty_context.clone(),
             );
