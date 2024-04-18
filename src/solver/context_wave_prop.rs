@@ -9,6 +9,9 @@ use bitvec::prelude::*;
 use hashbrown::{HashMap, HashSet};
 use once_cell::unsync::Lazy;
 
+use super::context::{
+    function_to_template, ContextState, FunctionTemplate, FunctionTermInfo, TemplateTerm,
+};
 use super::shared_bitvec::SharedBitVec;
 use super::{
     edges_between, CallSite, Constraint, ContextSelector, ContextSensitiveInput, FunctionInput,
@@ -43,25 +46,6 @@ struct CallDummyEntry<C> {
 }
 
 #[derive(Clone)]
-enum TemplateTerm {
-    Internal(u32),
-    Global(u32),
-}
-
-struct TemplateSentinelInfo {
-    pointer_node: IntegerTerm,
-    term_type: TermType,
-}
-
-#[derive(Clone)]
-struct FunctionTemplate {
-    _fun_name: Rc<str>,
-    start_index: u32,
-    types: Vec<TermType>,
-    constraints: Vec<Constraint<TemplateTerm>>,
-}
-
-#[derive(Clone)]
 pub struct ContextWavePropagationSolver<S, C>(PhantomData<S>, PhantomData<C>);
 
 impl<S, C> ContextWavePropagationSolver<S, C> {
@@ -72,16 +56,11 @@ impl<S, C> ContextWavePropagationSolver<S, C> {
 
 pub struct ContextWavePropagationSolverState<T, S, C: ContextSelector> {
     mapping: GenericIdMap<T>,
-    context_selector: C,
-    templates: Vec<FunctionTemplate>,
-    instantiated_contexts: Vec<HashMap<C::Context, IntegerTerm>>,
-    sentinel_functions: HashMap<IntegerTerm, u32>,
+    context_state: ContextState<C>,
     edges: Edges<S, C>,
     term_types: Vec<TermType>,
     parents: Vec<IntegerTerm>,
     top_order: Vec<IntegerTerm>,
-    /// Maps from concrete (instantiated) terms to their abstract term.
-    abstract_indices: Vec<IntegerTerm>,
 }
 
 impl<T, S, C: ContextSelector> ContextWavePropagationSolverState<T, S, C> {
@@ -271,11 +250,15 @@ where
                 if func_type != call_site.0.func_type_index {
                     return None;
                 }
-                let new_context = self.context_selector.select_context(context, call_site);
+                let new_context = self
+                    .context_state
+                    .context_selector
+                    .select_context(context, call_site);
                 let f_index = *self
-                    .sentinel_functions
+                    .context_state
+                    .function_term_functions
                     .get(&term)
-                    .expect("sentinel should have a function")
+                    .expect("function term should have a function")
                     as usize;
                 let function_term = self.get_or_instantiate_function(f_index, new_context);
                 (offset <= allowed).then(|| function_term + offset as IntegerTerm)
@@ -285,125 +268,64 @@ where
     }
 
     fn get_or_instantiate_function(&mut self, f_index: usize, context: C::Context) -> IntegerTerm {
-        let template = &self.templates[f_index];
-        if let Some(start_index) = self.instantiated_contexts[f_index].get(&context) {
-            return *start_index;
-        }
+        let (index, instantiated_template) = self
+            .context_state
+            .get_or_instantiate_function(f_index, context.clone());
 
-        let instantiated_start_index = self.term_count();
-        let num_instantiated = template.types.len();
-        let new_len = instantiated_start_index + num_instantiated;
-        self.edges.sols.resize_with(new_len, S::new);
-        self.edges.subset.resize_with(new_len, HashMap::new);
-        self.edges.rev_subset.resize_with(new_len, HashSet::new);
-        self.term_types.extend_from_slice(&template.types);
-        self.parents
-            .extend((0..num_instantiated).map(|i| (instantiated_start_index + i) as IntegerTerm));
-        self.abstract_indices
-            .extend((0..num_instantiated).map(|i| template.start_index + i as u32));
-        self.edges.p_old.resize_with(new_len, S::new);
+        if let Some(template) = instantiated_template {
+            let instantiated_start_index = self.edges.sols.len();
+            let num_instantiated = template.types.len();
+            let new_len = instantiated_start_index + num_instantiated;
+            self.edges.sols.resize_with(new_len, S::new);
+            self.edges.subset.resize_with(new_len, HashMap::new);
+            self.edges.rev_subset.resize_with(new_len, HashSet::new);
+            self.term_types.extend_from_slice(&template.types);
+            self.parents.extend(
+                (0..num_instantiated).map(|i| (instantiated_start_index + i) as IntegerTerm),
+            );
+            self.edges.p_old.resize_with(new_len, S::new);
 
-        let constraints = template.constraints.clone();
-        for constraint in constraints {
-            let concrete_constraint = constraint.map_terms(|tt| match tt {
-                &TemplateTerm::Internal(index) => instantiated_start_index as IntegerTerm + index,
-                &TemplateTerm::Global(index) => index,
-            });
-            self.add_constraint(concrete_constraint.clone(), context.clone());
+            let constraints = template.constraints.clone();
+            for constraint in constraints {
+                let concrete_constraint = constraint.map_terms(|tt| match tt {
+                    &TemplateTerm::Internal(index) => {
+                        instantiated_start_index as IntegerTerm + index
+                    }
+                    &TemplateTerm::Global(index) => index,
+                });
+                self.add_constraint(concrete_constraint.clone(), context.clone());
 
-            if let Constraint::Subset {
-                left: TemplateTerm::Global(_),
-                ..
-            } = constraint
-            {
-                // If we add a subset edge from a global node, we need to propagate along it immediately,
-                // so the destination node will be marked as changed.
-                let Constraint::Subset {
-                    left,
-                    right,
-                    offset,
-                } = concrete_constraint
-                else {
-                    unreachable!();
-                };
-                let left = get_representative(&mut self.parents, left);
-                let right = get_representative(&mut self.parents, right);
-                let left_sols = self.edges.sols[left as usize].clone();
-                let left_sols_iter = left_sols.iter();
-                let right_sols = &mut self.edges.sols[right as usize];
-                propagate_terms_into(
-                    &left_sols,
-                    left_sols_iter,
-                    offset,
-                    right_sols,
-                    &self.term_types,
-                );
+                if let Constraint::Subset {
+                    left: TemplateTerm::Global(_),
+                    ..
+                } = constraint
+                {
+                    // If we add a subset edge from a global node, we need to propagate along it immediately,
+                    // so the destination node will be marked as changed.
+                    let Constraint::Subset {
+                        left,
+                        right,
+                        offset,
+                    } = concrete_constraint
+                    else {
+                        unreachable!();
+                    };
+                    let left = get_representative(&mut self.parents, left);
+                    let right = get_representative(&mut self.parents, right);
+                    let left_sols = self.edges.sols[left as usize].clone();
+                    let left_sols_iter = left_sols.iter();
+                    let right_sols = &mut self.edges.sols[right as usize];
+                    propagate_terms_into(
+                        &left_sols,
+                        left_sols_iter,
+                        offset,
+                        right_sols,
+                        &self.term_types,
+                    );
+                }
             }
         }
-        self.instantiated_contexts[f_index]
-            .insert(context, instantiated_start_index as IntegerTerm);
-
-        instantiated_start_index as IntegerTerm
-    }
-
-    fn get_function_and_relative_index_from_term(
-        &self,
-        term: &T,
-    ) -> (Option<IntegerTerm>, IntegerTerm) {
-        let abstract_index = self.mapping.term_to_integer(term);
-
-        self.get_function_and_relative_index_from_abstract_index(abstract_index)
-    }
-
-    fn get_function_and_relative_index_from_abstract_index(
-        &self,
-        abstract_index: IntegerTerm,
-    ) -> (Option<IntegerTerm>, IntegerTerm) {
-        let fun_index = match self
-            .templates
-            .binary_search_by_key(&abstract_index, |t| t.start_index)
-        {
-            Ok(i) => Some(i),
-            Err(i) => i.checked_sub(1),
-        };
-
-        // If global term
-        match fun_index {
-            Some(i) => (
-                Some(i as IntegerTerm),
-                abstract_index - self.templates[i].start_index,
-            ),
-            None => (None, abstract_index),
-        }
-    }
-
-    fn context_of_concrete_index(&self, index: IntegerTerm) -> C::Context {
-        if self.sentinel_functions.contains_key(&index) {
-            return self.context_selector.empty();
-        }
-
-        let abstract_index = self.abstract_indices[index as usize];
-
-        let (fun_index, relative_index) =
-            self.get_function_and_relative_index_from_abstract_index(abstract_index);
-
-        match fun_index {
-            Some(i) => {
-                let start_index = index - relative_index;
-                self.instantiated_contexts[i as usize]
-                    .iter()
-                    .find(|(_, i)| **i == start_index)
-                    .expect("there should be an instantiated context")
-                    .0
-                    .clone()
-            }
-            None => self.context_selector.empty(),
-        }
-    }
-
-    fn concrete_to_input(&self, term: IntegerTerm) -> T {
-        self.mapping
-            .integer_to_term(self.abstract_indices[term as usize])
+        index
     }
 
     fn add_constraint(&mut self, c: Constraint<IntegerTerm>, context: C::Context) {
@@ -433,79 +355,6 @@ fn propagate_terms_into<S: TermSetTrait<Term = IntegerTerm>>(
     }
 }
 
-fn function_to_template<T>(
-    function: &FunctionInput<T>,
-    mapping: &GenericIdMap<T>,
-) -> (FunctionTemplate, TemplateSentinelInfo)
-where
-    T: Hash + Eq + Clone + Debug,
-{
-    let FunctionInput {
-        fun_name,
-        return_and_parameter_terms,
-        constrained_terms,
-    } = function;
-
-    let start_index = mapping.term_to_integer(&return_and_parameter_terms[0]);
-
-    let mut types =
-        vec![TermType::Basic; return_and_parameter_terms.len() + constrained_terms.terms.len()];
-
-    for (t, tt) in &constrained_terms.term_types {
-        types[(mapping.term_to_integer(&t) - start_index) as usize] = *tt;
-    }
-
-    let function_terms_set: HashSet<_> = constrained_terms
-        .terms
-        .iter()
-        .chain(return_and_parameter_terms)
-        .map(|t| mapping.term_to_integer(t))
-        .collect();
-
-    let mut constraints = vec![];
-    let mut sentinel_info = None;
-
-    for c in &constrained_terms.constraints {
-        if let Constraint::Inclusion { term, node } = &c {
-            let abstract_index = mapping.term_to_integer(term);
-            if function_terms_set.contains(&abstract_index) {
-                let relative_index = abstract_index - start_index;
-                let term_type = types[relative_index as usize];
-                if matches!(term_type, TermType::Function(_, _)) {
-                    if sentinel_info.is_some() {
-                        panic!("Multiple function terms found");
-                    }
-                    sentinel_info = Some(TemplateSentinelInfo {
-                        pointer_node: mapping.term_to_integer(node),
-                        term_type,
-                    });
-                    continue;
-                }
-            }
-        }
-        constraints.push(c.map_terms(|t| {
-            let index = mapping.term_to_integer(t);
-            if function_terms_set.contains(&index) {
-                TemplateTerm::Internal(index - start_index)
-            } else {
-                TemplateTerm::Global(index)
-            }
-        }));
-    }
-
-    let sentinel = sentinel_info.expect("No function term found");
-
-    (
-        FunctionTemplate {
-            _fun_name: fun_name.clone(),
-            start_index,
-            types,
-            constraints,
-        },
-        sentinel,
-    )
-}
-
 impl<T, S, C> Solver<ContextSensitiveInput<T, C>> for ContextWavePropagationSolver<S, C>
 where
     T: Hash + Eq + Clone + Debug,
@@ -515,24 +364,12 @@ where
     type Solution = ContextWavePropagationSolverState<T, S, C>;
 
     fn solve(self, input: ContextSensitiveInput<T, C>) -> Self::Solution {
-        let terms = input
-            .global
-            .terms
-            .iter()
-            .chain(input.functions.iter().flat_map(|t| {
-                t.return_and_parameter_terms
-                    .iter()
-                    .chain(&t.constrained_terms.terms)
-            }))
-            .cloned()
-            .collect();
-        let mapping = GenericIdMap::new(terms);
+        let mapping = GenericIdMap::from_context_input(&input);
 
         let mut sols = vec![S::new(); input.global.terms.len()];
         let mut subset: Vec<HashMap<IntegerTerm, Offsets>> =
             vec![HashMap::new(); input.global.terms.len()];
         let mut rev_subset = vec![HashSet::new(); input.global.terms.len()];
-        let instantiated_contexts = vec![HashMap::new(); input.functions.len()];
         let mut abstract_indices = Vec::with_capacity(mapping.terms.len());
         abstract_indices.extend(0..input.global.terms.len() as IntegerTerm);
 
@@ -542,30 +379,25 @@ where
             term_types[abstract_term as usize] = *tt;
         }
 
-        let mut templates = Vec::with_capacity(input.functions.len());
-        let mut sentinel_functions = HashMap::new();
-
-        for (i, (template, sentinel_info)) in input
-            .functions
-            .iter()
-            .map(|f| function_to_template(f, &mapping))
-            .enumerate()
-        {
-            let sentinel_index = sols.len() as IntegerTerm;
-            sols.push(S::new());
-            term_types.push(sentinel_info.term_type);
-            sols[sentinel_info.pointer_node as usize].insert(sentinel_index);
-            subset.push(HashMap::new());
-            rev_subset.push(HashSet::new());
-            abstract_indices.push(template.start_index);
-
-            templates.push(template);
-            sentinel_functions.insert(sentinel_index, i as IntegerTerm);
-        }
-        let parents = Vec::from_iter(0..sols.len() as IntegerTerm);
-        let top_order = Vec::new();
+        let global = input.global.clone();
+        let entrypoints = input.entrypoints.clone();
 
         let empty_context = input.context_selector.empty();
+
+        let (context_state, function_term_infos) =
+            ContextState::from_context_input(&mapping, abstract_indices, input);
+
+        for function_term_info in function_term_infos {
+            let function_term_index = sols.len() as IntegerTerm;
+            sols.push(S::new());
+            term_types.push(function_term_info.term_type);
+            sols[function_term_info.pointer_node as usize].insert(function_term_index);
+            subset.push(HashMap::new());
+            rev_subset.push(HashSet::new());
+        }
+
+        let parents = Vec::from_iter(0..sols.len() as IntegerTerm);
+        let top_order = Vec::new();
 
         let left_conds = vec![];
         let right_conds = vec![];
@@ -576,10 +408,7 @@ where
         let p_cache_call_dummies = vec![];
         let mut state = ContextWavePropagationSolverState {
             mapping,
-            context_selector: input.context_selector,
-            templates,
-            instantiated_contexts,
-            sentinel_functions,
+            context_state,
             edges: Edges {
                 sols,
                 subset,
@@ -595,17 +424,16 @@ where
             term_types,
             parents,
             top_order,
-            abstract_indices,
         };
 
-        for c in input.global.constraints {
+        for c in global.constraints {
             state.add_constraint(
                 state.mapping.translate_constraint(&c),
                 empty_context.clone(),
             );
         }
 
-        for entrypoint in input.entrypoints {
+        for entrypoint in entrypoints {
             state.get_or_instantiate_function(entrypoint, empty_context.clone());
         }
 
@@ -625,10 +453,12 @@ where
     type TermSet = HashSet<T>;
 
     fn get(&self, term: &T) -> Self::TermSet {
-        let (fun_index, relative_index) = self.get_function_and_relative_index_from_term(term);
+        let (fun_index, relative_index) = self
+            .context_state
+            .get_function_and_relative_index_from_term(&self.mapping, term);
 
         match fun_index {
-            Some(i) => self.instantiated_contexts[i as usize]
+            Some(i) => self.context_state.instantiated_contexts[i as usize]
                 .iter()
                 .flat_map(|(_, start_index)| {
                     let concrete_index = start_index + relative_index;
@@ -636,12 +466,18 @@ where
                         [get_representative_no_mutation(&self.parents, concrete_index) as usize]
                         .iter()
                 })
-                .map(|concrete_index| self.concrete_to_input(concrete_index))
+                .map(|concrete_index| {
+                    self.context_state
+                        .concrete_to_input(&self.mapping, concrete_index)
+                })
                 .collect(),
             None => self.edges.sols
                 [get_representative_no_mutation(&self.parents, relative_index) as usize as usize]
                 .iter()
-                .map(|concrete_index| self.concrete_to_input(concrete_index))
+                .map(|concrete_index| {
+                    self.context_state
+                        .concrete_to_input(&self.mapping, concrete_index)
+                })
                 .collect(),
         }
     }
@@ -1083,8 +919,8 @@ where
         reps.into_iter()
             .map(|(t, node)| {
                 let inner = ContextWavePropagationNode {
-                    term: self.concrete_to_input(t),
-                    context: self.context_of_concrete_index(t),
+                    term: self.context_state.concrete_to_input(&self.mapping, t),
+                    context: self.context_state.context_of_concrete_index(t),
                     count: node.inner,
                 };
                 Node { inner, id: node.id }
@@ -1102,16 +938,24 @@ where
             }
 
             let inner = ContextWavePropagationNode {
-                term: self.concrete_to_input(from as IntegerTerm),
-                context: self.context_of_concrete_index(from as IntegerTerm),
+                term: self
+                    .context_state
+                    .concrete_to_input(&self.mapping, from as IntegerTerm),
+                context: self
+                    .context_state
+                    .context_of_concrete_index(from as IntegerTerm),
                 count: reps.get(&(from as u32)).unwrap().inner,
             };
             let from_node = Node { inner, id: from };
 
             for (to, weights) in outgoing {
                 let inner = ContextWavePropagationNode {
-                    term: self.concrete_to_input(*to as IntegerTerm),
-                    context: self.context_of_concrete_index(*to as IntegerTerm),
+                    term: self
+                        .context_state
+                        .concrete_to_input(&self.mapping, *to as IntegerTerm),
+                    context: self
+                        .context_state
+                        .context_of_concrete_index(*to as IntegerTerm),
                     count: reps.get(to).unwrap().inner,
                 };
                 let to_node = Node {

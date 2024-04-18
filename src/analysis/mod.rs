@@ -1,3 +1,4 @@
+use either::Either;
 use indexmap::IndexMap;
 use std::borrow::Cow;
 use std::fmt::{self, Debug, Display, Formatter};
@@ -163,14 +164,84 @@ impl PointsToAnalysis {
 }
 
 #[derive(Debug, Clone)]
-pub struct PointsToResult<'a, S: SolverSolution>(pub S, pub Vec<Cell<'a>>);
+pub struct PointsToResult<'a, S>(pub S, pub Vec<Cell<'a>>);
 
-pub struct FilteredResults<'a, 'b, S: SolverSolution, F1, F2> {
-    result: &'b PointsToResult<'a, S>,
+pub trait ResultTrait<'a> {
+    type Solution;
+    fn get(&self, cell: &Cell<'a>) -> Self::Solution;
+    fn iter_solutions<'b>(&'b self) -> Box<dyn Iterator<Item = (Cell<'a>, Self::Solution)> + 'b>
+    where
+        'a: 'b;
+    fn get_cells(&self) -> &[Cell<'a>];
+}
+
+impl<'a, S> ResultTrait<'a> for PointsToResult<'a, S>
+where
+    S: SolverSolution<Term = Cell<'a>>,
+{
+    type Solution = S::TermSet;
+
+    fn get(&self, cell: &Cell<'a>) -> Self::Solution {
+        self.0.get(cell)
+    }
+    fn iter_solutions<'b>(&'b self) -> Box<dyn Iterator<Item = (Cell<'a>, Self::Solution)> + 'b>
+    where
+        'a: 'b,
+    {
+        Box::new(self.1.iter().map(|c| (c.clone(), self.0.get(c))))
+    }
+    fn get_cells(&self) -> &[Cell<'a>] {
+        &self.1
+    }
+}
+
+pub struct FilteredResults<'a, F1, F2, R> {
+    result: &'a R,
     key_filter: F1,
     value_filter: F2,
-    include_strs: Vec<&'b str>,
-    exclude_strs: Vec<&'b str>,
+    include_strs: Vec<String>,
+    exclude_strs: Vec<String>,
+}
+
+impl<'a, 'b, F1, F2, R> ResultTrait<'a> for FilteredResults<'b, F1, F2, R>
+where
+    R: ResultTrait<'a>,
+    R::Solution: TermSetTrait<Term = Cell<'a>>,
+    F1: Fn(&Cell<'a>, &R::Solution) -> bool,
+    F2: Fn(&Cell<'a>) -> bool,
+{
+    type Solution = HashSet<Cell<'a>>;
+
+    fn get(&self, cell: &Cell<'a>) -> Self::Solution {
+        let cell_str = cell.to_string();
+        if !self.include_strs.is_empty() && !self.include_strs.iter().any(|s| cell_str.contains(s))
+        {
+            return HashSet::new();
+        }
+        if self.exclude_strs.iter().any(|s| cell_str.contains(s)) {
+            return HashSet::new();
+        }
+
+        self.result
+            .get(cell)
+            .iter()
+            .filter(&self.value_filter)
+            .collect()
+    }
+
+    fn iter_solutions<'c>(&'c self) -> Box<dyn Iterator<Item = (Cell<'a>, Self::Solution)> + 'c>
+    where
+        'a: 'c,
+    {
+        Box::new(
+            self.get_cells()
+                .iter()
+                .map(|cell| (cell.clone(), self.get(cell))),
+        )
+    }
+    fn get_cells(&self) -> &[Cell<'a>] {
+        self.result.get_cells()
+    }
 }
 
 impl<'a, S: SolverSolution> PointsToResult<'a, S> {
@@ -182,9 +253,9 @@ impl<'a, S: SolverSolution> PointsToResult<'a, S> {
         &'b self,
         key_filter: F1,
         value_filter: F2,
-        include_strs: Vec<&'b str>,
-        exclude_strs: Vec<&'b str>,
-    ) -> FilteredResults<'a, 'b, S, F1, F2> {
+        include_strs: Vec<String>,
+        exclude_strs: Vec<String>,
+    ) -> FilteredResults<'b, F1, F2, Self> {
         FilteredResults {
             result: self,
             key_filter,
@@ -196,7 +267,7 @@ impl<'a, S: SolverSolution> PointsToResult<'a, S> {
 
     pub fn get_all_entries<'b>(
         &'b self,
-    ) -> FilteredResults<'a, 'b, S, fn(&Cell<'a>, &S::TermSet) -> bool, fn(&Cell<'a>) -> bool> {
+    ) -> FilteredResults<'b, fn(&Cell<'a>, &S::TermSet) -> bool, fn(&Cell<'a>) -> bool, Self> {
         FilteredResults {
             result: self,
             key_filter: |_, _| true,
@@ -205,28 +276,15 @@ impl<'a, S: SolverSolution> PointsToResult<'a, S> {
             exclude_strs: Vec::new(),
         }
     }
-}
 
-impl<'a, 'b, S, F1, F2> FilteredResults<'a, 'b, S, F1, F2>
-where
-    S: SolverSolution<Term = Cell<'a>>,
-    S::TermSet: FromIterator<Cell<'a>>,
-    F1: Fn(&Cell<'a>, &S::TermSet) -> bool,
-    F2: Fn(&Cell<'a>) -> bool,
-{
-    pub fn iter_solutions(&'b self) -> impl Iterator<Item = (Cell<'a>, S::TermSet)> + 'b {
-        self.result
-            .1
-            .iter()
-            .map(|cell| (cell.clone(), self.result.0.get(cell)))
-            .map(|(cell, set)| (cell, set.iter().filter(&self.value_filter).collect()))
-            .filter(|(cell, set)| {
-                let cell_str = cell.to_string();
-                (self.key_filter)(cell, set)
-                    && (self.include_strs.is_empty()
-                        || self.include_strs.iter().any(|s| cell_str.contains(s)))
-                    && (self.exclude_strs.iter().all(|s| !cell_str.contains(s)))
-            })
+    fn test<'b>(&'b self) -> FilteredResults<'b, (), (), Self> {
+        FilteredResults {
+            result: self,
+            key_filter: (),
+            value_filter: (),
+            include_strs: Vec::new(),
+            exclude_strs: Vec::new(),
+        }
     }
 }
 
@@ -235,21 +293,26 @@ where
     S: SolverSolution<Term = Cell<'a>>,
     S::TermSet: fmt::Debug + IntoIterator<Item = Cell<'a>> + FromIterator<Cell<'a>>,
 {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        let filtered = self.get_all_entries();
-        writeln!(f, "{filtered}")?;
+    fn fmt<'b, 'c>(&'b self, f: &'c mut Formatter<'_>) -> fmt::Result {
+        let filtered: FilteredResults<
+            'b,
+            fn(&Cell<'a>, &S::TermSet) -> bool,
+            fn(&Cell<'a>) -> bool,
+            Self,
+        > = self.get_all_entries();
+        filtered.fmt(f)?;
+        // let filtered = self.test();
+        // writeln!(f, "{filtered}")?;
         Ok(())
     }
 }
 
-impl<'a, 'b, S, F1, F2> Display for FilteredResults<'a, 'b, S, F1, F2>
+impl<'a, 'b, F1, F2, R> Display for FilteredResults<'b, F1, F2, R>
 where
-    S: SolverSolution<Term = Cell<'a>>,
-    S::TermSet: fmt::Debug + FromIterator<Cell<'a>>,
-    F1: Fn(&Cell<'a>, &S::TermSet) -> bool,
-    F2: Fn(&Cell<'a>) -> bool,
+    Self: ResultTrait<'a>,
+    <Self as ResultTrait<'a>>::Solution: Debug,
 {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt<'d, 'c>(&'d self, f: &'c mut Formatter<'_>) -> fmt::Result {
         for (cell, set) in self.iter_solutions() {
             writeln!(f, "[[{cell}]] = {set:#?}")?;
         }

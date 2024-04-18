@@ -48,6 +48,12 @@ pub struct Args {
     /// Set call string length when using context-sensitivity (range: 0 - 2)
     #[arg(short = 'c', long, default_value_t = 1)]
     pub call_string: usize,
+    /// List of points-to queries
+    #[arg(long)]
+    pub points_to_queries: Vec<String>,
+    /// List of pointed-by queries
+    #[arg(long)]
+    pub pointed_by_queries: Vec<String>,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]

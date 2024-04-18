@@ -1,14 +1,12 @@
-use arrayvec::ArrayVec;
-use core::fmt;
 use hashbrown::{HashMap, HashSet};
 use roaring::RoaringBitmap;
-use std::fmt::{Debug, Display, Formatter};
+use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
-use std::ptr;
-use std::rc::Rc;
 
 mod basic;
+mod basic_demand;
+mod context;
 mod context_wave_prop;
 mod shared_bitvec;
 mod stats;
@@ -24,6 +22,11 @@ pub use context_wave_prop::SharedBitVecContextWavePropagationSolver;
 pub use stats::StatSolver;
 pub use wave_prop::{
     HashWavePropagationSolver, RoaringWavePropagationSolver, SharedBitVecWavePropagationSolver,
+};
+
+pub use context::{
+    CallSite, CallStringSelector, ContextInsensitiveSelector, ContextSelector,
+    ContextSensitiveInput, ContextSensitiveSolver, DemandContextSensitiveInput, FunctionInput,
 };
 
 use crate::visualizer::Node;
@@ -196,6 +199,11 @@ enum UnivCond<T: Clone> {
     SubsetRight { left: T, offset: usize },
 }
 
+pub enum Demand<T> {
+    PointsTo(T),
+    PointedBy(T),
+}
+
 pub trait TermSetTrait: Clone + Default + PartialEq {
     type Term;
 
@@ -366,150 +374,19 @@ pub trait SolverInput {
     type Term;
 }
 
-#[derive(Debug)]
-pub struct FunctionInput<T> {
-    pub fun_name: Rc<str>,
-    pub return_and_parameter_terms: Vec<T>,
-    pub constrained_terms: ConstrainedTerms<T>,
+pub type ContextInsensitiveInput<T> = ConstrainedTerms<T>;
+
+pub struct DemandInput<T, I> {
+    pub input: I,
+    pub demands: Demand<T>,
 }
 
-#[derive(Debug)]
-pub struct ContextSensitiveInput<T, C> {
-    pub global: ConstrainedTerms<T>,
-    pub functions: Vec<FunctionInput<T>>,
-    pub entrypoints: Vec<usize>,
-    pub context_selector: C,
-}
-
-impl<T, C> SolverInput for ContextSensitiveInput<T, C> {
+impl<T, I> SolverInput for DemandInput<T, I>
+where
+    I: SolverInput<Term = T>,
+{
     type Term = T;
 }
-
-pub trait ContextSelector: Debug {
-    type Context: Clone + Debug + PartialEq + Eq + Hash;
-    fn select_context(&self, current: &Self::Context, call_site: CallSite) -> Self::Context;
-    fn empty(&self) -> Self::Context;
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct ContextInsensitiveContext;
-
-impl Display for ContextInsensitiveContext {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "()")
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct ContextInsensitiveSelector;
-
-impl ContextSelector for ContextInsensitiveSelector {
-    type Context = ContextInsensitiveContext;
-
-    fn select_context(&self, _: &Self::Context, _: CallSite) -> Self::Context {
-        ContextInsensitiveContext
-    }
-
-    fn empty(&self) -> Self::Context {
-        ContextInsensitiveContext
-    }
-}
-
-#[derive(PartialEq, Eq, Clone, Debug)]
-pub struct CallSiteInner {
-    pub desc: String,
-    pub func_type_index: u32,
-}
-
-#[derive(Clone, Eq, Debug)]
-pub struct CallSite(pub Rc<CallSiteInner>);
-
-impl CallSite {
-    pub fn new(desc: String, func_type: u32) -> Self {
-        CallSite(Rc::new(CallSiteInner {
-            desc,
-            func_type_index: func_type,
-        }))
-    }
-}
-
-impl PartialEq for CallSite {
-    fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-impl Hash for CallSite {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        ptr::hash(Rc::as_ptr(&self.0), state);
-    }
-}
-
-impl Display for CallSite {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "{}", &self.0.desc)
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct CallStringSelector<const MAX: usize> {
-    call_string_length: usize,
-}
-
-#[derive(PartialEq, Eq, Hash, Clone, Debug)]
-pub struct CallStringContext<const MAX: usize>(ArrayVec<CallSite, MAX>);
-
-impl<const MAX: usize> CallStringSelector<MAX> {
-    /// Construct a `CallStringSelector` with `call_string_length = 0`
-    pub fn new() -> Self {
-        Self::with_call_string_length(MAX)
-    }
-
-    pub fn with_call_string_length(length: usize) -> Self {
-        if length as usize > MAX {
-            panic!("Length should be less than or equal to MAX");
-        }
-        Self {
-            call_string_length: length,
-        }
-    }
-}
-
-impl<const K: usize> ContextSelector for CallStringSelector<K> {
-    type Context = CallStringContext<K>;
-
-    fn select_context(&self, current: &Self::Context, call_site: CallSite) -> Self::Context {
-        let mut context = current.clone();
-
-        if self.call_string_length == 0 {
-            return context;
-        }
-
-        if context.0.len() == self.call_string_length {
-            context.0.remove(0);
-        }
-        context.0.push(call_site);
-        context
-    }
-
-    fn empty(&self) -> Self::Context {
-        CallStringContext(ArrayVec::new())
-    }
-}
-
-impl<const K: usize> Display for CallStringContext<K> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let string = self
-            .0
-            .iter()
-            .map(CallSite::to_string)
-            .collect::<Vec<_>>()
-            .join(", ");
-        writeln!(f, "[{string}]",)
-    }
-}
-
-pub type ContextInsensitiveInput<T> = ConstrainedTerms<T>;
 
 impl<T> SolverInput for ContextInsensitiveInput<T> {
     type Term = T;
@@ -541,10 +418,6 @@ impl TermType {
         self == TermType::Basic
     }
 }
-
-pub trait ContextSensitiveSolver<T, C>: Solver<ContextSensitiveInput<T, C>> {}
-
-impl<S, T, C> ContextSensitiveSolver<T, C> for S where S: Solver<ContextSensitiveInput<T, C>> {}
 
 // pub trait ContextSensitiveExt {
 //     fn with_flat_context(self) -> WithFlatContext<Self>;
@@ -728,6 +601,21 @@ where
             .map(|(i, t)| (t, i as IntegerTerm))
             .collect();
         Self { terms, term_map }
+    }
+
+    fn from_context_input<C>(input: &ContextSensitiveInput<T, C>) -> Self {
+        let terms = input
+            .global
+            .terms
+            .iter()
+            .chain(input.functions.iter().flat_map(|t| {
+                t.return_and_parameter_terms
+                    .iter()
+                    .chain(&t.constrained_terms.terms)
+            }))
+            .cloned()
+            .collect();
+        GenericIdMap::new(terms)
     }
 
     fn terms_as_nodes(&self) -> Vec<Node<T>> {

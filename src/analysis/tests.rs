@@ -10,12 +10,13 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use test_generator::test_resources;
 
-use crate::analysis::{Config, PointsToAnalysis};
+use crate::analysis::{Config, PointsToAnalysis, ResultTrait};
 use crate::solver::{
     BasicHashSolver, BasicRoaringSolver, BasicSharedBitVecSolver, CallStringSelector,
-    ContextInsensitiveSolver, ContextSensitiveInput, GenericSolver, HashWavePropagationSolver,
-    RoaringWavePropagationSolver, SharedBitVecContextWavePropagationSolver,
-    SharedBitVecWavePropagationSolver, Solver, SolverSolution, TermSetTrait,
+    ContextInsensitiveSolver, ContextSelector, ContextSensitiveInput, GenericSolver,
+    HashWavePropagationSolver, RoaringWavePropagationSolver,
+    SharedBitVecContextWavePropagationSolver, SharedBitVecWavePropagationSolver, Solver,
+    SolverSolution, TermSetTrait,
 };
 
 use super::Cell;
@@ -88,10 +89,10 @@ fn parse_points_to<'a>(
         .collect()
 }
 
-fn run_test_template<S>(resource: &str, solver: S)
+fn run_test_template<S, C>(resource: &str, solver: S, context_selector: C)
 where
-    for<'a> S: Solver<ContextSensitiveInput<Cell<'a>, CallStringSelector::<2>>> + Sized,
-    for<'a> <<S as Solver<ContextSensitiveInput<Cell<'a>, CallStringSelector::<2>>>>::Solution as SolverSolution>::TermSet: FromIterator<Cell<'a>>,
+    for<'a> S: Solver<ContextSensitiveInput<Cell<'a>, C>> + Sized,
+    C: ContextSelector,
 {
     dbg!(resource);
     let config_file = File::open(resource).expect("Could not open file");
@@ -116,18 +117,10 @@ where
 
     dbg!(&expected_points_to);
 
-    let result = PointsToAnalysis::run(
-        solver,
-        &module,
-        CallStringSelector::<2>::new(),
-        &Config::default(),
-    );
+    let result = PointsToAnalysis::run(solver, &module, context_selector, &Config::default());
 
-    let actual_points_to: HashMap<Cell, HashSet<Cell>> = result
-        .get_all_entries()
-        .iter_solutions()
-        .map(|(c, ts)| (c, ts.iter().collect()))
-        .collect();
+    let actual_points_to: HashMap<Cell, HashSet<Cell>> =
+        result.get_all_entries().iter_solutions().collect();
 
     dbg!(&actual_points_to);
 
@@ -144,67 +137,74 @@ where
 
 #[test_resources("res/context_insensitive/**/test_config.json")]
 fn hash(resource: &str) {
-    run_test_template::<GenericSolver<_>>(
+    run_test_template(
         resource,
         BasicHashSolver::new().as_context_sensitive().as_generic(),
+        CallStringSelector::<2>::new(),
     );
 }
 
 #[test_resources("res/context_insensitive/**/test_config.json")]
 fn roaring(resource: &str) {
-    run_test_template::<GenericSolver<_>>(
+    run_test_template(
         resource,
         BasicRoaringSolver::new()
             .as_context_sensitive()
             .as_generic(),
+        CallStringSelector::<2>::new(),
     )
 }
 
 #[test_resources("res/context_insensitive/**/test_config.json")]
 fn shared_bit_vec(resource: &str) {
-    run_test_template::<GenericSolver<_>>(
+    run_test_template(
         resource,
         BasicSharedBitVecSolver::new()
             .as_context_sensitive()
             .as_generic(),
+        CallStringSelector::<2>::new(),
     )
 }
 
 #[test_resources("res/context_insensitive/**/test_config.json")]
 fn wave_prop(resource: &str) {
-    run_test_template::<GenericSolver<_>>(
+    run_test_template(
         resource,
         HashWavePropagationSolver::new()
             .as_context_sensitive()
             .as_generic(),
+        CallStringSelector::<2>::new(),
     )
 }
 
 #[test_resources("res/context_insensitive/**/test_config.json")]
 fn roaring_wave_prop(resource: &str) {
-    run_test_template::<GenericSolver<_>>(
+    run_test_template(
         resource,
         RoaringWavePropagationSolver::new()
             .as_context_sensitive()
             .as_generic(),
+        CallStringSelector::<2>::new(),
     )
 }
 
 #[test_resources("res/context_insensitive/**/test_config.json")]
 fn shared_bit_vec_wave_prop(resource: &str) {
-    run_test_template::<GenericSolver<_>>(
+    run_test_template(
         resource,
         SharedBitVecWavePropagationSolver::new()
             .as_context_sensitive()
             .as_generic(),
+        CallStringSelector::<2>::new(),
     )
 }
 
 #[test_resources("res/context_insensitive/**/test_config.json")]
 #[test_resources("res/context_sensitive/**/test_config.json")]
 fn context_shared_bitvec_wave_prop(resource: &str) {
-    run_test_template::<SharedBitVecContextWavePropagationSolver<_>>(
+    run_test_template(
         resource,
         SharedBitVecContextWavePropagationSolver::new(),
+        CallStringSelector::<2>::new(),
     )
 }

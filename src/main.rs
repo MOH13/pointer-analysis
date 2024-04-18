@@ -4,24 +4,36 @@ use clap::Parser;
 use llvm_ir::Module;
 use pointer_analysis::analysis::{Cell, Config, PointsToAnalysis, PointsToResult};
 use pointer_analysis::cli::{Args, SolverMode, TermSet};
-use pointer_analysis::solver::HashWavePropagationSolver;
 use pointer_analysis::solver::{BasicHashSolver, BasicRoaringSolver, StatSolver};
 use pointer_analysis::solver::{
     BasicSharedBitVecSolver, CallStringSelector, ContextInsensitiveSolver, JustificationSolver,
     RoaringWavePropagationSolver, SharedBitVecContextWavePropagationSolver,
     SharedBitVecWavePropagationSolver, Solver, SolverSolution, TermSetTrait,
 };
+use pointer_analysis::solver::{Demand, HashWavePropagationSolver};
 use std::fmt::Debug;
 use std::io;
 use std::io::Write;
 
 const STRING_FILTER: &'static str = ".str.";
 
-fn show_output<'a, S>(result: PointsToResult<'a, S>, args: &Args)
-where
+fn get_demands<'a>(args: &Args) -> Vec<Demand<Cell<'a>>> {
+    args.points_to_queries
+        .iter()
+        .map(|s| Demand::PointsTo(s.parse().unwrap()))
+        .collect()
+}
+
+fn show_output<'a, S>(
+    result: PointsToResult<'a, S>,
+    args: &Args,
+    demand_filter: Option<&[Demand<Cell<'a>>]>,
+) where
     S: SolverSolution<Term = Cell<'a>>,
     S::TermSet: Debug + IntoIterator<Item = Cell<'a>> + FromIterator<Cell<'a>>,
 {
+    let demands = get_demands(args);
+
     if !args.dont_output {
         let filtered_result = result.get_filtered_entries(
             |c, set| {
@@ -30,10 +42,13 @@ where
                     && (!args.exclude_strings || !c.to_string().contains(STRING_FILTER))
             },
             |pointee| (!args.exclude_strings || !pointee.to_string().contains(STRING_FILTER)),
-            args.include_keywords.iter().map(|s| s.as_str()).collect(),
-            args.exclude_keywords.iter().map(|s| s.as_str()).collect(),
+            args.include_keywords.clone(),
+            args.exclude_keywords.clone(),
         );
-        println!("{filtered_result}");
+        match demand_filter {
+            Some(demands) => {}
+            None => println!("{filtered_result}"),
+        }
     }
 
     if args.interactive_output {
@@ -71,6 +86,8 @@ fn main() -> io::Result<()> {
         .init()
         .unwrap();
 
+    let demands = get_demands(&args);
+
     let file_path = args.file_path.clone();
     let module = Module::from_bc_path(&file_path).expect("Error parsing bc file");
 
@@ -95,7 +112,7 @@ fn main() -> io::Result<()> {
                 ),
                 None => PointsToAnalysis::run(solver, &module, context_selector, &config),
             };
-            show_output(result, &args);
+            show_output(result, &args, Some(&demands));
         }
         (SolverMode::Basic, TermSet::Roaring, visualize) => {
             let solver = BasicRoaringSolver::new()
@@ -111,7 +128,7 @@ fn main() -> io::Result<()> {
                 ),
                 None => PointsToAnalysis::run(solver, &module, context_selector, &config),
             };
-            show_output(result, &args);
+            show_output(result, &args, Some(&demands));
         }
         (SolverMode::Basic, TermSet::SharedBitVec, visualize) => {
             let solver = BasicSharedBitVecSolver::new()
@@ -127,7 +144,7 @@ fn main() -> io::Result<()> {
                 ),
                 None => PointsToAnalysis::run(solver, &module, context_selector, &config),
             };
-            show_output(result, &args);
+            show_output(result, &args, Some(&demands));
         }
         // Wave prop solver
         // Basic solver
@@ -145,7 +162,7 @@ fn main() -> io::Result<()> {
                 ),
                 None => PointsToAnalysis::run(solver, &module, context_selector, &config),
             };
-            show_output(result, &args);
+            show_output(result, &args, Some(&demands));
         }
         (SolverMode::Wave, TermSet::Roaring, visualize) => {
             let solver = RoaringWavePropagationSolver::new()
@@ -161,7 +178,7 @@ fn main() -> io::Result<()> {
                 ),
                 None => PointsToAnalysis::run(solver, &module, context_selector, &config),
             };
-            show_output(result, &args);
+            show_output(result, &args, Some(&demands));
         }
         (SolverMode::Wave, TermSet::SharedBitVec, visualize) => {
             let solver = SharedBitVecWavePropagationSolver::new()
@@ -177,7 +194,7 @@ fn main() -> io::Result<()> {
                 ),
                 None => PointsToAnalysis::run(solver, &module, context_selector, &config),
             };
-            show_output(result, &args);
+            show_output(result, &args, Some(&demands));
         }
         (SolverMode::Context, _, visualize) => {
             let solver = SharedBitVecContextWavePropagationSolver::new();
@@ -191,7 +208,7 @@ fn main() -> io::Result<()> {
                 ),
                 None => PointsToAnalysis::run(solver, &module, context_selector, &config),
             };
-            show_output(result, &args);
+            show_output(result, &args, Some(&demands));
         }
         (SolverMode::DryRun, _, visualize) => {
             let solver = StatSolver::new().as_context_sensitive();
@@ -205,7 +222,7 @@ fn main() -> io::Result<()> {
                 ),
                 None => PointsToAnalysis::run(solver, &module, context_selector, &config),
             };
-            show_output(result, &args);
+            show_output(result, &args, Some(&demands));
         }
         (SolverMode::Justify, ..) => {
             let solver = JustificationSolver::new().as_context_sensitive();
