@@ -6,9 +6,14 @@ use std::marker::PhantomData;
 
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
 
-use super::{ConstrainedTerms, Constraint, Solver, SolverSolution, TermSetTrait};
+use super::{
+    ConstrainedTerms, Constraint, ContextInsensitiveInput, Solver, SolverExt, SolverSolution,
+    TermSetTrait,
+};
 
-pub struct StatSolver<T> {
+pub struct StatSolver<T>(PhantomData<T>);
+
+pub struct StatSolverState<T> {
     terms: Vec<T>,
     inclusions: Vec<(T, T)>,
     subsets: Vec<(T, usize, T)>,
@@ -65,7 +70,7 @@ impl<T: Hash + Eq + Clone> TermSetTrait for DummyTermSet<T> {
     }
 }
 
-impl<T: Eq + PartialEq + Hash + Clone> StatSolver<T> {
+impl<T: Eq + PartialEq + Hash + Clone> StatSolverState<T> {
     pub fn new() -> Self {
         Self {
             terms: vec![],
@@ -99,15 +104,8 @@ impl<T: Eq + PartialEq + Hash + Clone> StatSolver<T> {
             Constraint::CallDummy { .. } => {}
         }
     }
-}
 
-impl<T: Eq + PartialEq + Hash + Clone> Solver<ConstrainedTerms<T>> for StatSolver<T>
-where
-    T: Hash + Eq + Clone + Debug,
-{
-    type Solution = StatSolver<T>;
-
-    fn solve(mut self, input: ConstrainedTerms<T>) -> Self::Solution {
+    fn solve(&mut self, input: ConstrainedTerms<T>) {
         self.terms = input.terms;
         self.inclusions = vec![];
         self.subsets = vec![];
@@ -145,12 +143,31 @@ where
             + self.cond_lefts.len()
             + self.cond_rights.len();
         println!("Total:\t\t{total}");
-
-        self
     }
 }
 
-impl<T> SolverSolution for StatSolver<T>
+impl<T> StatSolver<T> {
+    pub fn new() -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<T: Eq + PartialEq + Hash + Clone> SolverExt for StatSolver<T> {}
+
+impl<T: Eq + PartialEq + Hash + Clone> Solver<ContextInsensitiveInput<T>> for StatSolver<T>
+where
+    T: Hash + Eq + Clone + Debug,
+{
+    type Solution = StatSolverState<T>;
+
+    fn solve(&self, input: ContextInsensitiveInput<T>) -> Self::Solution {
+        let mut state = StatSolverState::new();
+        state.solve(input);
+        state
+    }
+}
+
+impl<T> SolverSolution for StatSolverState<T>
 where
     T: Hash + Eq + Clone + Debug,
 {
@@ -162,7 +179,7 @@ where
     }
 }
 
-impl<T> Graph for StatSolver<T>
+impl<T> Graph for StatSolverState<T>
 where
     T: Display + Debug + Clone + PartialEq + Eq + Hash,
 {

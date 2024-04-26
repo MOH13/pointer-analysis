@@ -6,14 +6,16 @@ pub mod visualizer;
 
 mod util {
     pub trait GetTwoMutExt<T> {
-        fn get_two_mut(&mut self, i: usize, j: usize) -> (&mut T, &mut T);
+        fn get_two_mut(&mut self, i: usize, j: usize) -> Option<(&mut T, &mut T)>;
     }
 
     impl<T> GetTwoMutExt<T> for [T] {
-        fn get_two_mut(&mut self, i: usize, j: usize) -> (&mut T, &mut T) {
-            assert_ne!(i, j);
+        fn get_two_mut(&mut self, i: usize, j: usize) -> Option<(&mut T, &mut T)> {
+            if i == j {
+                return None;
+            }
             let ptr = self.as_mut_ptr();
-            unsafe { (&mut *ptr.add(i), &mut *ptr.add(j)) }
+            unsafe { Some((&mut *ptr.add(i), &mut *ptr.add(j))) }
         }
     }
 }

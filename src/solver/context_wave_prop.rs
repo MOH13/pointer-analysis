@@ -15,7 +15,7 @@ use super::context::{
 use super::shared_bitvec::SharedBitVec;
 use super::{
     edges_between, CallSite, Constraint, ContextSelector, ContextSensitiveInput, FunctionInput,
-    IntegerTerm, Offsets, Solver, SolverSolution, TermSetTrait, TermType,
+    IntegerTerm, Offsets, Solver, SolverExt, SolverSolution, TermSetTrait, TermType,
 };
 use crate::solver::GenericIdMap;
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
@@ -55,8 +55,7 @@ impl<S, C> ContextWavePropagationSolver<S, C> {
 }
 
 pub struct ContextWavePropagationSolverState<T, S, C: ContextSelector> {
-    mapping: GenericIdMap<T>,
-    context_state: ContextState<C>,
+    context_state: ContextState<T, C>,
     edges: Edges<S, C>,
     term_types: Vec<TermType>,
     parents: Vec<IntegerTerm>,
@@ -148,7 +147,7 @@ where
             self.edges.p_cache_call_dummies[i].union_assign(&p_new);
             for t in p_new.iter() {
                 changed |= self
-                    .offset_term_vec_offsets(t, Some(call_site.clone()), 0, &context)
+                    .try_offset_term(t, Some(call_site.clone()), 0, &context)
                     .is_some();
             }
         }
@@ -173,9 +172,7 @@ where
             let p_new = self.edges.sols[cond_node as usize].difference(&self.edges.p_cache_left[i]);
             self.edges.p_cache_left[i].union_assign(&p_new);
             for t in p_new.iter() {
-                if let Some(t) =
-                    self.offset_term_vec_offsets(t, call_site.clone(), offset, &context)
-                {
+                if let Some(t) = self.try_offset_term(t, call_site.clone(), offset, &context) {
                     let t = get_representative(&mut self.parents, t);
                     if t == right {
                         continue;
@@ -211,9 +208,7 @@ where
                 self.edges.sols[cond_node as usize].difference(&self.edges.p_cache_right[i]);
             self.edges.p_cache_right[i].union_assign(&p_new);
             for t in p_new.iter() {
-                if let Some(t) =
-                    self.offset_term_vec_offsets(t, call_site.clone(), offset, &context)
-                {
+                if let Some(t) = self.try_offset_term(t, call_site.clone(), offset, &context) {
                     let t = get_representative(&mut self.parents, t);
                     if t == left {
                         continue;
@@ -230,14 +225,14 @@ where
         changed
     }
 
-    fn offset_term_vec_offsets(
+    fn try_offset_term(
         &mut self,
         term: IntegerTerm,
         call_site: Option<CallSite>,
         offset: usize,
         context: &C::Context,
     ) -> Option<IntegerTerm> {
-        let term_type = self.term_types[usize::try_from(term).unwrap()];
+        let term_type = self.term_types[term as usize];
         match term_type {
             TermType::Basic if call_site.is_none() && offset == 0 => Some(term),
             TermType::Struct(allowed) if call_site.is_none() => {
@@ -355,6 +350,13 @@ fn propagate_terms_into<S: TermSetTrait<Term = IntegerTerm>>(
     }
 }
 
+impl<S, C> SolverExt for ContextWavePropagationSolver<S, C>
+where
+    S: TermSetTrait<Term = IntegerTerm> + Debug,
+    C: ContextSelector,
+{
+}
+
 impl<T, S, C> Solver<ContextSensitiveInput<T, C>> for ContextWavePropagationSolver<S, C>
 where
     T: Hash + Eq + Clone + Debug,
@@ -363,37 +365,29 @@ where
 {
     type Solution = ContextWavePropagationSolverState<T, S, C>;
 
-    fn solve(self, input: ContextSensitiveInput<T, C>) -> Self::Solution {
-        let mapping = GenericIdMap::from_context_input(&input);
-
-        let mut sols = vec![S::new(); input.global.terms.len()];
-        let mut subset: Vec<HashMap<IntegerTerm, Offsets>> =
-            vec![HashMap::new(); input.global.terms.len()];
-        let mut rev_subset = vec![HashSet::new(); input.global.terms.len()];
-        let mut abstract_indices = Vec::with_capacity(mapping.terms.len());
-        abstract_indices.extend(0..input.global.terms.len() as IntegerTerm);
-
-        let mut term_types = vec![TermType::Basic; input.global.terms.len()];
-        for (t, tt) in &input.global.term_types {
-            let abstract_term = mapping.term_to_integer(t);
-            term_types[abstract_term as usize] = *tt;
-        }
-
+    fn solve(&self, input: ContextSensitiveInput<T, C>) -> Self::Solution {
         let global = input.global.clone();
         let entrypoints = input.entrypoints.clone();
 
-        let empty_context = input.context_selector.empty();
+        let (context_state, function_term_infos) = ContextState::from_context_input(input);
+        let empty_context = context_state.context_selector.empty();
 
-        let (context_state, function_term_infos) =
-            ContextState::from_context_input(&mapping, abstract_indices, input);
+        let num_terms = context_state.num_concrete_terms();
 
-        for function_term_info in function_term_infos {
-            let function_term_index = sols.len() as IntegerTerm;
-            sols.push(S::new());
-            term_types.push(function_term_info.term_type);
-            sols[function_term_info.pointer_node as usize].insert(function_term_index);
-            subset.push(HashMap::new());
-            rev_subset.push(HashSet::new());
+        let mut sols = vec![S::new(); num_terms];
+        let subset: Vec<HashMap<IntegerTerm, Offsets>> = vec![HashMap::new(); num_terms];
+        let rev_subset = vec![HashSet::new(); num_terms];
+
+        let mut term_types = vec![TermType::Basic; sols.len()];
+        for (t, tt) in &global.term_types {
+            let abstract_term = context_state.mapping.term_to_integer(t);
+            term_types[abstract_term as usize] = *tt;
+        }
+
+        for (i, function_term_info) in function_term_infos.into_iter().enumerate() {
+            let fun_term = (global.terms.len() + i) as IntegerTerm;
+            term_types[fun_term as usize] = function_term_info.term_type;
+            sols[function_term_info.pointer_node as usize].insert(fun_term);
         }
 
         let parents = Vec::from_iter(0..sols.len() as IntegerTerm);
@@ -407,7 +401,6 @@ where
         let p_cache_right = vec![S::new(); right_conds.len()];
         let p_cache_call_dummies = vec![];
         let mut state = ContextWavePropagationSolverState {
-            mapping,
             context_state,
             edges: Edges {
                 sols,
@@ -428,7 +421,7 @@ where
 
         for c in global.constraints {
             state.add_constraint(
-                state.mapping.translate_constraint(&c),
+                state.context_state.mapping.translate_constraint(&c),
                 empty_context.clone(),
             );
         }
@@ -455,7 +448,7 @@ where
     fn get(&self, term: &T) -> Self::TermSet {
         let (fun_index, relative_index) = self
             .context_state
-            .get_function_and_relative_index_from_term(&self.mapping, term);
+            .get_function_and_relative_index_from_term(term);
 
         match fun_index {
             Some(i) => self.context_state.instantiated_contexts[i as usize]
@@ -466,18 +459,12 @@ where
                         [get_representative_no_mutation(&self.parents, concrete_index) as usize]
                         .iter()
                 })
-                .map(|concrete_index| {
-                    self.context_state
-                        .concrete_to_input(&self.mapping, concrete_index)
-                })
+                .map(|concrete_index| self.context_state.concrete_to_input(concrete_index))
                 .collect(),
             None => self.edges.sols
-                [get_representative_no_mutation(&self.parents, relative_index) as usize as usize]
+                [get_representative_no_mutation(&self.parents, relative_index) as usize]
                 .iter()
-                .map(|concrete_index| {
-                    self.context_state
-                        .concrete_to_input(&self.mapping, concrete_index)
-                })
+                .map(|concrete_index| self.context_state.concrete_to_input(concrete_index))
                 .collect(),
         }
     }
@@ -919,7 +906,7 @@ where
         reps.into_iter()
             .map(|(t, node)| {
                 let inner = ContextWavePropagationNode {
-                    term: self.context_state.concrete_to_input(&self.mapping, t),
+                    term: self.context_state.concrete_to_input(t),
                     context: self.context_state.context_of_concrete_index(t),
                     count: node.inner,
                 };
@@ -938,9 +925,7 @@ where
             }
 
             let inner = ContextWavePropagationNode {
-                term: self
-                    .context_state
-                    .concrete_to_input(&self.mapping, from as IntegerTerm),
+                term: self.context_state.concrete_to_input(from as IntegerTerm),
                 context: self
                     .context_state
                     .context_of_concrete_index(from as IntegerTerm),
@@ -950,9 +935,7 @@ where
 
             for (to, weights) in outgoing {
                 let inner = ContextWavePropagationNode {
-                    term: self
-                        .context_state
-                        .concrete_to_input(&self.mapping, *to as IntegerTerm),
+                    term: self.context_state.concrete_to_input(*to as IntegerTerm),
                     context: self
                         .context_state
                         .context_of_concrete_index(*to as IntegerTerm),

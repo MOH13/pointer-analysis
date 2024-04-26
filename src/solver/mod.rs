@@ -18,15 +18,15 @@ pub use basic::{
     BasicHashSolver, BasicRoaringSolver, BasicSharedBitVecSolver, JustificationSolver,
 };
 // pub use bit_vec::BasicBitVecSolver;
+pub use basic_demand::BasicDemandSolver;
+pub use context::{
+    CallSite, CallStringSelector, ContextInsensitiveSelector, ContextSelector,
+    ContextSensitiveInput, ContextSensitiveSolver, DemandContextSensitiveInput, FunctionInput,
+};
 pub use context_wave_prop::SharedBitVecContextWavePropagationSolver;
 pub use stats::StatSolver;
 pub use wave_prop::{
     HashWavePropagationSolver, RoaringWavePropagationSolver, SharedBitVecWavePropagationSolver,
-};
-
-pub use context::{
-    CallSite, CallStringSelector, ContextInsensitiveSelector, ContextSelector,
-    ContextSensitiveInput, ContextSensitiveSolver, DemandContextSensitiveInput, FunctionInput,
 };
 
 use crate::visualizer::Node;
@@ -340,13 +340,13 @@ impl<T> ConstrainedTerms<T> {
         self.constraints.extend(other.constraints);
     }
 }
-pub trait Solver<I>
+pub trait Solver<I>: SolverExt
 where
     I: SolverInput,
 {
     type Solution: SolverSolution<Term = I::Term>;
 
-    fn solve(self, input: I) -> Self::Solution;
+    fn solve(&self, input: I) -> Self::Solution;
 
     fn as_generic(self) -> GenericSolver<Self>
     where
@@ -354,6 +354,31 @@ where
         I: SolverInput<Term = IntegerTerm>,
     {
         GenericSolver::new(self)
+    }
+}
+
+pub trait SolverExt {
+    fn as_demand_driven(self) -> AsDemandDriven<Self>
+    where
+        Self: Sized,
+    {
+        AsDemandDriven(self)
+    }
+}
+
+pub struct AsDemandDriven<S>(pub S);
+
+impl<S> SolverExt for AsDemandDriven<S> where S: SolverExt {}
+
+impl<S, I, T> Solver<DemandInput<T, I>> for AsDemandDriven<S>
+where
+    S: Solver<I>,
+    I: SolverInput<Term = T>,
+{
+    type Solution = S::Solution;
+
+    fn solve(&self, input: DemandInput<T, I>) -> Self::Solution {
+        self.0.solve(input.input)
     }
 }
 
@@ -365,7 +390,7 @@ where
 // {
 //     type Solution = O;
 
-//     fn solve(self, input: I) -> Self::Solution {
+//     fn solve(&self, input: I) -> Self::Solution {
 //         self(input)
 //     }
 // }
@@ -378,7 +403,7 @@ pub type ContextInsensitiveInput<T> = ConstrainedTerms<T>;
 
 pub struct DemandInput<T, I> {
     pub input: I,
-    pub demands: Demand<T>,
+    pub demands: Vec<Demand<T>>,
 }
 
 impl<T, I> SolverInput for DemandInput<T, I>
@@ -438,18 +463,16 @@ impl TermType {
 // }
 
 pub trait ContextInsensitiveSolver<T>: Solver<ContextInsensitiveInput<T>> {
-    type ContextSensitiveSolver<C>: ContextSensitiveSolver<T, C>;
-
-    fn as_context_sensitive<C>(self) -> Self::ContextSensitiveSolver<C>;
+    fn as_context_sensitive<C>(self) -> AsContextSensitive<Self, C>
+    where
+        Self: Sized;
 }
 
 impl<S, T> ContextInsensitiveSolver<T> for S
 where
     S: Solver<ContextInsensitiveInput<T>> + Sized,
 {
-    type ContextSensitiveSolver<C> = AsContextSensitive<S, C>;
-
-    fn as_context_sensitive<C>(self) -> Self::ContextSensitiveSolver<C> {
+    fn as_context_sensitive<C>(self) -> AsContextSensitive<S, C> {
         AsContextSensitive(self, PhantomData)
     }
 }
@@ -457,13 +480,15 @@ where
 #[derive(Clone)]
 pub struct AsContextSensitive<S, C>(pub S, PhantomData<C>);
 
+impl<S, C> SolverExt for AsContextSensitive<S, C> where S: SolverExt {}
+
 impl<S, T, C> Solver<ContextSensitiveInput<T, C>> for AsContextSensitive<S, C>
 where
     S: Solver<ContextInsensitiveInput<T>>,
 {
     type Solution = S::Solution;
 
-    fn solve(self, mut input: ContextSensitiveInput<T, C>) -> Self::Solution {
+    fn solve(&self, mut input: ContextSensitiveInput<T, C>) -> Self::Solution {
         for f in input.functions.into_iter() {
             input.global.terms.extend(f.return_and_parameter_terms);
             input.global.combine(f.constrained_terms);
@@ -475,13 +500,15 @@ where
 #[derive(Clone)]
 pub struct WithFlatContext<S>(pub S);
 
+impl<S> SolverExt for WithFlatContext<S> where S: SolverExt {}
+
 impl<S, T, C> Solver<ContextSensitiveInput<T, C>> for WithFlatContext<S>
 where
     S: Solver<ContextSensitiveInput<T, ContextInsensitiveSelector>>,
 {
     type Solution = S::Solution;
 
-    fn solve(self, input: ContextSensitiveInput<T, C>) -> Self::Solution {
+    fn solve(&self, input: ContextSensitiveInput<T, C>) -> Self::Solution {
         self.0.solve(ContextSensitiveInput {
             global: input.global,
             entrypoints: (0..input.functions.len()).collect(),
@@ -494,13 +521,15 @@ where
 #[derive(Clone)]
 pub struct AsContextInsensitive<S>(pub S);
 
+impl<S> SolverExt for AsContextInsensitive<S> where S: SolverExt {}
+
 impl<S, T> Solver<ContextInsensitiveInput<T>> for AsContextInsensitive<S>
 where
     S: ContextSensitiveSolver<T, ContextInsensitiveSelector>,
 {
     type Solution = S::Solution;
 
-    fn solve(self, input: ContextInsensitiveInput<T>) -> Self::Solution {
+    fn solve(&self, input: ContextInsensitiveInput<T>) -> Self::Solution {
         self.0.solve(ContextSensitiveInput {
             global: input,
             functions: vec![],
@@ -521,6 +550,8 @@ impl<S> GenericSolver<S> {
     }
 }
 
+impl<S> SolverExt for GenericSolver<S> where S: SolverExt {}
+
 impl<S, T> Solver<ContextInsensitiveInput<T>> for GenericSolver<S>
 where
     T: Hash + Eq + Clone + Debug,
@@ -528,7 +559,7 @@ where
 {
     type Solution = GenericSolverSolution<S::Solution, T>;
 
-    fn solve(self, constrained_terms: ContextInsensitiveInput<T>) -> Self::Solution {
+    fn solve(&self, constrained_terms: ContextInsensitiveInput<T>) -> Self::Solution {
         let terms = constrained_terms.terms.clone();
         let mapping = GenericIdMap::new(terms);
 
@@ -549,7 +580,7 @@ where
 {
     type Solution = GenericSolverSolution<S::Solution, T>;
 
-    fn solve(self, input: ContextSensitiveInput<T, C>) -> Self::Solution {
+    fn solve(&self, input: ContextSensitiveInput<T, C>) -> Self::Solution {
         let terms = input
             .global
             .terms

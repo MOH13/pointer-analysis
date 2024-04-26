@@ -13,7 +13,8 @@ use roaring::RoaringBitmap;
 use super::shared_bitvec::SharedBitVec;
 use super::{
     edges_between, offset_term_vec_offsets, Constraint, ContextInsensitiveInput,
-    GenericSolverSolution, IntegerTerm, Offsets, Solver, SolverSolution, TermSetTrait, TermType,
+    GenericSolverSolution, IntegerTerm, Offsets, Solver, SolverExt, SolverSolution, TermSetTrait,
+    TermType,
 };
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
 
@@ -500,40 +501,44 @@ impl<T: TermSetTrait<Term = u32>> WavePropagationSolver<T> {
     }
 }
 
+impl<T: TermSetTrait<Term = IntegerTerm>> SolverExt for WavePropagationSolver<T> {}
+
 impl<T: TermSetTrait<Term = IntegerTerm>> Solver<ContextInsensitiveInput<IntegerTerm>>
     for WavePropagationSolver<T>
 {
     type Solution = Self;
 
-    fn solve(mut self, input: ContextInsensitiveInput<IntegerTerm>) -> Self::Solution {
-        self.sols = vec![T::new(); input.terms.len()];
-        self.edges = vec![HashMap::new(); input.terms.len()];
-        self.rev_edges = vec![HashSet::new(); input.terms.len()];
-        self.left_conds = vec![];
-        self.right_conds = vec![];
-        self.term_types = vec![TermType::Basic; input.terms.len()];
+    fn solve(&self, input: ContextInsensitiveInput<IntegerTerm>) -> Self::Solution {
+        let mut cloned_self = self.clone();
+
+        cloned_self.sols = vec![T::new(); input.terms.len()];
+        cloned_self.edges = vec![HashMap::new(); input.terms.len()];
+        cloned_self.rev_edges = vec![HashSet::new(); input.terms.len()];
+        cloned_self.left_conds = vec![];
+        cloned_self.right_conds = vec![];
+        cloned_self.term_types = vec![TermType::Basic; input.terms.len()];
         for (t, tt) in input.term_types {
-            self.term_types[t as usize] = tt;
+            cloned_self.term_types[t as usize] = tt;
         }
-        self.parents = Vec::from_iter(0..input.terms.len() as IntegerTerm);
-        self.top_order = Vec::new();
+        cloned_self.parents = Vec::from_iter(0..input.terms.len() as IntegerTerm);
+        cloned_self.top_order = Vec::new();
 
         for c in input.constraints {
-            self.add_constraint(c);
+            cloned_self.add_constraint(c);
         }
 
-        self.run_wave_propagation();
+        cloned_self.run_wave_propagation();
 
-        for i in 0..self.sols.len() {
-            let parent = self.parents[i];
+        for i in 0..cloned_self.sols.len() {
+            let parent = cloned_self.parents[i];
             if parent != i as u32 {
-                assert!(self.sols[i].len() == 0, "{i}, parent {parent}");
-                assert!(self.edges[i].len() == 0);
-                assert!(self.rev_edges[i].len() == 0);
+                assert!(cloned_self.sols[i].len() == 0, "{i}, parent {parent}");
+                assert!(cloned_self.edges[i].len() == 0);
+                assert!(cloned_self.rev_edges[i].len() == 0);
             }
         }
 
-        self
+        cloned_self
     }
 }
 

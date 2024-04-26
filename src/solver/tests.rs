@@ -75,6 +75,7 @@ macro_rules! solver_tests {
                         $( $var , )+
                     }
                     use Term::*;
+                    use $crate::solver::IntegerTerm;
                     let $solver = $crate::solver::BasicHashSolver::new().as_generic();
                     $body
                 }

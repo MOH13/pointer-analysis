@@ -180,9 +180,19 @@ pub struct FunctionTemplate {
     pub constraints: Vec<Constraint<TemplateTerm>>,
 }
 
+pub struct ContextState<T, C: ContextSelector> {
+    pub mapping: GenericIdMap<T>,
+    pub templates: Vec<FunctionTemplate>,
+    pub function_term_functions: HashMap<IntegerTerm, u32>,
+    pub instantiated_contexts: Vec<HashMap<C::Context, IntegerTerm>>,
+    pub context_selector: C,
+    /// Maps from concrete (instantiated) terms to their abstract term.
+    pub abstract_indices: Vec<IntegerTerm>,
+}
+
 pub fn function_to_template<T>(
-    function: &FunctionInput<T>,
     mapping: &GenericIdMap<T>,
+    function: &FunctionInput<T>,
 ) -> (FunctionTemplate, FunctionTermInfo)
 where
     T: Hash + Eq + Clone + Debug,
@@ -253,24 +263,15 @@ where
     )
 }
 
-pub struct ContextState<C: ContextSelector> {
-    pub templates: Vec<FunctionTemplate>,
-    pub function_term_functions: HashMap<IntegerTerm, u32>,
-    pub instantiated_contexts: Vec<HashMap<C::Context, IntegerTerm>>,
-    pub context_selector: C,
-    /// Maps from concrete (instantiated) terms to their abstract term.
-    pub abstract_indices: Vec<IntegerTerm>,
-}
+impl<T, C: ContextSelector> ContextState<T, C>
+where
+    T: Hash + Eq + Clone + Debug,
+{
+    pub fn from_context_input(input: ContextSensitiveInput<T, C>) -> (Self, Vec<FunctionTermInfo>) {
+        let mapping = GenericIdMap::from_context_input(&input);
 
-impl<C: ContextSelector> ContextState<C> {
-    pub fn from_context_input<T>(
-        mapping: &GenericIdMap<T>,
-        mut abstract_indices: Vec<IntegerTerm>,
-        input: ContextSensitiveInput<T, C>,
-    ) -> (Self, Vec<FunctionTermInfo>)
-    where
-        T: Hash + Eq + Clone + Debug,
-    {
+        let mut abstract_indices = (0..input.global.terms.len() as IntegerTerm).collect::<Vec<_>>();
+
         let mut templates = Vec::with_capacity(input.functions.len());
         let mut function_term_functions = HashMap::new();
         let instantiated_contexts = vec![HashMap::new(); input.functions.len()];
@@ -280,7 +281,7 @@ impl<C: ContextSelector> ContextState<C> {
         for (i, (template, function_term_info)) in input
             .functions
             .iter()
-            .map(|f| function_to_template(f, &mapping))
+            .map(|f| function_to_template(&mapping, f))
             .enumerate()
         {
             let function_term_index = abstract_indices.len() as IntegerTerm;
@@ -293,6 +294,7 @@ impl<C: ContextSelector> ContextState<C> {
         }
 
         let state = Self {
+            mapping,
             templates,
             function_term_functions,
             instantiated_contexts,
@@ -324,15 +326,11 @@ impl<C: ContextSelector> ContextState<C> {
         (instantiated_start_index as IntegerTerm, Some(template))
     }
 
-    pub fn get_function_and_relative_index_from_term<T>(
+    pub fn get_function_and_relative_index_from_term(
         &self,
-        mapping: &GenericIdMap<T>,
         term: &T,
-    ) -> (Option<IntegerTerm>, IntegerTerm)
-    where
-        T: Hash + Eq + Clone + Debug,
-    {
-        let abstract_index = mapping.term_to_integer(term);
+    ) -> (Option<IntegerTerm>, IntegerTerm) {
+        let abstract_index = self.mapping.term_to_integer(term);
 
         self.get_function_and_relative_index_from_abstract_index(abstract_index)
     }
@@ -383,10 +381,21 @@ impl<C: ContextSelector> ContextState<C> {
         }
     }
 
-    pub fn concrete_to_input<T>(&self, mapping: &GenericIdMap<T>, term: IntegerTerm) -> T
-    where
-        T: Hash + Eq + Clone + Debug,
-    {
-        mapping.integer_to_term(self.abstract_indices[term as usize])
+    pub fn concrete_to_input(&self, term: IntegerTerm) -> T {
+        self.mapping
+            .integer_to_term(self.abstract_indices[term as usize])
+    }
+
+    pub fn num_concrete_terms(&self) -> usize {
+        self.abstract_indices.len()
+    }
+
+    pub fn term_to_concrete_global(&self, term: &T) -> Option<IntegerTerm> {
+        let (fun_index, relative_index) = self.get_function_and_relative_index_from_term(term);
+        match fun_index {
+            Some(f) if relative_index == 0 => Some(self.templates[0].start_index + f),
+            None => Some(relative_index),
+            _ => None,
+        }
     }
 }

@@ -1,7 +1,15 @@
 use std::fmt::{self, Display, Formatter};
 use std::fs;
 use std::io;
+use std::marker::PhantomData;
 use std::ops::Deref;
+
+use hashbrown::HashSet;
+
+use std::fmt::Debug;
+use std::hash::Hash;
+
+use crate::solver::{Solver, SolverExt, SolverInput, SolverSolution};
 
 #[derive(Clone)]
 pub struct Edge<N, W> {
@@ -131,11 +139,124 @@ where
     }
 }
 
-pub fn visualize(graph: &impl Graph, path: &str) -> io::Result<()> {
-    let mut buf = vec![];
-    dot::render(&(graph,), &mut buf)?;
-    let mut out = String::from_utf8(buf).unwrap();
-    // Improves compatibility
-    out = out.replace("][", " ");
-    fs::write(path, out)
+pub trait Visualizable {
+    fn visualize(&self, path: &str) -> io::Result<()>;
+}
+
+impl<G> Visualizable for G
+where
+    G: Graph,
+{
+    fn visualize(&self, path: &str) -> io::Result<()> {
+        let mut buf = vec![];
+        dot::render(&(self,), &mut buf)?;
+        let mut out = String::from_utf8(buf).unwrap();
+        // Improves compatibility
+        out = out.replace("][", " ");
+        fs::write(path, out)
+    }
+}
+
+pub trait VisualizableSolution: SolverSolution + Visualizable {}
+impl<S> VisualizableSolution for S where S: SolverSolution + Visualizable {}
+
+pub type DynamicVisualizableSolution<'s, T> =
+    Box<dyn VisualizableSolution<Term = T, TermSet = HashSet<T>> + 's>;
+pub type DynamicVisualizableSolver<'s, I, T> =
+    Box<dyn Solver<I, Solution = DynamicVisualizableSolution<'s, T>> + 's>;
+
+impl<'s, T> SolverSolution for DynamicVisualizableSolution<'s, T>
+where
+    T: Hash + Eq + Clone + Debug,
+{
+    type Term = T;
+    type TermSet = HashSet<T>;
+
+    fn get(&self, node: &Self::Term) -> Self::TermSet {
+        self.deref().get(node)
+    }
+}
+
+impl<'s, T> Visualizable for DynamicVisualizableSolution<'s, T>
+where
+    T: Hash + Eq + Clone + Debug,
+{
+    fn visualize(&self, path: &str) -> io::Result<()> {
+        self.deref().visualize(path)
+    }
+}
+
+impl<'s, I, T> Solver<I> for DynamicVisualizableSolver<'s, I, T>
+where
+    I: SolverInput<Term = T>,
+    T: Hash + Eq + Clone + Debug,
+{
+    type Solution = DynamicVisualizableSolution<'s, T>;
+
+    fn solve(&self, input: I) -> Self::Solution {
+        self.deref().solve(input)
+    }
+}
+impl<'s, I, T> SolverExt for DynamicVisualizableSolver<'s, I, T> {}
+
+#[derive(Copy, Clone)]
+pub enum Never {}
+
+impl Display for Never {
+    fn fmt(&self, _: &mut Formatter) -> fmt::Result {
+        match *self {}
+    }
+}
+
+pub trait AsDynamicVisualizableExt<'s> {
+    fn as_dynamic_visualizable(self) -> Box<AsDynamicVisualizable<'s, Self>>
+    where
+        Self: Sized;
+}
+
+impl<'s, S> AsDynamicVisualizableExt<'s> for S
+where
+    S: SolverExt,
+{
+    fn as_dynamic_visualizable(self) -> Box<AsDynamicVisualizable<'s, Self>> {
+        Box::new(AsDynamicVisualizable(self, PhantomData))
+    }
+}
+
+pub struct AsDynamicVisualizable<'s, S>(pub S, PhantomData<&'s ()>);
+
+impl<'s, S, I> Solver<I> for AsDynamicVisualizable<'s, S>
+where
+    S: Solver<I>,
+    S::Solution: VisualizableSolution<Term = I::Term, TermSet = HashSet<I::Term>> + 's,
+    I: SolverInput,
+    I::Term: Hash + Eq + Clone + Debug,
+{
+    type Solution = DynamicVisualizableSolution<'s, I::Term>;
+
+    fn solve(&self, input: I) -> Self::Solution {
+        Box::new(self.0.solve(input))
+    }
+}
+
+impl<'s, S> SolverExt for AsDynamicVisualizable<'s, S> {}
+
+pub struct NotVisualizableSolution<S>(pub S);
+
+impl<S> SolverSolution for NotVisualizableSolution<S>
+where
+    S: SolverSolution,
+{
+    type Term = S::Term;
+    type TermSet = S::TermSet;
+
+    fn get(&self, node: &Self::Term) -> Self::TermSet {
+        self.0.get(node)
+    }
+}
+
+impl<S> Visualizable for NotVisualizableSolution<S> {
+    fn visualize(&self, _: &str) -> io::Result<()> {
+        panic!("Cannot visualize a non-visualizable solution");
+    }
 }

@@ -9,12 +9,21 @@ use roaring::RoaringBitmap;
 use super::shared_bitvec::SharedBitVec;
 use super::{
     edges_between, offset_term, offset_terms, CallSite, Constraint, ContextInsensitiveInput,
-    GenericSolverSolution, IntegerTerm, Offsets, Solver, SolverSolution, TermSetTrait, UnivCond,
+    GenericSolverSolution, IntegerTerm, Offsets, Solver, SolverExt, SolverSolution, TermSetTrait,
+    UnivCond,
 };
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
 
+pub struct BasicSolver<T>(PhantomData<T>);
+
+impl<T> BasicSolver<T> {
+    pub fn new() -> Self {
+        Self(PhantomData)
+    }
+}
+
 #[derive(Clone)]
-pub struct BasicSolver<T: Clone, U> {
+pub struct BasicSolverState<T: Clone, U> {
     worklist: VecDeque<(T, T)>,
     sols: Vec<U>,
     edges: Vec<HashMap<T, Offsets>>,
@@ -30,7 +39,7 @@ macro_rules! add_token {
     };
 }
 
-impl<T: TermSetTrait<Term = IntegerTerm>> BasicSolver<IntegerTerm, T> {
+impl<T: TermSetTrait<Term = IntegerTerm>> BasicSolverState<IntegerTerm, T> {
     pub fn new() -> Self {
         Self {
             worklist: VecDeque::new(),
@@ -131,14 +140,8 @@ impl<T: TermSetTrait<Term = IntegerTerm>> BasicSolver<IntegerTerm, T> {
         };
         self.propagate();
     }
-}
 
-impl<T: TermSetTrait<Term = IntegerTerm>> Solver<ContextInsensitiveInput<IntegerTerm>>
-    for BasicSolver<IntegerTerm, T>
-{
-    type Solution = Self;
-
-    fn solve(mut self, input: ContextInsensitiveInput<IntegerTerm>) -> Self::Solution {
+    fn solve(&mut self, input: ContextInsensitiveInput<IntegerTerm>) {
         self.sols = vec![T::new(); input.terms.len()];
         self.edges = vec![HashMap::new(); input.terms.len()];
         self.conds = vec![vec![]; input.terms.len()];
@@ -151,12 +154,24 @@ impl<T: TermSetTrait<Term = IntegerTerm>> Solver<ContextInsensitiveInput<Integer
         for c in input.constraints {
             self.add_constraint(c);
         }
-
-        self
     }
 }
 
-impl<T: TermSetTrait<Term = IntegerTerm>> SolverSolution for BasicSolver<IntegerTerm, T> {
+impl<T: TermSetTrait<Term = IntegerTerm>> SolverExt for BasicSolver<T> {}
+
+impl<T: TermSetTrait<Term = IntegerTerm>> Solver<ContextInsensitiveInput<IntegerTerm>>
+    for BasicSolver<T>
+{
+    type Solution = BasicSolverState<IntegerTerm, T>;
+
+    fn solve(&self, input: ContextInsensitiveInput<IntegerTerm>) -> Self::Solution {
+        let mut state = BasicSolverState::new();
+        state.solve(input);
+        state
+    }
+}
+
+impl<T: TermSetTrait<Term = IntegerTerm>> SolverSolution for BasicSolverState<IntegerTerm, T> {
     type Term = IntegerTerm;
 
     type TermSet = T;
@@ -166,11 +181,11 @@ impl<T: TermSetTrait<Term = IntegerTerm>> SolverSolution for BasicSolver<Integer
     }
 }
 
-pub type BasicHashSolver = BasicSolver<IntegerTerm, HashSet<IntegerTerm>>;
-pub type BasicRoaringSolver = BasicSolver<IntegerTerm, RoaringBitmap>;
-pub type BasicSharedBitVecSolver = BasicSolver<IntegerTerm, SharedBitVec>;
+pub type BasicHashSolver = BasicSolver<HashSet<IntegerTerm>>;
+pub type BasicRoaringSolver = BasicSolver<RoaringBitmap>;
+pub type BasicSharedBitVecSolver = BasicSolver<SharedBitVec>;
 
-impl<T, S> Graph for GenericSolverSolution<BasicSolver<IntegerTerm, S>, T>
+impl<T, S> Graph for GenericSolverSolution<BasicSolverState<IntegerTerm, S>, T>
 where
     T: Display + Debug + Clone + PartialEq + Eq + Hash,
     S: TermSetTrait<Term = IntegerTerm>,
@@ -239,13 +254,15 @@ impl<T> JustificationSolver<T> {
     }
 }
 
+impl<T> SolverExt for JustificationSolver<T> {}
+
 impl<T> Solver<ContextInsensitiveInput<T>> for JustificationSolver<T>
 where
     T: Clone + Debug + Display + Eq + Hash,
 {
     type Solution = Justifier<T>;
 
-    fn solve(self, input: ContextInsensitiveInput<T>) -> Self::Solution {
+    fn solve(&self, input: ContextInsensitiveInput<T>) -> Self::Solution {
         let solver = BasicSolver::new().as_generic();
         let solution = solver.solve(input.clone());
         let constraints: HashSet<_> = input
@@ -304,7 +321,7 @@ where
 }
 
 pub struct Justifier<T> {
-    solution: GenericSolverSolution<BasicSolver<IntegerTerm, HashSet<IntegerTerm>>, T>,
+    solution: GenericSolverSolution<BasicSolverState<IntegerTerm, HashSet<IntegerTerm>>, T>,
     rev_edges: Vec<HashMap<IntegerTerm, Offsets>>,
     constraints: HashSet<Constraint<IntegerTerm>>,
     loads: HashMap<IntegerTerm, Vec<(IntegerTerm, usize, Option<CallSite>)>>,

@@ -10,6 +10,7 @@ use hashbrown::{HashMap, HashSet};
 use llvm_ir::Module;
 use log::error;
 
+use crate::cli::CountMode;
 use crate::cstr;
 use crate::module_visitor::pointer::{
     PointerContext, PointerInstruction, PointerModuleObserver, PointerModuleVisitor,
@@ -17,10 +18,11 @@ use crate::module_visitor::pointer::{
 use crate::module_visitor::structs::{StructMap, StructType};
 use crate::module_visitor::{ModuleVisitor, VarIdent};
 use crate::solver::{
-    CallSite, ConstrainedTerms, Constraint, ContextSensitiveInput, FunctionInput, Solver,
-    SolverSolution, TermSetTrait, TermType,
+    CallSite, ConstrainedTerms, Constraint, ContextSensitiveInput, Demand,
+    DemandContextSensitiveInput, DemandInput, FunctionInput, Solver, SolverSolution, TermSetTrait,
+    TermType,
 };
-use crate::visualizer::{visualize, Graph};
+use crate::visualizer::{Graph, Visualizable};
 
 #[cfg(test)]
 mod tests;
@@ -29,7 +31,6 @@ mod tests;
 pub struct Config {
     pub malloc_wrappers: HashSet<String>,
     pub realloc_wrappers: HashSet<String>,
-    pub count_terms: bool,
 }
 
 pub struct PointsToAnalysis;
@@ -39,10 +40,11 @@ impl PointsToAnalysis {
         solver: S,
         module: &'a Module,
         context_selector: C,
+        demands: Vec<Demand<Cell<'a>>>,
         config: &Config,
     ) -> (S::Solution, Vec<Cell<'a>>)
     where
-        S: Solver<ContextSensitiveInput<Cell<'a>, C>> + 'a,
+        S: Solver<DemandContextSensitiveInput<Cell<'a>, C>> + 'a,
     {
         let mut pre_analyzer = PointsToPreAnalyzer::new();
         PointerModuleVisitor::new(
@@ -107,11 +109,14 @@ impl PointsToAnalysis {
             })
             .collect();
 
-        let input = ContextSensitiveInput {
-            global: entry,
-            functions,
-            entrypoints: vec![main_function_index],
-            context_selector,
+        let input = DemandInput {
+            demands,
+            input: ContextSensitiveInput {
+                global: entry,
+                functions,
+                entrypoints: vec![main_function_index],
+                context_selector,
+            },
         };
 
         let solution = solver.solve(input);
@@ -124,55 +129,97 @@ impl PointsToAnalysis {
         solver: S,
         module: &'a Module,
         context_selector: C,
+        demands: Vec<Demand<Cell<'a>>>,
         config: &Config,
     ) -> PointsToResult<'a, S::Solution>
     where
-        S: Solver<ContextSensitiveInput<Cell<'a>, C>> + 'a,
+        S: Solver<DemandContextSensitiveInput<Cell<'a>, C>> + 'a,
     {
-        let (solution, cells) = Self::solve_module(solver, module, context_selector, config);
+        let (solution, cells) =
+            Self::solve_module(solver, module, context_selector, demands, config);
 
-        if config.count_terms {
-            let mut counts: Vec<_> = cells.iter().map(|c| solution.get(c).len()).collect();
-            let max = counts.iter().copied().max().unwrap_or(0);
-            let mean = counts.iter().sum::<usize>() as f64 / counts.len() as f64;
-            let median = counts.select_nth_unstable(cells.len() / 2).1;
-            println!("Max: {max}");
-            println!("Mean: {mean}");
-            println!("Median: {median}");
-        }
-
-        PointsToResult(solution, cells)
+        PointsToResult::new(solution, cells)
     }
 
     pub fn run_and_visualize<'a, S, C>(
         solver: S,
         module: &'a Module,
         context_selector: C,
+        demands: Vec<Demand<Cell<'a>>>,
         config: &Config,
         dot_output_path: &str,
     ) -> PointsToResult<'a, S::Solution>
     where
-        S: Solver<ContextSensitiveInput<Cell<'a>, C>> + 'a,
-        S::Solution: Graph,
+        S: Solver<DemandContextSensitiveInput<Cell<'a>, C>> + 'a,
+        S::Solution: Visualizable,
     {
-        let (solution, cells) = Self::solve_module(solver, module, context_selector, config);
-        if let Err(e) = visualize(&solution, dot_output_path) {
+        let (solution, cells) =
+            Self::solve_module(solver, module, context_selector, demands, config);
+        if let Err(e) = solution.visualize(dot_output_path) {
             error!("Error visualizing graph: {e}");
         }
-        PointsToResult(solution, cells)
+        PointsToResult::new(solution, cells)
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct PointsToResult<'a, S>(pub S, pub Vec<Cell<'a>>);
+pub struct CellCache<'a>(HashMap<Cell<'a>, String>);
+
+#[derive(Debug, Clone)]
+pub struct PointsToResult<'a, S>(S, Vec<Cell<'a>>, CellCache<'a>);
+
+impl<'a> CellCache<'a> {
+    pub fn new(cells: &[Cell<'a>]) -> Self {
+        let string_cache = cells
+            .into_iter()
+            .map(|c| (c.clone(), c.to_string()))
+            .collect();
+        Self(string_cache)
+    }
+
+    pub fn string_of(&self, cell: &Cell<'a>) -> &str {
+        self.0.get(cell).expect("Cache did not contain cell")
+    }
+}
 
 pub trait ResultTrait<'a> {
     type Solution;
-    fn get(&self, cell: &Cell<'a>) -> Self::Solution;
+    fn get(&self, cell: &Cell<'a>) -> Option<Self::Solution>;
     fn iter_solutions<'b>(&'b self) -> Box<dyn Iterator<Item = (Cell<'a>, Self::Solution)> + 'b>
     where
         'a: 'b;
     fn get_cells(&self) -> &[Cell<'a>];
+    fn get_cell_cache(&self) -> &CellCache<'a>;
+
+    fn filter_result<
+        'b,
+        F3: Fn(&Cell<'a>, &Self::Solution, &CellCache<'a>) -> bool,
+        F4: Fn(&Cell<'a>, &Cell<'a>, &CellCache<'a>) -> bool,
+    >(
+        &'b self,
+        key_filter: F3,
+        value_filter: F4,
+        include_strs: Vec<String>,
+        exclude_strs: Vec<String>,
+    ) -> FilteredResults<'b, F3, F4, Self>
+    where
+        Self: Sized,
+    {
+        FilteredResults {
+            result: self,
+            key_filter,
+            value_filter,
+            include_strs,
+            exclude_strs,
+        }
+    }
+}
+
+impl<'a, S> PointsToResult<'a, S> {
+    pub fn new(solution: S, cells: Vec<Cell<'a>>) -> Self {
+        let cache = CellCache::new(&cells);
+        Self(solution, cells, cache)
+    }
 }
 
 impl<'a, S> ResultTrait<'a> for PointsToResult<'a, S>
@@ -181,17 +228,23 @@ where
 {
     type Solution = S::TermSet;
 
-    fn get(&self, cell: &Cell<'a>) -> Self::Solution {
-        self.0.get(cell)
+    fn get(&self, cell: &Cell<'a>) -> Option<Self::Solution> {
+        Some(self.0.get(cell))
     }
+
     fn iter_solutions<'b>(&'b self) -> Box<dyn Iterator<Item = (Cell<'a>, Self::Solution)> + 'b>
     where
         'a: 'b,
     {
         Box::new(self.1.iter().map(|c| (c.clone(), self.0.get(c))))
     }
+
     fn get_cells(&self) -> &[Cell<'a>] {
         &self.1
+    }
+
+    fn get_cell_cache(&self) -> &CellCache<'a> {
+        &self.2
     }
 }
 
@@ -203,30 +256,70 @@ pub struct FilteredResults<'a, F1, F2, R> {
     exclude_strs: Vec<String>,
 }
 
+impl<'a, 'b, F1, F2, R> FilteredResults<'b, F1, F2, R>
+where
+    R: ResultTrait<'a>,
+    R::Solution: TermSetTrait<Term = Cell<'a>>,
+    F1: Fn(&Cell<'a>, &R::Solution, &CellCache<'a>) -> bool,
+    F2: Fn(&Cell<'a>, &Cell<'a>, &CellCache<'a>) -> bool,
+{
+    fn get_with_solution(
+        &self,
+        cell: &Cell<'a>,
+        result_solution: R::Solution,
+    ) -> Option<HashSet<Cell<'a>>> {
+        let cell_str = self.get_cell_cache().string_of(cell);
+        if !self.include_strs.is_empty() && !self.include_strs.iter().any(|s| cell_str.contains(s))
+        {
+            return None;
+        }
+        if self.exclude_strs.iter().any(|s| cell_str.contains(s)) {
+            return None;
+        }
+
+        if !(self.key_filter)(cell, &result_solution, self.result.get_cell_cache()) {
+            return None;
+        }
+
+        Some(
+            result_solution
+                .iter()
+                .filter(|t| (self.value_filter)(cell, t, self.result.get_cell_cache()))
+                .collect(),
+        )
+    }
+}
+
 impl<'a, 'b, F1, F2, R> ResultTrait<'a> for FilteredResults<'b, F1, F2, R>
 where
     R: ResultTrait<'a>,
     R::Solution: TermSetTrait<Term = Cell<'a>>,
-    F1: Fn(&Cell<'a>, &R::Solution) -> bool,
-    F2: Fn(&Cell<'a>) -> bool,
+    F1: Fn(&Cell<'a>, &R::Solution, &CellCache<'a>) -> bool,
+    F2: Fn(&Cell<'a>, &Cell<'a>, &CellCache<'a>) -> bool,
 {
     type Solution = HashSet<Cell<'a>>;
 
-    fn get(&self, cell: &Cell<'a>) -> Self::Solution {
-        let cell_str = cell.to_string();
+    fn get(&self, cell: &Cell<'a>) -> Option<Self::Solution> {
+        let cell_str = self.get_cell_cache().string_of(cell);
         if !self.include_strs.is_empty() && !self.include_strs.iter().any(|s| cell_str.contains(s))
         {
-            return HashSet::new();
+            return None;
         }
         if self.exclude_strs.iter().any(|s| cell_str.contains(s)) {
-            return HashSet::new();
+            return None;
         }
 
-        self.result
-            .get(cell)
-            .iter()
-            .filter(&self.value_filter)
-            .collect()
+        let result_solution = self.result.get(cell)?;
+        if !(self.key_filter)(cell, &result_solution, self.result.get_cell_cache()) {
+            return None;
+        }
+
+        Some(
+            result_solution
+                .iter()
+                .filter(|t| (self.value_filter)(cell, t, self.result.get_cell_cache()))
+                .collect(),
+        )
     }
 
     fn iter_solutions<'c>(&'c self) -> Box<dyn Iterator<Item = (Cell<'a>, Self::Solution)> + 'c>
@@ -234,44 +327,33 @@ where
         'a: 'c,
     {
         Box::new(
-            self.get_cells()
-                .iter()
-                .map(|cell| (cell.clone(), self.get(cell))),
+            self.result
+                .iter_solutions()
+                .filter_map(|(c, set)| self.get_with_solution(&c, set).map(|s| (c, s))),
         )
     }
     fn get_cells(&self) -> &[Cell<'a>] {
         self.result.get_cells()
     }
+
+    fn get_cell_cache(&self) -> &CellCache<'a> {
+        self.result.get_cell_cache()
+    }
 }
 
 impl<'a, S: SolverSolution> PointsToResult<'a, S> {
-    pub fn get_filtered_entries<
-        'b,
-        F1: Fn(&Cell<'a>, &S::TermSet) -> bool,
-        F2: Fn(&Cell<'a>) -> bool,
-    >(
-        &'b self,
-        key_filter: F1,
-        value_filter: F2,
-        include_strs: Vec<String>,
-        exclude_strs: Vec<String>,
-    ) -> FilteredResults<'b, F1, F2, Self> {
-        FilteredResults {
-            result: self,
-            key_filter,
-            value_filter,
-            include_strs,
-            exclude_strs,
-        }
-    }
-
     pub fn get_all_entries<'b>(
         &'b self,
-    ) -> FilteredResults<'b, fn(&Cell<'a>, &S::TermSet) -> bool, fn(&Cell<'a>) -> bool, Self> {
+    ) -> FilteredResults<
+        'b,
+        fn(&Cell<'a>, &S::TermSet, &CellCache<'a>) -> bool,
+        fn(&Cell<'a>, &Cell<'a>, &CellCache<'a>) -> bool,
+        Self,
+    > {
         FilteredResults {
             result: self,
-            key_filter: |_, _| true,
-            value_filter: |_| true,
+            key_filter: |_, _, _| true,
+            value_filter: |_, _, _| true,
             include_strs: Vec::new(),
             exclude_strs: Vec::new(),
         }
@@ -286,6 +368,10 @@ impl<'a, S: SolverSolution> PointsToResult<'a, S> {
             exclude_strs: Vec::new(),
         }
     }
+
+    pub fn into_solution(self) -> S {
+        self.0
+    }
 }
 
 impl<'a, S> Display for PointsToResult<'a, S>
@@ -294,12 +380,7 @@ where
     S::TermSet: fmt::Debug + IntoIterator<Item = Cell<'a>> + FromIterator<Cell<'a>>,
 {
     fn fmt<'b, 'c>(&'b self, f: &'c mut Formatter<'_>) -> fmt::Result {
-        let filtered: FilteredResults<
-            'b,
-            fn(&Cell<'a>, &S::TermSet) -> bool,
-            fn(&Cell<'a>) -> bool,
-            Self,
-        > = self.get_all_entries();
+        let filtered = self.get_all_entries();
         filtered.fmt(f)?;
         // let filtered = self.test();
         // writeln!(f, "{filtered}")?;

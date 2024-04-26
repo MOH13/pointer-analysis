@@ -13,10 +13,9 @@ use test_generator::test_resources;
 use crate::analysis::{Config, PointsToAnalysis, ResultTrait};
 use crate::solver::{
     BasicHashSolver, BasicRoaringSolver, BasicSharedBitVecSolver, CallStringSelector,
-    ContextInsensitiveSolver, ContextSelector, ContextSensitiveInput, GenericSolver,
-    HashWavePropagationSolver, RoaringWavePropagationSolver,
-    SharedBitVecContextWavePropagationSolver, SharedBitVecWavePropagationSolver, Solver,
-    SolverSolution, TermSetTrait,
+    ContextInsensitiveSolver, ContextSelector, DemandContextSensitiveInput,
+    HashWavePropagationSolver, IntegerTerm, RoaringWavePropagationSolver,
+    SharedBitVecContextWavePropagationSolver, SharedBitVecWavePropagationSolver, Solver, SolverExt,
 };
 
 use super::Cell;
@@ -91,7 +90,7 @@ fn parse_points_to<'a>(
 
 fn run_test_template<S, C>(resource: &str, solver: S, context_selector: C)
 where
-    for<'a> S: Solver<ContextSensitiveInput<Cell<'a>, C>> + Sized,
+    for<'a> S: Solver<DemandContextSensitiveInput<Cell<'a>, C>> + Sized,
     C: ContextSelector,
 {
     dbg!(resource);
@@ -117,7 +116,13 @@ where
 
     dbg!(&expected_points_to);
 
-    let result = PointsToAnalysis::run(solver, &module, context_selector, &Config::default());
+    let result = PointsToAnalysis::run(
+        solver,
+        &module,
+        context_selector,
+        vec![],
+        &Config::default(),
+    );
 
     let actual_points_to: HashMap<Cell, HashSet<Cell>> =
         result.get_all_entries().iter_solutions().collect();
@@ -139,9 +144,12 @@ where
 fn hash(resource: &str) {
     run_test_template(
         resource,
-        BasicHashSolver::new().as_context_sensitive().as_generic(),
+        BasicHashSolver::new()
+            .as_context_sensitive()
+            .as_generic()
+            .as_demand_driven(),
         CallStringSelector::<2>::new(),
-    );
+    )
 }
 
 #[test_resources("res/context_insensitive/**/test_config.json")]
@@ -150,7 +158,8 @@ fn roaring(resource: &str) {
         resource,
         BasicRoaringSolver::new()
             .as_context_sensitive()
-            .as_generic(),
+            .as_generic()
+            .as_demand_driven(),
         CallStringSelector::<2>::new(),
     )
 }
@@ -161,7 +170,8 @@ fn shared_bit_vec(resource: &str) {
         resource,
         BasicSharedBitVecSolver::new()
             .as_context_sensitive()
-            .as_generic(),
+            .as_generic()
+            .as_demand_driven(),
         CallStringSelector::<2>::new(),
     )
 }
@@ -172,7 +182,8 @@ fn wave_prop(resource: &str) {
         resource,
         HashWavePropagationSolver::new()
             .as_context_sensitive()
-            .as_generic(),
+            .as_generic()
+            .as_demand_driven(),
         CallStringSelector::<2>::new(),
     )
 }
@@ -183,7 +194,8 @@ fn roaring_wave_prop(resource: &str) {
         resource,
         RoaringWavePropagationSolver::new()
             .as_context_sensitive()
-            .as_generic(),
+            .as_generic()
+            .as_demand_driven(),
         CallStringSelector::<2>::new(),
     )
 }
@@ -194,7 +206,8 @@ fn shared_bit_vec_wave_prop(resource: &str) {
         resource,
         SharedBitVecWavePropagationSolver::new()
             .as_context_sensitive()
-            .as_generic(),
+            .as_generic()
+            .as_demand_driven(),
         CallStringSelector::<2>::new(),
     )
 }
@@ -204,7 +217,7 @@ fn shared_bit_vec_wave_prop(resource: &str) {
 fn context_shared_bitvec_wave_prop(resource: &str) {
     run_test_template(
         resource,
-        SharedBitVecContextWavePropagationSolver::new(),
+        SharedBitVecContextWavePropagationSolver::new().as_demand_driven(),
         CallStringSelector::<2>::new(),
     )
 }

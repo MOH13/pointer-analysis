@@ -28,14 +28,15 @@ pub struct Args {
     /// Exclude strings from points-to set output
     #[arg(short = 'S', long, default_value_t = false)]
     pub exclude_strings: bool,
+    /// Start an interactive shell after solving
     #[arg(short = 'I', long, default_value_t = false)]
     pub interactive_output: bool,
     /// Don't print warnings
     #[arg(short = 'q', long, default_value_t = false)]
     pub quiet: bool,
     /// Print information about term set sizes
-    #[arg(short = 'C', long, default_value_t = false)]
-    pub count_terms: bool,
+    #[arg(short = 'C', long, default_value_t = CountMode::Off)]
+    pub count_terms: CountMode,
     /// Visualize constraint graph after solving (creates a Graphviz DOT file at given path)
     #[arg(short = 'v', long)]
     pub visualize: Option<String>,
@@ -98,6 +99,32 @@ impl Display for TermSet {
             TermSet::Hash => write!(f, "hash"),
             TermSet::Roaring => write!(f, "roaring"),
             TermSet::SharedBitVec => write!(f, "shared bitvec"),
+        }
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
+pub enum CountMode {
+    /// Do not show term counts
+    Off,
+    /// Show count of all terms
+    Unfiltered,
+    /// Show count of terms matching filter and demands
+    Filtered,
+}
+
+impl Default for CountMode {
+    fn default() -> Self {
+        Self::Off
+    }
+}
+
+impl Display for CountMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CountMode::Off => write!(f, "off"),
+            CountMode::Unfiltered => write!(f, "unfiltered"),
+            CountMode::Filtered => write!(f, "filtered"),
         }
     }
 }
