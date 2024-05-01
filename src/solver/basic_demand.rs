@@ -14,7 +14,7 @@ use super::{
     Offsets, Solver, SolverExt, SolverSolution, TermType,
 };
 use crate::util::GetTwoMutExt;
-use crate::visualizer::{Edge, Graph, Node, OffsetWeight};
+use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
 
 #[derive(Clone)]
 struct CondLeft<C> {
@@ -70,15 +70,30 @@ where
         let empty_context = context_state.context_selector.empty();
 
         let num_terms = context_state.num_concrete_terms();
+        let num_abstract = context_state.mapping.terms.len();
 
         let mut term_types = vec![TermType::Basic; num_terms];
-        let mut offsetable_terms = vec![vec![]; num_terms];
-        for (from, tt) in &global.term_types {
-            let from = context_state.mapping.term_to_integer(from);
-            term_types[from as usize] = *tt;
-            let max_offset = tt.into_offset() as u32;
-            for to in (from + 1)..=(from + max_offset) {
-                offsetable_terms[to as usize].push(from);
+        let mut abstract_rev_offsets = vec![SmallVec::new(); num_abstract];
+
+        let global_term_types_iter = global
+            .term_types
+            .iter()
+            .map(|(t, tt)| (context_state.mapping.term_to_integer(t), *tt));
+        let template_term_types_iter = context_state.templates.iter().flat_map(|t| {
+            t.types
+                .iter()
+                .enumerate()
+                .map(|(i, tt)| (t.start_index + i as u32, *tt))
+        });
+        for (from, tt) in global_term_types_iter.clone() {
+            term_types[from as usize] = tt;
+        }
+        for (from, tt) in global_term_types_iter.chain(template_term_types_iter) {
+            if let TermType::Struct(max_offset) = tt {
+                for offset in 1..=max_offset as u32 {
+                    let to = from + offset;
+                    abstract_rev_offsets[to as usize].push(offset);
+                }
             }
         }
 
@@ -118,9 +133,10 @@ where
             worklist: VecDeque::new(),
             edges,
             term_types,
-            offsetable_terms: offsetable_terms,
+            abstract_rev_offsets,
             points_to_queries: bitvec::bitvec![0; num_terms],
             pointed_by_queries: bitvec::bitvec![0; num_terms],
+            is_return_or_parameter: bitvec::bitvec![0; num_terms],
             abstract_points_to_queries: bitvec::bitvec![0; num_abstract_terms],
             abstract_pointed_by_queries: bitvec::bitvec![0; num_abstract_terms],
         };
@@ -156,10 +172,12 @@ where
             }
         }
 
-        for entrypoint in entrypoints {
+        // for entrypoint in entrypoints {
+        //     state.get_or_instantiate_function(entrypoint, empty_context.clone());
+        // }
+        for entrypoint in 0..state.context_state.templates.len() {
             state.get_or_instantiate_function(entrypoint, empty_context.clone());
         }
-
         state.solve();
 
         // TODO: remove
@@ -171,9 +189,22 @@ where
     }
 }
 
-enum WorklistEntry {
-    Demand(Demand<IntegerTerm>),
-    Inserted(IntegerTerm, IntegerTerm),
+#[derive(Debug)]
+enum WorklistEntry<T = IntegerTerm> {
+    Demand(Demand<T>),
+    Inserted(T, T),
+}
+
+impl<T> WorklistEntry<T> {
+    fn map_terms<U, F>(&self, mut f: F) -> WorklistEntry<U>
+    where
+        F: FnMut(&T) -> U,
+    {
+        match self {
+            WorklistEntry::Demand(demand) => WorklistEntry::Demand(demand.map_term(f)),
+            WorklistEntry::Inserted(t1, t2) => WorklistEntry::Inserted(f(t1), f(t2)),
+        }
+    }
 }
 
 pub struct BasicDemandSolverState<T, C: ContextSelector> {
@@ -181,9 +212,10 @@ pub struct BasicDemandSolverState<T, C: ContextSelector> {
     worklist: VecDeque<WorklistEntry>,
     edges: Edges<C::Context>,
     term_types: Vec<TermType>,
-    abstract_offsetable_offsets: Vec<Vec<u32>>,
+    abstract_rev_offsets: Vec<SmallVec<[u32; 2]>>,
     points_to_queries: BitVec,
     pointed_by_queries: BitVec,
+    is_return_or_parameter: BitVec,
     abstract_points_to_queries: BitVec,
     abstract_pointed_by_queries: BitVec,
 }
@@ -220,12 +252,13 @@ fn add_edge(
     offset: usize,
     subsets: &mut Subsets,
     sols: &mut [HashSet<IntegerTerm>],
+    pointed_by_buffers: &mut [SmallVec<[IntegerTerm; 2]>],
     points_to_queries: &mut BitVec,
     pointed_by_queries: &BitVec,
     term_types: &[TermType],
     worklist: &mut VecDeque<WorklistEntry>,
 ) -> bool {
-    if subsets[from].entry(to).or_default().insert(offset) {
+    if subsets.add(from, to, offset) {
         if points_to_queries[to as usize] {
             add_points_to_query(from, points_to_queries, worklist);
         }
@@ -234,6 +267,7 @@ fn add_edge(
             to,
             offset,
             sols,
+            pointed_by_buffers,
             points_to_queries,
             pointed_by_queries,
             term_types,
@@ -252,6 +286,7 @@ macro_rules! add_edge {
             $offset,
             &mut $state.edges.subsets,
             &mut $state.edges.sols,
+            &mut $state.edges.pointed_by_buffers,
             &mut $state.points_to_queries,
             &$state.pointed_by_queries,
             &$state.term_types,
@@ -265,6 +300,7 @@ fn propagate_edge(
     to: IntegerTerm,
     offset: usize,
     sols: &mut [HashSet<IntegerTerm>],
+    pointed_by_buffers: &mut [SmallVec<[IntegerTerm; 2]>],
     points_to_queries: &mut BitVec,
     pointed_by_queries: &BitVec,
     term_types: &[TermType],
@@ -280,7 +316,13 @@ fn propagate_edge(
                 continue;
             }
             let new_term = t + offset as u32;
-            if pointed_by_queries[new_term as usize] && !sols[to as usize].contains(&new_term) {
+            let has_pointed_by = pointed_by_queries[new_term as usize];
+
+            if offset != 0 && !has_pointed_by {
+                pointed_by_buffers[new_term as usize].push(to);
+            }
+
+            if has_pointed_by && !sols[to as usize].contains(&new_term) {
                 to_insert.push(new_term);
             }
         }
@@ -298,6 +340,7 @@ macro_rules! propagate_edge {
             $to,
             $offset,
             &mut $state.edges.sols,
+            &mut $state.edges.pointed_by_buffers,
             &mut $state.points_to_queries,
             &$state.pointed_by_queries,
             &$state.term_types,
@@ -365,6 +408,10 @@ where
 {
     fn solve(&mut self) {
         while let Some(entry) = self.worklist.pop_front() {
+            // dbg!(
+            //     entry.map_terms(|&t| self.context_state.concrete_to_input(t)),
+            //     // &self.worklist
+            // );
             match entry {
                 WorklistEntry::Demand(Demand::PointsTo(x)) => {
                     self.handle_points_to(x);
@@ -394,18 +441,33 @@ where
         }
 
         for (from, offsets) in self.edges.subsets.rev(x) {
-            if add_points_to_query(*from, &mut self.points_to_queries, &mut self.worklist) {
-                continue;
-            }
+            add_points_to_query(*from, &mut self.points_to_queries, &mut self.worklist);
 
             for offset in offsets.iter() {
                 propagate_edge_all!(self, *from, x, offset);
             }
         }
+
+        if self.is_return_or_parameter[x as usize] {
+            let (fun_index, relative_index) = self
+                .context_state
+                .get_function_and_relative_index_from_concrete_index(x);
+            let fun_index = fun_index.expect("Term should be in a function");
+            let template = &self.context_state.templates[fun_index as usize];
+            if relative_index >= template.num_return_terms
+                && relative_index < template.num_return_terms + template.num_parameter_terms
+            {
+                add_pointed_by_query(
+                    self.context_state.templates[0].start_index + fun_index,
+                    &mut self.pointed_by_queries,
+                    &mut self.worklist,
+                );
+            }
+        }
     }
 
     fn handle_pointed_by(&mut self, t: IntegerTerm) {
-        for from in mem::take(&mut self.offsetable_terms[t as usize]) {
+        for from in self.offsetable_terms(t) {
             if !self.pointed_by_queries[from as usize] {
                 self.pointed_by_queries.set(from as usize, true);
                 self.handle_pointed_by(from);
@@ -414,8 +476,11 @@ where
 
         let term_type = self.term_types[t as usize];
         let mut stack = mem::take(&mut self.edges.pointed_by_buffers[t as usize]);
-        let mut visited: HashSet<_> = stack.iter().copied().collect();
+        let mut visited = HashSet::new();
         while let Some(x) = stack.pop() {
+            if !visited.insert(x) {
+                continue;
+            }
             add_pointed_by_query(x, &mut self.pointed_by_queries, &mut self.worklist);
             if self.edges.sols[x as usize].insert(t) {
                 self.worklist.push_back(WorklistEntry::Inserted(x, t));
@@ -424,10 +489,10 @@ where
                 add_points_to_query(cond_node, &mut self.points_to_queries, &mut self.worklist);
             }
             for (y, offsets) in &self.edges.subsets[x] {
-                if !visited.insert(*y) {
-                    continue;
-                }
                 for offset in offsets.iter() {
+                    if visited.contains(y) {
+                        continue;
+                    }
                     if offset == 0 {
                         stack.push(*y);
                     } else if offset <= term_type.into_offset() {
@@ -481,6 +546,21 @@ where
             for &cond_node in &self.edges.stores[x as usize] {
                 add_points_to_query(cond_node, &mut self.points_to_queries, &mut self.worklist);
             }
+            if self.is_return_or_parameter[x as usize] {
+                let (fun_index, relative_index) = self
+                    .context_state
+                    .get_function_and_relative_index_from_concrete_index(x);
+                let fun_index = fun_index.expect("Term should be in a function");
+                let num_return_terms =
+                    self.context_state.templates[fun_index as usize].num_return_terms;
+                if relative_index < num_return_terms {
+                    add_pointed_by_query(
+                        self.context_state.templates[0].start_index + fun_index,
+                        &mut self.pointed_by_queries,
+                        &mut self.worklist,
+                    );
+                }
+            }
         }
 
         for cond in self.edges.conds[x as usize].clone() {
@@ -509,9 +589,14 @@ where
         for (to, offsets) in &self.edges.subsets[x] {
             for offset in offsets.iter() {
                 let new_term = t + offset as u32;
-                if offset > t_term_type.into_offset()
-                    || (!self.points_to_queries[*to as usize]
-                        && !self.pointed_by_queries[new_term as usize])
+                if offset > t_term_type.into_offset() {
+                    break;
+                }
+                if offset != 0 && !self.pointed_by_queries[new_term as usize] {
+                    self.edges.pointed_by_buffers[new_term as usize].push(*to);
+                }
+                if !self.points_to_queries[*to as usize]
+                    && !self.pointed_by_queries[new_term as usize]
                 {
                     continue;
                 }
@@ -536,6 +621,11 @@ where
             self.edges.resize(new_len);
             self.points_to_queries.resize(new_len, false);
             self.pointed_by_queries.resize(new_len, false);
+            self.is_return_or_parameter.resize(new_len, false);
+            for i in 0..(template.num_return_terms + template.num_parameter_terms) as usize {
+                self.is_return_or_parameter
+                    .set(instantiated_start_index + i, true);
+            }
             for i in 0..num_instantiated as u32 {
                 let abstract_term = template.start_index + i;
                 let concrete_term = instantiated_start_index as IntegerTerm + i;
@@ -626,6 +716,14 @@ where
         }
         index
     }
+
+    fn offsetable_terms(&self, term: IntegerTerm) -> impl Iterator<Item = IntegerTerm> {
+        let abstract_term = self.context_state.abstract_indices[term as usize];
+        self.abstract_rev_offsets[abstract_term as usize]
+            .clone()
+            .into_iter()
+            .map(move |o| term - o)
+    }
 }
 
 impl<T, C> SolverSolution for BasicDemandSolverState<T, C>
@@ -680,7 +778,9 @@ impl<C> Edges<C> {
                 left,
                 right,
                 offset,
-            } => self.subsets.add(left, right, offset),
+            } => {
+                self.subsets.add(left, right, offset);
+            }
             Constraint::UnivCondSubsetLeft {
                 cond_node,
                 right,
@@ -744,15 +844,19 @@ impl Subsets {
         &self.rev_subset[index as usize]
     }
 
-    fn add(&mut self, from: IntegerTerm, to: IntegerTerm, offset: usize) {
-        self.subset[from as usize]
+    fn add(&mut self, from: IntegerTerm, to: IntegerTerm, offset: usize) -> bool {
+        if self.subset[from as usize]
             .entry(to)
             .or_default()
-            .insert(offset);
-        self.rev_subset[to as usize]
-            .entry(from)
-            .or_default()
-            .insert(offset);
+            .insert(offset)
+        {
+            self.rev_subset[to as usize]
+                .entry(from)
+                .or_default()
+                .insert(offset);
+            return true;
+        }
+        false
     }
 
     fn resize(&mut self, new_len: usize) {
@@ -775,26 +879,71 @@ impl IndexMut<IntegerTerm> for Subsets {
     }
 }
 
-impl<T, C> Graph for BasicDemandSolverState<T, C>
+#[derive(Debug, Clone)]
+pub struct BasicDemandSolverNode<T, C>(T, C);
+
+impl<T, C> Display for BasicDemandSolverNode<T, C>
 where
-    T: Display + Clone,
+    T: Hash + Eq + Clone + Display + Debug,
+    C: Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let node = &self.0;
+        let context = &self.1;
+        write!(f, "{node}, {context:?}")
+    }
+}
+
+impl<T, C> BasicDemandSolverState<T, C>
+where
+    T: Hash + Eq + Clone + Debug,
     C: ContextSelector,
 {
-    type Node = T;
+    fn concrete_index_to_graph_node(
+        &self,
+        concrete_index: IntegerTerm,
+    ) -> Node<BasicDemandSolverNode<T, C::Context>> {
+        Node {
+            inner: BasicDemandSolverNode(
+                self.context_state.concrete_to_input(concrete_index),
+                self.context_state.context_of_concrete_index(concrete_index),
+            ),
+            id: concrete_index as usize,
+        }
+    }
+}
+
+impl<T, C> Graph for BasicDemandSolverState<T, C>
+where
+    T: Hash + Eq + Clone + Display + Debug,
+    C: ContextSelector,
+{
+    type Node = BasicDemandSolverNode<T, C::Context>;
     type Weight = OffsetWeight;
 
     fn nodes(&self) -> Vec<Node<Self::Node>> {
-        self.context_state
-            .mapping
-            .terms
-            .iter()
-            .cloned()
-            .enumerate()
-            .map(|(i, t)| Node { inner: t, id: i })
+        (0..self.edges.sols.len() as IntegerTerm)
+            .into_iter()
+            .map(|i| self.concrete_index_to_graph_node(i))
             .collect()
     }
 
     fn edges(&self) -> Vec<Edge<Self::Node, Self::Weight>> {
-        todo!()
+        self.edges
+            .subsets
+            .subset
+            .iter()
+            .enumerate()
+            .flat_map(|(from, edges)| {
+                edges.iter().flat_map(move |(&to, offsets)| {
+                    offsets.iter().map(move |weight| Edge {
+                        from: self.concrete_index_to_graph_node(from as IntegerTerm),
+                        to: self.concrete_index_to_graph_node(to as IntegerTerm),
+                        weight: OffsetWeight(weight as u32),
+                        kind: EdgeKind::Subset,
+                    })
+                })
+            })
+            .collect()
     }
 }

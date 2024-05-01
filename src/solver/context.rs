@@ -15,7 +15,8 @@ use super::{
 #[derive(Debug)]
 pub struct FunctionInput<T> {
     pub fun_name: Rc<str>,
-    pub return_and_parameter_terms: Vec<T>,
+    pub return_terms: Vec<T>,
+    pub parameter_terms: Vec<T>,
     pub constrained_terms: ConstrainedTerms<T>,
 }
 
@@ -176,6 +177,8 @@ pub struct FunctionTermInfo {
 pub struct FunctionTemplate {
     pub _fun_name: Rc<str>,
     pub start_index: u32,
+    pub num_return_terms: u32,
+    pub num_parameter_terms: u32,
     pub types: Vec<TermType>,
     pub constraints: Vec<Constraint<TemplateTerm>>,
 }
@@ -199,14 +202,21 @@ where
 {
     let FunctionInput {
         fun_name,
-        return_and_parameter_terms,
+        return_terms,
+        parameter_terms,
         constrained_terms,
     } = function;
 
-    let start_index = mapping.term_to_integer(&return_and_parameter_terms[0]);
+    let start_index = mapping.term_to_integer(&return_terms[0]);
+    let num_return_terms = return_terms.len() as u32;
+    let num_parameter_terms = parameter_terms.len() as u32;
 
-    let mut types =
-        vec![TermType::Basic; return_and_parameter_terms.len() + constrained_terms.terms.len()];
+    let mut types = vec![
+        TermType::Basic;
+        num_return_terms as usize
+            + num_parameter_terms as usize
+            + constrained_terms.terms.len()
+    ];
 
     for (t, tt) in &constrained_terms.term_types {
         types[(mapping.term_to_integer(&t) - start_index) as usize] = *tt;
@@ -215,7 +225,8 @@ where
     let function_terms_set: HashSet<_> = constrained_terms
         .terms
         .iter()
-        .chain(return_and_parameter_terms)
+        .chain(return_terms)
+        .chain(parameter_terms)
         .map(|t| mapping.term_to_integer(t))
         .collect();
 
@@ -256,6 +267,8 @@ where
         FunctionTemplate {
             _fun_name: fun_name.clone(),
             start_index,
+            num_return_terms,
+            num_parameter_terms,
             types,
             constraints,
         },
@@ -335,6 +348,15 @@ where
         self.get_function_and_relative_index_from_abstract_index(abstract_index)
     }
 
+    pub fn get_function_and_relative_index_from_concrete_index(
+        &self,
+        concrete_index: IntegerTerm,
+    ) -> (Option<IntegerTerm>, IntegerTerm) {
+        let abstract_index = self.abstract_indices[concrete_index as usize];
+
+        self.get_function_and_relative_index_from_abstract_index(abstract_index)
+    }
+
     pub fn get_function_and_relative_index_from_abstract_index(
         &self,
         abstract_index: IntegerTerm,
@@ -357,19 +379,17 @@ where
         }
     }
 
-    pub fn context_of_concrete_index(&self, index: IntegerTerm) -> C::Context {
-        if self.function_term_functions.contains_key(&index) {
+    pub fn context_of_concrete_index(&self, concrete_index: IntegerTerm) -> C::Context {
+        if self.function_term_functions.contains_key(&concrete_index) {
             return self.context_selector.empty();
         }
 
-        let abstract_index = self.abstract_indices[index as usize];
-
         let (fun_index, relative_index) =
-            self.get_function_and_relative_index_from_abstract_index(abstract_index);
+            self.get_function_and_relative_index_from_concrete_index(concrete_index);
 
         match fun_index {
             Some(i) => {
-                let start_index = index - relative_index;
+                let start_index = concrete_index - relative_index;
                 self.instantiated_contexts[i as usize]
                     .iter()
                     .find(|(_, i)| **i == start_index)

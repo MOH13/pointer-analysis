@@ -199,11 +199,23 @@ enum UnivCond<T: Clone> {
     SubsetRight { left: T, offset: usize },
 }
 
+#[derive(Debug)]
 pub enum Demand<T> {
     PointsTo(T),
     PointedBy(T),
 }
 
+impl<T> Demand<T> {
+    fn map_term<U, F>(&self, mut f: F) -> Demand<U>
+    where
+        F: FnMut(&T) -> U,
+    {
+        match self {
+            Demand::PointsTo(t) => Demand::PointsTo(f(t)),
+            Demand::PointedBy(t) => Demand::PointedBy(f(t)),
+        }
+    }
+}
 pub trait TermSetTrait: Clone + Default + PartialEq {
     type Term;
 
@@ -490,7 +502,8 @@ where
 
     fn solve(&self, mut input: ContextSensitiveInput<T, C>) -> Self::Solution {
         for f in input.functions.into_iter() {
-            input.global.terms.extend(f.return_and_parameter_terms);
+            input.global.terms.extend(f.return_terms);
+            input.global.terms.extend(f.parameter_terms);
             input.global.combine(f.constrained_terms);
         }
         self.0.solve(input.global)
@@ -586,8 +599,9 @@ where
             .terms
             .iter()
             .chain(input.functions.iter().flat_map(|t| {
-                t.return_and_parameter_terms
+                t.return_terms
                     .iter()
+                    .chain(&t.parameter_terms)
                     .chain(&t.constrained_terms.terms)
             }))
             .cloned()
@@ -640,8 +654,9 @@ where
             .terms
             .iter()
             .chain(input.functions.iter().flat_map(|t| {
-                t.return_and_parameter_terms
+                t.return_terms
                     .iter()
+                    .chain(&t.parameter_terms)
                     .chain(&t.constrained_terms.terms)
             }))
             .cloned()
@@ -736,8 +751,13 @@ where
     fn translate_function(&self, function: &FunctionInput<T>) -> FunctionInput<IntegerTerm> {
         FunctionInput {
             fun_name: function.fun_name.clone(),
-            return_and_parameter_terms: function
-                .return_and_parameter_terms
+            return_terms: function
+                .return_terms
+                .iter()
+                .map(|t| self.term_to_integer(t))
+                .collect(),
+            parameter_terms: function
+                .parameter_terms
                 .iter()
                 .map(|t| self.term_to_integer(t))
                 .collect(),

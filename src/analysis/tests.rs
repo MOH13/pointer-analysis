@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use hashbrown::{HashMap, HashSet};
+use itertools::Itertools;
 use llvm_ir::Module;
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
@@ -12,10 +13,11 @@ use test_generator::test_resources;
 
 use crate::analysis::{Config, PointsToAnalysis, ResultTrait};
 use crate::solver::{
-    BasicHashSolver, BasicRoaringSolver, BasicSharedBitVecSolver, CallStringSelector,
-    ContextInsensitiveSolver, ContextSelector, DemandContextSensitiveInput,
-    HashWavePropagationSolver, IntegerTerm, RoaringWavePropagationSolver,
-    SharedBitVecContextWavePropagationSolver, SharedBitVecWavePropagationSolver, Solver, SolverExt,
+    BasicDemandSolver, BasicHashSolver, BasicRoaringSolver, BasicSharedBitVecSolver,
+    CallStringSelector, ContextInsensitiveSolver, ContextSelector, Demand,
+    DemandContextSensitiveInput, HashWavePropagationSolver, IntegerTerm,
+    RoaringWavePropagationSolver, SharedBitVecContextWavePropagationSolver,
+    SharedBitVecWavePropagationSolver, Solver, SolverExt,
 };
 
 use super::Cell;
@@ -88,10 +90,14 @@ fn parse_points_to<'a>(
         .collect()
 }
 
-fn run_test_template<S, C>(resource: &str, solver: S, context_selector: C)
-where
+fn run_test_template<S, C>(
+    resource: &str,
+    solver: S,
+    context_selector: C,
+    test_all_combinations: bool,
+) where
     for<'a> S: Solver<DemandContextSensitiveInput<Cell<'a>, C>> + Sized,
-    C: ContextSelector,
+    C: ContextSelector + Clone,
 {
     dbg!(resource);
     let config_file = File::open(resource).expect("Could not open file");
@@ -112,30 +118,41 @@ where
 
     let module = Module::from_bc_path(bc_path).expect("Error parsing bc file");
 
-    let expected_points_to = parse_points_to(config.points_to);
+    let expected_points_to_set = parse_points_to(config.points_to);
 
-    dbg!(&expected_points_to);
+    let test_cases = if test_all_combinations {
+        expected_points_to_set.iter().powerset().collect()
+    } else {
+        vec![expected_points_to_set.iter().collect()]
+    };
 
-    let result = PointsToAnalysis::run(
-        solver,
-        &module,
-        context_selector,
-        vec![],
-        &Config::default(),
-    );
+    for expected_points_to in test_cases {
+        dbg!(&expected_points_to);
 
-    let actual_points_to: HashMap<Cell, HashSet<Cell>> =
-        result.get_all_entries().iter_solutions().collect();
+        let result = PointsToAnalysis::run(
+            &solver,
+            &module,
+            context_selector.clone(),
+            expected_points_to
+                .iter()
+                .map(|c| Demand::PointsTo(c.0.clone()))
+                .collect(),
+            &Config::default(),
+        );
 
-    dbg!(&actual_points_to);
+        let actual_points_to: HashMap<Cell, HashSet<Cell>> =
+            result.get_all_entries().iter_solutions().collect();
 
-    for (cell, pointees) in expected_points_to {
-        match actual_points_to.get(&cell) {
-            Some(actual_pointees) => assert_eq!(
-                &pointees, actual_pointees,
-                "Expect cell {cell} to have the correct points-to set"
-            ),
-            None => panic!("The cell {cell} is not in the solution"),
+        dbg!(&actual_points_to);
+
+        for (cell, pointees) in expected_points_to {
+            match actual_points_to.get(cell) {
+                Some(actual_pointees) => assert_eq!(
+                    pointees, actual_pointees,
+                    "Expect cell {cell} to have the correct points-to set"
+                ),
+                None => panic!("The cell {cell} is not in the solution"),
+            }
         }
     }
 }
@@ -149,6 +166,7 @@ fn hash(resource: &str) {
             .as_generic()
             .as_demand_driven(),
         CallStringSelector::<2>::new(),
+        false,
     )
 }
 
@@ -161,6 +179,7 @@ fn roaring(resource: &str) {
             .as_generic()
             .as_demand_driven(),
         CallStringSelector::<2>::new(),
+        false,
     )
 }
 
@@ -173,6 +192,7 @@ fn shared_bit_vec(resource: &str) {
             .as_generic()
             .as_demand_driven(),
         CallStringSelector::<2>::new(),
+        false,
     )
 }
 
@@ -185,6 +205,7 @@ fn wave_prop(resource: &str) {
             .as_generic()
             .as_demand_driven(),
         CallStringSelector::<2>::new(),
+        false,
     )
 }
 
@@ -197,6 +218,7 @@ fn roaring_wave_prop(resource: &str) {
             .as_generic()
             .as_demand_driven(),
         CallStringSelector::<2>::new(),
+        false,
     )
 }
 
@@ -209,6 +231,7 @@ fn shared_bit_vec_wave_prop(resource: &str) {
             .as_generic()
             .as_demand_driven(),
         CallStringSelector::<2>::new(),
+        false,
     )
 }
 
@@ -219,5 +242,17 @@ fn context_shared_bitvec_wave_prop(resource: &str) {
         resource,
         SharedBitVecContextWavePropagationSolver::new().as_demand_driven(),
         CallStringSelector::<2>::new(),
+        false,
+    )
+}
+
+#[test_resources("res/context_insensitive/**/test_config.json")]
+#[test_resources("res/context_sensitive/**/test_config.json")]
+fn basic_demand(resource: &str) {
+    run_test_template(
+        resource,
+        BasicDemandSolver::new(),
+        CallStringSelector::<2>::new(),
+        true,
     )
 }

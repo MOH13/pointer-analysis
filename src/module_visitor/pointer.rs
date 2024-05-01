@@ -722,25 +722,25 @@ where
         }
 
         let pointer_context = PointerContext::from_context(context);
-        if let Type::IntegerType { bits: 8 } = src_ty.as_ref() {
-            let dest_ty = strip_pointer_type(dest_ty)
-                .expect("bitcast and addrspacecast should only take pointer args");
-            if let Some(struct_type) = StructType::try_from_type(dest_ty.clone(), context.structs) {
-                let instr = PointerInstruction::Alloca {
-                    dest: dest.clone(),
-                    struct_type: Some(struct_type.clone()),
-                };
-                self.observer.handle_ptr_instruction(instr, pointer_context);
-                self.handle_memcpy(
-                    dest.clone(),
-                    value.clone(),
-                    struct_type.clone(),
-                    pointer_context,
-                );
-                self.handle_memcpy(value, dest, struct_type, pointer_context);
-                return;
-            }
-        }
+        // if let Type::IntegerType { bits: 8 } = src_ty.as_ref() {
+        //     let dest_ty = strip_pointer_type(dest_ty)
+        //         .expect("bitcast and addrspacecast should only take pointer args");
+        //     if let Some(struct_type) = StructType::try_from_type(dest_ty.clone(), context.structs) {
+        //         let instr = PointerInstruction::Alloca {
+        //             dest: dest.clone(),
+        //             struct_type: Some(struct_type.clone()),
+        //         };
+        //         self.observer.handle_ptr_instruction(instr, pointer_context);
+        //         self.handle_memcpy(
+        //             dest.clone(),
+        //             value.clone(),
+        //             struct_type.clone(),
+        //             pointer_context,
+        //         );
+        //         self.handle_memcpy(value, dest, struct_type, pointer_context);
+        //         return;
+        //     }
+        // }
         // Always a pointer type, so no struct type
         self.handle_assign(dest, value, None, pointer_context);
     }

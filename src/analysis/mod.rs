@@ -37,7 +37,7 @@ pub struct PointsToAnalysis;
 
 impl PointsToAnalysis {
     fn solve_module<'a, S, C>(
-        solver: S,
+        solver: &S,
         module: &'a Module,
         context_selector: C,
         demands: Vec<Demand<Cell<'a>>>,
@@ -58,8 +58,9 @@ impl PointsToAnalysis {
             .iter()
             .flat_map(|(_, content)| {
                 content
-                    .return_and_parameter_cells
+                    .return_cells
                     .iter()
+                    .chain(&content.parameter_cells)
                     .chain(&content.cells)
             })
             .cloned()
@@ -80,7 +81,7 @@ impl PointsToAnalysis {
             .map(mem::take)
             .unwrap_or_default();
 
-        let (_, entry) = pre_analysis_global.combine_with_constraints(global_constraints);
+        let (_, _, entry) = pre_analysis_global.combine_with_constraints(global_constraints);
 
         let main_function_index = pre_analyzer
             .functions
@@ -99,11 +100,12 @@ impl PointsToAnalysis {
                     .get_mut(&Some(func))
                     .map(mem::take)
                     .unwrap_or_default();
-                let (return_and_parameter_terms, constrained_terms) =
+                let (return_terms, parameter_terms, constrained_terms) =
                     state.combine_with_constraints(constraints);
                 FunctionInput {
                     fun_name: func.into(),
-                    return_and_parameter_terms,
+                    return_terms,
+                    parameter_terms,
                     constrained_terms,
                 }
             })
@@ -126,7 +128,7 @@ impl PointsToAnalysis {
 
     /// Runs the points-to analysis on LLVM module `module` using `solver`.
     pub fn run<'a, S, C>(
-        solver: S,
+        solver: &S,
         module: &'a Module,
         context_selector: C,
         demands: Vec<Demand<Cell<'a>>>,
@@ -142,7 +144,7 @@ impl PointsToAnalysis {
     }
 
     pub fn run_and_visualize<'a, S, C>(
-        solver: S,
+        solver: &S,
         module: &'a Module,
         context_selector: C,
         demands: Vec<Demand<Cell<'a>>>,
@@ -451,7 +453,8 @@ impl<'a> Debug for Cell<'a> {
 #[derive(Default)]
 struct PointsToPreAnalyzerFunctionState<'a> {
     dests_already_added: HashSet<VarIdent<'a>>,
-    return_and_parameter_cells: Vec<Cell<'a>>,
+    return_cells: Vec<Cell<'a>>,
+    parameter_cells: Vec<Cell<'a>>,
     cells: Vec<Cell<'a>>,
     term_types: Vec<(Cell<'a>, TermType)>,
 }
@@ -460,9 +463,10 @@ impl<'a> PointsToPreAnalyzerFunctionState<'a> {
     fn combine_with_constraints(
         self,
         constraints: Vec<Constraint<Cell<'a>>>,
-    ) -> (Vec<Cell<'a>>, ConstrainedTerms<Cell<'a>>) {
+    ) -> (Vec<Cell<'a>>, Vec<Cell<'a>>, ConstrainedTerms<Cell<'a>>) {
         (
-            self.return_and_parameter_cells,
+            self.return_cells,
+            self.parameter_cells,
             ConstrainedTerms {
                 terms: self.cells,
                 term_types: self.term_types,
@@ -620,13 +624,13 @@ impl<'a> PointerModuleObserver<'a> for PointsToPreAnalyzer<'a> {
             ident.clone(),
             return_struct_type.as_deref(),
             Cell::Return,
-            &mut function_state.return_and_parameter_cells,
+            &mut function_state.return_cells,
         ) + parameters.len()
             - 1;
 
         for param in &parameters {
             function_state
-                .return_and_parameter_cells
+                .parameter_cells
                 .push(Cell::Var(param.clone()));
         }
 

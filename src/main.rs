@@ -198,7 +198,7 @@ fn main() -> io::Result<()> {
                 .as_context_sensitive()
                 .as_demand_driven();
             let justifier =
-                PointsToAnalysis::run(solver, &module, context_selector, demands, &config)
+                PointsToAnalysis::run(&solver, &module, context_selector, demands, &config)
                     .into_solution();
             loop {
                 let mut input = String::new();
@@ -232,14 +232,14 @@ fn main() -> io::Result<()> {
 
     let result = match &args.visualize {
         Some(path) => PointsToAnalysis::run_and_visualize(
-            solver,
+            &solver,
             &module,
             context_selector,
             demands,
             &config,
             path,
         ),
-        None => PointsToAnalysis::run(solver, &module, context_selector, demands, &config),
+        None => PointsToAnalysis::run(&solver, &module, context_selector, demands, &config),
     };
     show_output(result, &args, None);
 
