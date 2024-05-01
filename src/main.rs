@@ -9,11 +9,10 @@ use pointer_analysis::solver::{
     BasicDemandSolver, BasicHashSolver, BasicRoaringSolver, StatSolver,
 };
 use pointer_analysis::solver::{
-    BasicSharedBitVecSolver, CallStringSelector, ContextInsensitiveSolver, JustificationSolver,
-    RoaringWavePropagationSolver, SharedBitVecContextWavePropagationSolver,
-    SharedBitVecWavePropagationSolver, Solver, SolverExt, SolverSolution, TermSetTrait,
+    BasicSharedBitVecSolver, CallStringSelector, ContextInsensitiveSolver, Demand,
+    HashContextWavePropagationSolver, JustificationSolver, RoaringContextWavePropagationSolver,
+    SharedBitVecContextWavePropagationSolver, Solver, SolverExt, SolverSolution, TermSetTrait,
 };
-use pointer_analysis::solver::{Demand, HashWavePropagationSolver};
 use pointer_analysis::visualizer::{AsDynamicVisualizableExt, DynamicVisualizableSolver};
 use std::fmt::Debug;
 use std::io;
@@ -33,6 +32,27 @@ fn get_demands<'a>(args: &Args) -> Vec<Demand<Cell<'a>>> {
         .collect()
 }
 
+fn show_count_metrics<'a, T, S>(result: &T)
+where
+    T: ResultTrait<'a, TermSet = S>,
+    S: TermSetTrait,
+{
+    let mut counts: Vec<_> = result
+        .iter_solutions()
+        .into_iter()
+        .map(|(_, set)| set.len())
+        .collect();
+    let num_cells = counts.len();
+    let total = counts.iter().sum::<usize>();
+    let max = counts.iter().copied().max().unwrap_or(0);
+    let mean = total as f64 / num_cells as f64;
+    let median = counts.select_nth_unstable(num_cells / 2).1;
+    println!("Total: {total}");
+    println!("Max: {max}");
+    println!("Mean: {mean}");
+    println!("Median: {median}");
+}
+
 fn show_output<'a, S>(
     result: PointsToResult<'a, S>,
     args: &Args,
@@ -41,21 +61,6 @@ fn show_output<'a, S>(
     S: SolverSolution<Term = Cell<'a>>,
     S::TermSet: Debug + IntoIterator<Item = Cell<'a>> + FromIterator<Cell<'a>>,
 {
-    if args.count_terms == CountMode::Unfiltered {
-        let num_cells = result.get_cells().len();
-        let mut counts: Vec<_> = result
-            .iter_solutions()
-            .into_iter()
-            .map(|(_, set)| set.len())
-            .collect();
-        let max = counts.iter().copied().max().unwrap_or(0);
-        let mean = counts.iter().sum::<usize>() as f64 / counts.len() as f64;
-        let median = counts.select_nth_unstable(num_cells / 2).1;
-        println!("Max: {max}");
-        println!("Mean: {mean}");
-        println!("Median: {median}");
-    }
-
     if !args.dont_output {
         let filtered_result = result.filter_result(
             |c, set, cache| {
@@ -97,9 +102,20 @@ fn show_output<'a, S>(
                     Vec::new(),
                 );
                 println!("{demand_filtered}");
+                if args.count_terms == CountMode::Filtered {
+                    show_count_metrics(&demand_filtered);
+                }
             }
-            None => println!("{filtered_result}"),
+            None => {
+                println!("{filtered_result}");
+                if args.count_terms == CountMode::Filtered {
+                    show_count_metrics(&filtered_result);
+                }
+            }
         }
+    }
+    if args.count_terms == CountMode::Unfiltered {
+        show_count_metrics(&result);
     }
 
     if args.interactive_output {
@@ -153,13 +169,11 @@ fn main() -> io::Result<()> {
 
     let solver: DynamicVisualizableSolver<_, _> = match (args.solver, args.termset) {
         // Basic solver
-        (SolverMode::Basic, TermSet::Hash) if demands.is_empty() => BasicHashSolver::new()
+        (SolverMode::Basic, TermSet::Hash) => BasicHashSolver::new()
             .as_context_sensitive()
             .as_generic()
             .as_demand_driven()
             .as_dynamic_visualizable(),
-        // with demands
-        (SolverMode::Basic, TermSet::Hash) => BasicDemandSolver::new().as_dynamic_visualizable(),
         (SolverMode::Basic, TermSet::Roaring) => BasicRoaringSolver::new()
             .as_context_sensitive()
             .as_generic()
@@ -171,28 +185,23 @@ fn main() -> io::Result<()> {
             .as_demand_driven()
             .as_dynamic_visualizable(),
         // Wave prop solver
-        (SolverMode::Wave, TermSet::Hash) => HashWavePropagationSolver::new()
-            .as_context_sensitive()
-            .as_generic()
+        (SolverMode::Wave, TermSet::Hash) => HashContextWavePropagationSolver::new()
             .as_demand_driven()
             .as_dynamic_visualizable(),
-        (SolverMode::Wave, TermSet::Roaring) => RoaringWavePropagationSolver::new()
-            .as_context_sensitive()
-            .as_generic()
+        (SolverMode::Wave, TermSet::Roaring) => RoaringContextWavePropagationSolver::new()
             .as_demand_driven()
             .as_dynamic_visualizable(),
-        (SolverMode::Wave, TermSet::SharedBitVec) => SharedBitVecWavePropagationSolver::new()
-            .as_context_sensitive()
-            .as_generic()
-            .as_demand_driven()
-            .as_dynamic_visualizable(),
-        (SolverMode::Context, _) => SharedBitVecContextWavePropagationSolver::new()
-            .as_demand_driven()
-            .as_dynamic_visualizable(),
+        (SolverMode::Wave, TermSet::SharedBitVec) => {
+            SharedBitVecContextWavePropagationSolver::new()
+                .as_demand_driven()
+                .as_dynamic_visualizable()
+        }
         (SolverMode::DryRun, _) => StatSolver::<Cell<'_>>::new()
             .as_context_sensitive()
             .as_demand_driven()
             .as_dynamic_visualizable(),
+        // with demands
+        (SolverMode::BasicDemand, _) => BasicDemandSolver::new().as_dynamic_visualizable(),
         (SolverMode::Justify, _) => {
             let solver = JustificationSolver::<Cell>::new()
                 .as_context_sensitive()
@@ -235,13 +244,18 @@ fn main() -> io::Result<()> {
             &solver,
             &module,
             context_selector,
-            demands,
+            demands.clone(),
             &config,
             path,
         ),
-        None => PointsToAnalysis::run(&solver, &module, context_selector, demands, &config),
+        None => PointsToAnalysis::run(&solver, &module, context_selector, demands.clone(), &config),
     };
-    show_output(result, &args, None);
+    let demand_filter = if demands.is_empty() || args.full_query_output {
+        None
+    } else {
+        Some(demands.as_ref())
+    };
+    show_output(result, &args, demand_filter);
 
     Ok(())
 }

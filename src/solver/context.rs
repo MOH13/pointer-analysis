@@ -34,7 +34,7 @@ impl<T, C> SolverInput for ContextSensitiveInput<T, C> {
 
 pub trait ContextSelector: Debug {
     type Context: Clone + Debug + PartialEq + Eq + Hash;
-    fn select_context(&self, current: &Self::Context, call_site: CallSite) -> Self::Context;
+    fn select_context(&self, current: &Self::Context, call_site: &CallSite) -> Self::Context;
     fn empty(&self) -> Self::Context;
 }
 
@@ -55,7 +55,7 @@ pub struct ContextInsensitiveSelector;
 impl ContextSelector for ContextInsensitiveSelector {
     type Context = ContextInsensitiveContext;
 
-    fn select_context(&self, _: &Self::Context, _: CallSite) -> Self::Context {
+    fn select_context(&self, _: &Self::Context, _: &CallSite) -> Self::Context {
         ContextInsensitiveContext
     }
 
@@ -127,7 +127,7 @@ impl<const MAX: usize> CallStringSelector<MAX> {
 impl<const K: usize> ContextSelector for CallStringSelector<K> {
     type Context = CallStringContext<K>;
 
-    fn select_context(&self, current: &Self::Context, call_site: CallSite) -> Self::Context {
+    fn select_context(&self, current: &Self::Context, call_site: &CallSite) -> Self::Context {
         let mut context = current.clone();
 
         if self.call_string_length == 0 {
@@ -137,7 +137,7 @@ impl<const K: usize> ContextSelector for CallStringSelector<K> {
         if context.0.len() == self.call_string_length {
             context.0.remove(0);
         }
-        context.0.push(call_site);
+        context.0.push(call_site.clone());
         context
     }
 

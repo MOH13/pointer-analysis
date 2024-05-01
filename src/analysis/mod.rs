@@ -1,4 +1,3 @@
-use either::Either;
 use indexmap::IndexMap;
 use std::borrow::Cow;
 use std::fmt::{self, Debug, Display, Formatter};
@@ -10,7 +9,6 @@ use hashbrown::{HashMap, HashSet};
 use llvm_ir::Module;
 use log::error;
 
-use crate::cli::CountMode;
 use crate::cstr;
 use crate::module_visitor::pointer::{
     PointerContext, PointerInstruction, PointerModuleObserver, PointerModuleVisitor,
@@ -22,7 +20,7 @@ use crate::solver::{
     DemandContextSensitiveInput, DemandInput, FunctionInput, Solver, SolverSolution, TermSetTrait,
     TermType,
 };
-use crate::visualizer::{Graph, Visualizable};
+use crate::visualizer::Visualizable;
 
 #[cfg(test)]
 mod tests;
@@ -185,9 +183,9 @@ impl<'a> CellCache<'a> {
 }
 
 pub trait ResultTrait<'a> {
-    type Solution;
-    fn get(&self, cell: &Cell<'a>) -> Option<Self::Solution>;
-    fn iter_solutions<'b>(&'b self) -> Box<dyn Iterator<Item = (Cell<'a>, Self::Solution)> + 'b>
+    type TermSet;
+    fn get(&self, cell: &Cell<'a>) -> Option<Self::TermSet>;
+    fn iter_solutions<'b>(&'b self) -> Box<dyn Iterator<Item = (Cell<'a>, Self::TermSet)> + 'b>
     where
         'a: 'b;
     fn get_cells(&self) -> &[Cell<'a>];
@@ -195,7 +193,7 @@ pub trait ResultTrait<'a> {
 
     fn filter_result<
         'b,
-        F3: Fn(&Cell<'a>, &Self::Solution, &CellCache<'a>) -> bool,
+        F3: Fn(&Cell<'a>, &Self::TermSet, &CellCache<'a>) -> bool,
         F4: Fn(&Cell<'a>, &Cell<'a>, &CellCache<'a>) -> bool,
     >(
         &'b self,
@@ -228,13 +226,13 @@ impl<'a, S> ResultTrait<'a> for PointsToResult<'a, S>
 where
     S: SolverSolution<Term = Cell<'a>>,
 {
-    type Solution = S::TermSet;
+    type TermSet = S::TermSet;
 
-    fn get(&self, cell: &Cell<'a>) -> Option<Self::Solution> {
+    fn get(&self, cell: &Cell<'a>) -> Option<Self::TermSet> {
         Some(self.0.get(cell))
     }
 
-    fn iter_solutions<'b>(&'b self) -> Box<dyn Iterator<Item = (Cell<'a>, Self::Solution)> + 'b>
+    fn iter_solutions<'b>(&'b self) -> Box<dyn Iterator<Item = (Cell<'a>, Self::TermSet)> + 'b>
     where
         'a: 'b,
     {
@@ -261,14 +259,14 @@ pub struct FilteredResults<'a, F1, F2, R> {
 impl<'a, 'b, F1, F2, R> FilteredResults<'b, F1, F2, R>
 where
     R: ResultTrait<'a>,
-    R::Solution: TermSetTrait<Term = Cell<'a>>,
-    F1: Fn(&Cell<'a>, &R::Solution, &CellCache<'a>) -> bool,
+    R::TermSet: TermSetTrait<Term = Cell<'a>>,
+    F1: Fn(&Cell<'a>, &R::TermSet, &CellCache<'a>) -> bool,
     F2: Fn(&Cell<'a>, &Cell<'a>, &CellCache<'a>) -> bool,
 {
     fn get_with_solution(
         &self,
         cell: &Cell<'a>,
-        result_solution: R::Solution,
+        result_solution: R::TermSet,
     ) -> Option<HashSet<Cell<'a>>> {
         let cell_str = self.get_cell_cache().string_of(cell);
         if !self.include_strs.is_empty() && !self.include_strs.iter().any(|s| cell_str.contains(s))
@@ -295,13 +293,13 @@ where
 impl<'a, 'b, F1, F2, R> ResultTrait<'a> for FilteredResults<'b, F1, F2, R>
 where
     R: ResultTrait<'a>,
-    R::Solution: TermSetTrait<Term = Cell<'a>>,
-    F1: Fn(&Cell<'a>, &R::Solution, &CellCache<'a>) -> bool,
+    R::TermSet: TermSetTrait<Term = Cell<'a>>,
+    F1: Fn(&Cell<'a>, &R::TermSet, &CellCache<'a>) -> bool,
     F2: Fn(&Cell<'a>, &Cell<'a>, &CellCache<'a>) -> bool,
 {
-    type Solution = HashSet<Cell<'a>>;
+    type TermSet = HashSet<Cell<'a>>;
 
-    fn get(&self, cell: &Cell<'a>) -> Option<Self::Solution> {
+    fn get(&self, cell: &Cell<'a>) -> Option<Self::TermSet> {
         let cell_str = self.get_cell_cache().string_of(cell);
         if !self.include_strs.is_empty() && !self.include_strs.iter().any(|s| cell_str.contains(s))
         {
@@ -324,7 +322,7 @@ where
         )
     }
 
-    fn iter_solutions<'c>(&'c self) -> Box<dyn Iterator<Item = (Cell<'a>, Self::Solution)> + 'c>
+    fn iter_solutions<'c>(&'c self) -> Box<dyn Iterator<Item = (Cell<'a>, Self::TermSet)> + 'c>
     where
         'a: 'c,
     {
@@ -361,16 +359,6 @@ impl<'a, S: SolverSolution> PointsToResult<'a, S> {
         }
     }
 
-    fn test<'b>(&'b self) -> FilteredResults<'b, (), (), Self> {
-        FilteredResults {
-            result: self,
-            key_filter: (),
-            value_filter: (),
-            include_strs: Vec::new(),
-            exclude_strs: Vec::new(),
-        }
-    }
-
     pub fn into_solution(self) -> S {
         self.0
     }
@@ -393,7 +381,7 @@ where
 impl<'a, 'b, F1, F2, R> Display for FilteredResults<'b, F1, F2, R>
 where
     Self: ResultTrait<'a>,
-    <Self as ResultTrait<'a>>::Solution: Debug,
+    <Self as ResultTrait<'a>>::TermSet: Debug,
 {
     fn fmt<'d, 'c>(&'d self, f: &'c mut Formatter<'_>) -> fmt::Result {
         for (cell, set) in self.iter_solutions() {

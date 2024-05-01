@@ -55,6 +55,9 @@ pub struct Args {
     /// List of pointed-by queries
     #[arg(long)]
     pub pointed_by_queries: Vec<String>,
+    ///
+    #[arg(short, long, default_value_t = false)]
+    pub full_query_output: bool,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
@@ -65,10 +68,10 @@ pub enum SolverMode {
     Wave,
     /// Do not solve (used to test constraint generation speed)
     DryRun,
-    // Solve context sensitively
-    Context,
-    // Justification
+    /// Justification
     Justify,
+    /// Demand-driven woklist based solver
+    BasicDemand,
 }
 
 impl Display for SolverMode {
@@ -77,8 +80,8 @@ impl Display for SolverMode {
             SolverMode::Basic => write!(f, "basic"),
             SolverMode::Wave => write!(f, "wave"),
             SolverMode::DryRun => write!(f, "dry-run"),
-            SolverMode::Context => write!(f, "context"),
             SolverMode::Justify => write!(f, "justify"),
+            SolverMode::BasicDemand => write!(f, "basic-demand"),
         }
     }
 }

@@ -40,18 +40,6 @@ macro_rules! solver_tests {
                     vars!($crate::solver::BasicHashSolver)
                 }
                 #[test]
-                fn hash_wave_prop() {
-                    vars!($crate::solver::HashWavePropagationSolver)
-                }
-                #[test]
-                fn roaring_wave_prop() {
-                    vars!($crate::solver::RoaringWavePropagationSolver)
-                }
-                #[test]
-                fn shared_bitvec_wave_prop() {
-                    vars!($crate::solver::SharedBitVecWavePropagationSolver)
-                }
-                #[test]
                 fn roaring() {
                     vars!($crate::solver::BasicRoaringSolver)
                 }
@@ -75,7 +63,6 @@ macro_rules! solver_tests {
                         $( $var , )+
                     }
                     use Term::*;
-                    use $crate::solver::IntegerTerm;
                     let $solver = $crate::solver::BasicHashSolver::new().as_generic();
                     $body
                 }

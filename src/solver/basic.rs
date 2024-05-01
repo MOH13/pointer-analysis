@@ -8,11 +8,24 @@ use roaring::RoaringBitmap;
 
 use super::shared_bitvec::SharedBitVec;
 use super::{
-    edges_between, offset_term, offset_terms, CallSite, Constraint, ContextInsensitiveInput,
-    GenericSolverSolution, IntegerTerm, Offsets, Solver, SolverExt, SolverSolution, TermSetTrait,
-    UnivCond,
+    edges_between, CallSite, Constraint, ContextInsensitiveInput, GenericSolverSolution,
+    IntegerTerm, Offsets, Solver, SolverExt, SolverSolution, TermSetTrait, TermType,
 };
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
+
+#[derive(Clone, Debug)]
+enum UnivCond<T: Clone> {
+    SubsetLeft {
+        right: T,
+        offset: usize,
+        call_site: Option<CallSite>,
+    },
+    SubsetRight {
+        left: T,
+        offset: usize,
+        call_site: Option<CallSite>,
+    },
+}
 
 pub struct BasicSolver<T>(PhantomData<T>);
 
@@ -28,7 +41,7 @@ pub struct BasicSolverState<T: Clone, U> {
     sols: Vec<U>,
     edges: Vec<HashMap<T, Offsets>>,
     conds: Vec<Vec<UnivCond<T>>>,
-    allowed_offsets: HashMap<T, usize>,
+    term_types: Vec<TermType>,
 }
 
 macro_rules! add_token {
@@ -46,22 +59,57 @@ impl<T: TermSetTrait<Term = IntegerTerm>> BasicSolverState<IntegerTerm, T> {
             sols: vec![],
             edges: vec![],
             conds: vec![],
-            allowed_offsets: HashMap::new(),
+            term_types: vec![],
+        }
+    }
+
+    fn try_offset_term(
+        &self,
+        term: IntegerTerm,
+        call_site: Option<&CallSite>,
+        offset: usize,
+    ) -> Option<IntegerTerm> {
+        let term_type = self.term_types[term as usize];
+        if call_site.is_none() && offset == 0 {
+            return Some(term);
+        }
+        match term_type {
+            TermType::Struct(allowed) if call_site.is_none() => {
+                (offset <= allowed).then(|| term + offset as u32)
+            }
+            TermType::Function(allowed, func_type) => {
+                let Some(call_site) = call_site else {
+                    return None;
+                };
+                if func_type != call_site.0.func_type_index {
+                    return None;
+                }
+                (offset <= allowed).then(|| term + offset as u32)
+            }
+            _ => None,
         }
     }
 
     fn propagate(&mut self) {
         while let Some((term, node)) = self.worklist.pop_front() {
-            for cond in &self.conds[node as usize].clone() {
+            for cond in self.conds[node as usize].clone() {
                 match cond {
-                    UnivCond::SubsetLeft { right, offset } => {
-                        if let Some(t) = offset_term(term, &self.allowed_offsets, *offset) {
-                            self.add_edge(t, *right, 0)
+                    UnivCond::SubsetLeft {
+                        right,
+                        offset,
+                        call_site,
+                    } => {
+                        if let Some(t) = self.try_offset_term(term, call_site.as_ref(), offset) {
+                            self.add_edge(t, right, 0)
                         }
                     }
-                    UnivCond::SubsetRight { left, offset } => {
-                        if let Some(t) = offset_term(term, &self.allowed_offsets, *offset) {
-                            self.add_edge(*left, t, 0)
+                    UnivCond::SubsetRight {
+                        left,
+                        offset,
+                        call_site,
+                    } => {
+                        if let Some(t) = self.try_offset_term(term, call_site.as_ref(), offset) {
+                            self.add_edge(left, t, 0)
                         }
                     }
                 }
@@ -69,7 +117,7 @@ impl<T: TermSetTrait<Term = IntegerTerm>> BasicSolverState<IntegerTerm, T> {
 
             for (&n2, edges) in &self.edges[node as usize] {
                 for offset in edges.iter() {
-                    if let Some(t) = offset_term(term, &self.allowed_offsets, offset as usize) {
+                    if let Some(t) = self.try_offset_term(term, None, offset as usize) {
                         add_token!(self, t, n2);
                     }
                 }
@@ -80,12 +128,10 @@ impl<T: TermSetTrait<Term = IntegerTerm>> BasicSolverState<IntegerTerm, T> {
     fn add_edge(&mut self, left: IntegerTerm, right: IntegerTerm, offset: usize) {
         let edges = edges_between(&mut self.edges, left, right);
         if edges.insert(offset) {
-            for t in offset_terms(
-                self.sols[left as usize].iter(),
-                &self.allowed_offsets,
-                offset,
-            ) {
-                add_token!(self, t, right);
+            for term in self.sols[left as usize].clone().iter() {
+                if let Some(t) = self.try_offset_term(term, None, offset) {
+                    add_token!(self, t, right);
+                }
             }
         }
     }
@@ -106,34 +152,34 @@ impl<T: TermSetTrait<Term = IntegerTerm>> BasicSolverState<IntegerTerm, T> {
                 cond_node,
                 right,
                 offset,
-                ..// TODO: functions
+                call_site,
             } => {
-                self.conds[cond_node as usize].push(UnivCond::SubsetLeft { right, offset });
-                let terms = offset_terms(
-                    self.sols[cond_node as usize].iter(),
-                    &self.allowed_offsets,
+                self.conds[cond_node as usize].push(UnivCond::SubsetLeft {
+                    right,
                     offset,
-                );
-
-                for t in terms {
-                    self.add_edge(t, right, 0);
+                    call_site: call_site.clone(),
+                });
+                for term in self.sols[cond_node as usize].clone().iter() {
+                    if let Some(t) = self.try_offset_term(term, call_site.as_ref(), offset) {
+                        self.add_edge(t, right, 0);
+                    }
                 }
             }
             Constraint::UnivCondSubsetRight {
                 cond_node,
                 left,
                 offset,
-                ..// TODO: functions
+                call_site,
             } => {
-                self.conds[cond_node as usize].push(UnivCond::SubsetRight { left, offset });
-                let terms = offset_terms(
-                    self.sols[cond_node as usize].iter(),
-                    &self.allowed_offsets,
+                self.conds[cond_node as usize].push(UnivCond::SubsetRight {
+                    left,
                     offset,
-                );
-
-                for t in terms {
-                    self.add_edge(left, t, 0);
+                    call_site: call_site.clone(),
+                });
+                for term in self.sols[cond_node as usize].clone().iter() {
+                    if let Some(t) = self.try_offset_term(term, call_site.as_ref(), offset) {
+                        self.add_edge(left, t, 0);
+                    }
                 }
             }
             Constraint::CallDummy { .. } => {}
@@ -145,11 +191,10 @@ impl<T: TermSetTrait<Term = IntegerTerm>> BasicSolverState<IntegerTerm, T> {
         self.sols = vec![T::new(); input.terms.len()];
         self.edges = vec![HashMap::new(); input.terms.len()];
         self.conds = vec![vec![]; input.terms.len()];
-        self.allowed_offsets = input
-            .term_types
-            .into_iter()
-            .map(|(t, ty)| (t as IntegerTerm, ty.into_offset()))
-            .collect();
+        self.term_types = vec![TermType::Basic; input.terms.len()];
+        for (t, ty) in input.term_types {
+            self.term_types[t as usize] = ty;
+        }
 
         for c in input.constraints {
             self.add_constraint(c);
@@ -347,11 +392,6 @@ where
 
         let mut dest = None;
         while let Some((v, t)) = queue.pop_front() {
-            // println!(
-            //     "Looking for {} in {}",
-            //     self.display_int(t),
-            //     self.display_int(v)
-            // );
             if self
                 .constraints
                 .contains(&Constraint::Inclusion { term: t, node: v })
@@ -360,26 +400,15 @@ where
                 break;
             }
 
-            // println!(
-            //     "incomming: {:?}",
-            //     self.rev_edges[v as usize]
-            //         .iter()
-            //         .map(|(u, _)| self.display_int(*u))
-            //         .collect::<Vec<_>>()
-            // );
             for (from, weights) in &self.rev_edges[v as usize] {
                 for w in weights.iter() {
                     let Some(from_t) = t.checked_sub(w as u32) else {
                         continue;
                     };
-                    let allowed = *self
-                        .solution
-                        .sub_solution
-                        .allowed_offsets
-                        .get(&from_t)
-                        .unwrap_or(&0);
-                    if visited.contains(&(*from, from_t))
-                        || allowed < w as usize
+                    let allowed =
+                        self.solution.sub_solution.try_offset_term(from_t, None, w) == Some(t);
+                    if !allowed
+                        || visited.contains(&(*from, from_t))
                         || !self.solution.sub_solution.sols[*from as usize].contains(&from_t)
                     {
                         continue;
@@ -467,13 +496,11 @@ where
                 let Some(pred) = from.checked_sub(*offset as u32) else {
                     continue;
                 };
-                if *self
+                if self
                     .solution
                     .sub_solution
-                    .allowed_offsets
-                    .get(&pred)
-                    .unwrap_or(&0)
-                    < *offset
+                    .try_offset_term(pred, call_site.as_ref(), *offset)
+                    == Some(from)
                     || !self.solution.sub_solution.sols[*cond_node as usize].contains(&pred)
                 {
                     continue;
@@ -517,13 +544,11 @@ where
                 let Some(pred) = to.checked_sub(*offset as u32) else {
                     continue;
                 };
-                if *self
+                if self
                     .solution
                     .sub_solution
-                    .allowed_offsets
-                    .get(&pred)
-                    .unwrap_or(&0)
-                    < *offset
+                    .try_offset_term(pred, call_site.as_ref(), *offset)
+                    == Some(to)
                     || !self.solution.sub_solution.sols[*cond_node as usize].contains(&pred)
                 {
                     continue;

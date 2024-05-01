@@ -2,22 +2,19 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::mem;
-use std::rc::Rc;
 
 use bitvec::bitvec;
 use bitvec::prelude::*;
 use hashbrown::{HashMap, HashSet};
 use once_cell::unsync::Lazy;
+use roaring::RoaringBitmap;
 
-use super::context::{
-    function_to_template, ContextState, FunctionTemplate, FunctionTermInfo, TemplateTerm,
-};
+use super::context::{ContextState, TemplateTerm};
 use super::shared_bitvec::SharedBitVec;
 use super::{
-    edges_between, CallSite, Constraint, ContextSelector, ContextSensitiveInput, FunctionInput,
+    edges_between, try_offset_term, CallSite, Constraint, ContextSelector, ContextSensitiveInput,
     IntegerTerm, Offsets, Solver, SolverExt, SolverSolution, TermSetTrait, TermType,
 };
-use crate::solver::GenericIdMap;
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
 
 #[derive(Clone)]
@@ -147,7 +144,7 @@ where
             self.edges.p_cache_call_dummies[i].union_assign(&p_new);
             for t in p_new.iter() {
                 changed |= self
-                    .try_offset_term(t, Some(call_site.clone()), 0, &context)
+                    .try_offset_and_instantiate(t, Some(&call_site), 0, &context)
                     .is_some();
             }
         }
@@ -172,7 +169,9 @@ where
             let p_new = self.edges.sols[cond_node as usize].difference(&self.edges.p_cache_left[i]);
             self.edges.p_cache_left[i].union_assign(&p_new);
             for t in p_new.iter() {
-                if let Some(t) = self.try_offset_term(t, call_site.clone(), offset, &context) {
+                if let Some(t) =
+                    self.try_offset_and_instantiate(t, call_site.as_ref(), offset, &context)
+                {
                     let t = get_representative(&mut self.parents, t);
                     if t == right {
                         continue;
@@ -208,7 +207,9 @@ where
                 self.edges.sols[cond_node as usize].difference(&self.edges.p_cache_right[i]);
             self.edges.p_cache_right[i].union_assign(&p_new);
             for t in p_new.iter() {
-                if let Some(t) = self.try_offset_term(t, call_site.clone(), offset, &context) {
+                if let Some(t) =
+                    self.try_offset_and_instantiate(t, call_site.as_ref(), offset, &context)
+                {
                     let t = get_representative(&mut self.parents, t);
                     if t == left {
                         continue;
@@ -225,23 +226,19 @@ where
         changed
     }
 
-    fn try_offset_term(
+    fn try_offset_and_instantiate(
         &mut self,
         term: IntegerTerm,
-        call_site: Option<CallSite>,
+        call_site: Option<&CallSite>,
         offset: usize,
         context: &C::Context,
     ) -> Option<IntegerTerm> {
         let term_type = self.term_types[term as usize];
+        let Some(call_site) = call_site else {
+            return try_offset_term(term, term_type, offset);
+        };
         match term_type {
-            TermType::Basic if call_site.is_none() && offset == 0 => Some(term),
-            TermType::Struct(allowed) if call_site.is_none() => {
-                (offset <= allowed).then(|| term + offset as IntegerTerm)
-            }
             TermType::Function(allowed, func_type) => {
-                let Some(call_site) = call_site else {
-                    return None;
-                };
                 if func_type != call_site.0.func_type_index {
                     return None;
                 }
@@ -851,9 +848,9 @@ fn get_representative(parents: &mut Vec<IntegerTerm>, child: IntegerTerm) -> Int
     representative
 }
 
-// pub type HashContextWavePropagationSolver<C> =
-//     ContextWavePropagationSolver<HashSet<IntegerTerm>, C>;
-// pub type RoaringContextWavePropagationSolver<C> = ContextWavePropagationSolver<RoaringBitmap, C>;
+pub type HashContextWavePropagationSolver<C> =
+    ContextWavePropagationSolver<HashSet<IntegerTerm>, C>;
+pub type RoaringContextWavePropagationSolver<C> = ContextWavePropagationSolver<RoaringBitmap, C>;
 pub type SharedBitVecContextWavePropagationSolver<C> =
     ContextWavePropagationSolver<SharedBitVec, C>;
 

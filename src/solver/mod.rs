@@ -1,7 +1,7 @@
 use hashbrown::{HashMap, HashSet};
 use roaring::RoaringBitmap;
 use std::fmt::Debug;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::marker::PhantomData;
 
 mod basic;
@@ -12,7 +12,6 @@ mod shared_bitvec;
 mod stats;
 #[cfg(test)]
 mod tests;
-mod wave_prop;
 
 pub use basic::{
     BasicHashSolver, BasicRoaringSolver, BasicSharedBitVecSolver, JustificationSolver,
@@ -23,11 +22,11 @@ pub use context::{
     CallSite, CallStringSelector, ContextInsensitiveSelector, ContextSelector,
     ContextSensitiveInput, ContextSensitiveSolver, DemandContextSensitiveInput, FunctionInput,
 };
-pub use context_wave_prop::SharedBitVecContextWavePropagationSolver;
-pub use stats::StatSolver;
-pub use wave_prop::{
-    HashWavePropagationSolver, RoaringWavePropagationSolver, SharedBitVecWavePropagationSolver,
+pub use context_wave_prop::{
+    HashContextWavePropagationSolver, RoaringContextWavePropagationSolver,
+    SharedBitVecContextWavePropagationSolver,
 };
+pub use stats::StatSolver;
 
 use crate::visualizer::Node;
 
@@ -193,13 +192,7 @@ macro_rules! cstr {
 
 pub type IntegerTerm = u32;
 
-#[derive(Clone, Debug)]
-enum UnivCond<T: Clone> {
-    SubsetLeft { right: T, offset: usize },
-    SubsetRight { left: T, offset: usize },
-}
-
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Demand<T> {
     PointsTo(T),
     PointedBy(T),
@@ -822,6 +815,17 @@ where
     edges[usize::try_from(left).expect("Could not convert to usize")]
         .entry(right)
         .or_default()
+}
+
+/// Offset a term if its term_type allows it. Does not work with function calls.
+fn try_offset_term(term: IntegerTerm, term_type: TermType, offset: usize) -> Option<IntegerTerm> {
+    if offset == 0 {
+        return Some(term);
+    }
+    match term_type {
+        TermType::Struct(allowed) => (offset <= allowed).then(|| term + offset as u32),
+        _ => None,
+    }
 }
 
 fn offset_term_vec_offsets(

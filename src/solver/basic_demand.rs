@@ -10,8 +10,8 @@ use smallvec::SmallVec;
 
 use super::context::{ContextState, TemplateTerm};
 use super::{
-    CallSite, Constraint, ContextSelector, Demand, DemandContextSensitiveInput, IntegerTerm,
-    Offsets, Solver, SolverExt, SolverSolution, TermType,
+    try_offset_term, CallSite, Constraint, ContextSelector, Demand, DemandContextSensitiveInput,
+    IntegerTerm, Offsets, Solver, SolverExt, SolverSolution, TermType,
 };
 use crate::util::GetTwoMutExt;
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
@@ -179,12 +179,6 @@ where
             state.get_or_instantiate_function(entrypoint, empty_context.clone());
         }
         state.solve();
-
-        // TODO: remove
-        for term in state.pointed_by_queries.iter_ones() {
-            assert!(state.edges.pointed_by_buffers[term].is_empty());
-        }
-
         state
     }
 }
@@ -224,26 +218,20 @@ fn add_points_to_query(
     term: IntegerTerm,
     points_to_queries: &mut BitVec,
     worklist: &mut VecDeque<WorklistEntry>,
-) -> bool {
+) {
     if !points_to_queries[term as usize] {
-        points_to_queries.set(term as usize, true);
         worklist.push_back(WorklistEntry::Demand(Demand::PointsTo(term)));
-        return true;
     }
-    false
 }
 
 fn add_pointed_by_query(
     term: IntegerTerm,
     pointed_by_queries: &mut BitVec,
     worklist: &mut VecDeque<WorklistEntry>,
-) -> bool {
+) {
     if !pointed_by_queries[term as usize] {
-        pointed_by_queries.set(term as usize, true);
         worklist.push_back(WorklistEntry::Demand(Demand::PointedBy(term)));
-        return true;
     }
-    false
 }
 
 fn add_edge(
@@ -312,10 +300,9 @@ fn propagate_edge(
         let mut to_insert = SmallVec::<[_; 64]>::new();
         for &t in &sols[from as usize] {
             let term_type = term_types[t as usize];
-            if offset > term_type.into_offset() {
+            let Some(new_term) = try_offset_term(t, term_type, offset) else {
                 continue;
-            }
-            let new_term = t + offset as u32;
+            };
             let has_pointed_by = pointed_by_queries[new_term as usize];
 
             if offset != 0 && !has_pointed_by {
@@ -360,10 +347,9 @@ fn propagate_edge_all(
     if let Some((from_set, to_set)) = sols.get_two_mut(from as usize, to as usize) {
         for &t in &*from_set {
             let term_type = term_types[t as usize];
-            if offset > term_type.into_offset() {
+            let Some(new_term) = try_offset_term(t, term_type, offset) else {
                 continue;
-            }
-            let new_term = t + offset as u32;
+            };
             if to_set.insert(new_term) {
                 // TODO: we check for pointed by queries
                 worklist.push_back(WorklistEntry::Inserted(to, new_term));
@@ -373,10 +359,9 @@ fn propagate_edge_all(
         let mut to_insert = SmallVec::<[_; 64]>::new();
         for &t in &sols[from as usize] {
             let term_type = term_types[t as usize];
-            if offset > term_type.into_offset() {
+            let Some(new_term) = try_offset_term(t, term_type, offset) else {
                 continue;
-            }
-            let new_term = t + offset as u32;
+            };
             if !sols[to as usize].contains(&new_term) {
                 to_insert.push(new_term);
             }
@@ -427,6 +412,11 @@ where
     }
 
     fn handle_points_to(&mut self, x: IntegerTerm) {
+        if self.points_to_queries[x as usize] {
+            return;
+        }
+        self.points_to_queries.set(x as usize, true);
+
         for &t in &self.edges.rev_addr_ofs[x as usize] {
             if self.edges.sols[x as usize].insert(t) {
                 self.worklist.push_back(WorklistEntry::Inserted(x, t));
@@ -467,24 +457,31 @@ where
     }
 
     fn handle_pointed_by(&mut self, t: IntegerTerm) {
+        if self.pointed_by_queries[t as usize] {
+            return;
+        }
+        self.pointed_by_queries.set(t as usize, true);
+
         for from in self.offsetable_terms(t) {
             if !self.pointed_by_queries[from as usize] {
-                self.pointed_by_queries.set(from as usize, true);
                 self.handle_pointed_by(from);
             }
         }
 
-        let term_type = self.term_types[t as usize];
+        let max_offset = match self.term_types[t as usize] {
+            TermType::Basic | TermType::Function(..) => 0,
+            TermType::Struct(o) => o,
+        };
         let mut stack = mem::take(&mut self.edges.pointed_by_buffers[t as usize]);
         let mut visited = HashSet::new();
         while let Some(x) = stack.pop() {
             if !visited.insert(x) {
                 continue;
             }
-            add_pointed_by_query(x, &mut self.pointed_by_queries, &mut self.worklist);
             if self.edges.sols[x as usize].insert(t) {
                 self.worklist.push_back(WorklistEntry::Inserted(x, t));
             }
+            add_pointed_by_query(x, &mut self.pointed_by_queries, &mut self.worklist);
             for &cond_node in &self.edges.stores[x as usize] {
                 add_points_to_query(cond_node, &mut self.points_to_queries, &mut self.worklist);
             }
@@ -495,7 +492,7 @@ where
                     }
                     if offset == 0 {
                         stack.push(*y);
-                    } else if offset <= term_type.into_offset() {
+                    } else if offset <= max_offset {
                         self.edges.pointed_by_buffers[t as usize + offset].push(*y);
                     }
                 }
@@ -503,23 +500,19 @@ where
         }
     }
 
-    fn try_offset_term(
+    fn try_offset_and_instantiate(
         &mut self,
         term: IntegerTerm,
-        call_site: Option<CallSite>,
+        call_site: Option<&CallSite>,
         offset: usize,
         context: &C::Context,
     ) -> Option<IntegerTerm> {
         let term_type = self.term_types[term as usize];
+        let Some(call_site) = call_site else {
+            return try_offset_term(term, term_type, offset);
+        };
         match term_type {
-            TermType::Basic if call_site.is_none() && offset == 0 => Some(term),
-            TermType::Struct(allowed) if call_site.is_none() => {
-                (offset <= allowed).then(|| term + offset as IntegerTerm)
-            }
             TermType::Function(allowed, func_type) => {
-                let Some(call_site) = call_site else {
-                    return None;
-                };
                 if func_type != call_site.0.func_type_index {
                     return None;
                 }
@@ -566,21 +559,27 @@ where
         for cond in self.edges.conds[x as usize].clone() {
             match cond {
                 Cond::Left(cond) => {
-                    if let Some(offset_term) =
-                        self.try_offset_term(t, cond.call_site, cond.offset, &cond.context)
-                    {
+                    if let Some(offset_term) = self.try_offset_and_instantiate(
+                        t,
+                        cond.call_site.as_ref(),
+                        cond.offset,
+                        &cond.context,
+                    ) {
                         add_edge!(self, offset_term, cond.right, 0);
                     }
                 }
                 Cond::Right(cond) => {
-                    if let Some(offset_term) =
-                        self.try_offset_term(t, cond.call_site, cond.offset, &cond.context)
-                    {
+                    if let Some(offset_term) = self.try_offset_and_instantiate(
+                        t,
+                        cond.call_site.as_ref(),
+                        cond.offset,
+                        &cond.context,
+                    ) {
                         add_edge!(self, cond.left, offset_term, 0);
                     }
                 }
                 Cond::Dummy(cond) => {
-                    self.try_offset_term(t, Some(cond.call_site), 0, &cond.context);
+                    self.try_offset_and_instantiate(t, Some(&cond.call_site), 0, &cond.context);
                 }
             }
         }
@@ -588,10 +587,9 @@ where
         let t_term_type = self.term_types[t as usize];
         for (to, offsets) in &self.edges.subsets[x] {
             for offset in offsets.iter() {
-                let new_term = t + offset as u32;
-                if offset > t_term_type.into_offset() {
+                let Some(new_term) = try_offset_term(t, t_term_type, offset) else {
                     break;
-                }
+                };
                 if offset != 0 && !self.pointed_by_queries[new_term as usize] {
                     self.edges.pointed_by_buffers[new_term as usize].push(*to);
                 }
@@ -630,12 +628,10 @@ where
                 let abstract_term = template.start_index + i;
                 let concrete_term = instantiated_start_index as IntegerTerm + i;
                 if self.abstract_points_to_queries[abstract_term as usize] {
-                    self.points_to_queries.set(concrete_term as usize, true);
                     self.worklist
                         .push_back(WorklistEntry::Demand(Demand::PointsTo(concrete_term)));
                 }
                 if self.abstract_pointed_by_queries[abstract_term as usize] {
-                    self.pointed_by_queries.set(concrete_term as usize, true);
                     self.worklist
                         .push_back(WorklistEntry::Demand(Demand::PointedBy(concrete_term)));
                 }
@@ -654,8 +650,11 @@ where
                 let mut cond_nodes = HashSet::new();
                 match concrete_constraint {
                     Constraint::Inclusion { term, node } => {
-                        if self.points_to_queries[node as usize]
-                            || self.pointed_by_queries[term as usize]
+                        if self.pointed_by_queries[term as usize] {
+                            self.edges.pointed_by_buffers[term as usize].pop();
+                        }
+                        if self.pointed_by_queries[term as usize]
+                            || self.points_to_queries[node as usize]
                         {
                             if self.edges.sols[node as usize].insert(term) {
                                 self.worklist.push_back(WorklistEntry::Inserted(node, term));

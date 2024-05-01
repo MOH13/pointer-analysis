@@ -15,9 +15,9 @@ use crate::analysis::{Config, PointsToAnalysis, ResultTrait};
 use crate::solver::{
     BasicDemandSolver, BasicHashSolver, BasicRoaringSolver, BasicSharedBitVecSolver,
     CallStringSelector, ContextInsensitiveSolver, ContextSelector, Demand,
-    DemandContextSensitiveInput, HashWavePropagationSolver, IntegerTerm,
-    RoaringWavePropagationSolver, SharedBitVecContextWavePropagationSolver,
-    SharedBitVecWavePropagationSolver, Solver, SolverExt,
+    DemandContextSensitiveInput, HashContextWavePropagationSolver,
+    RoaringContextWavePropagationSolver, SharedBitVecContextWavePropagationSolver, Solver,
+    SolverExt,
 };
 
 use super::Cell;
@@ -197,39 +197,11 @@ fn shared_bit_vec(resource: &str) {
 }
 
 #[test_resources("res/context_insensitive/**/test_config.json")]
+#[test_resources("res/context_sensitive/**/test_config.json")]
 fn wave_prop(resource: &str) {
     run_test_template(
         resource,
-        HashWavePropagationSolver::new()
-            .as_context_sensitive()
-            .as_generic()
-            .as_demand_driven(),
-        CallStringSelector::<2>::new(),
-        false,
-    )
-}
-
-#[test_resources("res/context_insensitive/**/test_config.json")]
-fn roaring_wave_prop(resource: &str) {
-    run_test_template(
-        resource,
-        RoaringWavePropagationSolver::new()
-            .as_context_sensitive()
-            .as_generic()
-            .as_demand_driven(),
-        CallStringSelector::<2>::new(),
-        false,
-    )
-}
-
-#[test_resources("res/context_insensitive/**/test_config.json")]
-fn shared_bit_vec_wave_prop(resource: &str) {
-    run_test_template(
-        resource,
-        SharedBitVecWavePropagationSolver::new()
-            .as_context_sensitive()
-            .as_generic()
-            .as_demand_driven(),
+        HashContextWavePropagationSolver::new().as_demand_driven(),
         CallStringSelector::<2>::new(),
         false,
     )
@@ -237,7 +209,18 @@ fn shared_bit_vec_wave_prop(resource: &str) {
 
 #[test_resources("res/context_insensitive/**/test_config.json")]
 #[test_resources("res/context_sensitive/**/test_config.json")]
-fn context_shared_bitvec_wave_prop(resource: &str) {
+fn roaring_wave_prop(resource: &str) {
+    run_test_template(
+        resource,
+        RoaringContextWavePropagationSolver::new().as_demand_driven(),
+        CallStringSelector::<2>::new(),
+        false,
+    )
+}
+
+#[test_resources("res/context_insensitive/**/test_config.json")]
+#[test_resources("res/context_sensitive/**/test_config.json")]
+fn shared_bit_vec_wave_prop(resource: &str) {
     run_test_template(
         resource,
         SharedBitVecContextWavePropagationSolver::new().as_demand_driven(),

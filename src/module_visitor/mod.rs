@@ -130,38 +130,44 @@ impl<'a> FromStr for VarIdent<'a> {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // offset case
+        if let Some((l, r)) = s.rsplit_once('[') {
+            if r.chars().last() == Some(']') {
+                let offset = r[..r.len() - 1]
+                    .parse()
+                    .map_err(|_| String::from("Offset was not a number"))?;
+                return Ok(VarIdent::Offset {
+                    base: Rc::new(l.parse()?),
+                    offset,
+                });
+            } else {
+                return Err(format!("Missing closing bracket in '{s}'"));
+            }
+        }
+        // fresh case
+        if s.starts_with("fresh_") {
+            let index = s["fresh_".len()..]
+                .parse()
+                .map_err(|_| String::from("Could not parse fresh index"))?;
+            return Ok(VarIdent::Fresh { index });
+        }
         if s.len() == 0 || !s.starts_with('%') {
             Err(format!("Could not parse ident '{s}'"))
         } else {
-            // offset case
-            if let Some((l, r)) = s.rsplit_once('[') {
-                if r.chars().last() == Some(']') {
-                    let offset = r[..r.len() - 1]
-                        .parse()
-                        .map_err(|_| String::from("Offset was not a number"))?;
-                    Ok(VarIdent::Offset {
-                        base: Rc::new(l.parse()?),
-                        offset,
-                    })
-                } else {
-                    Err(format!("Missing closing bracket in '{s}'"))
-                }
+            let s: &str = &s[1..];
+            if let Some((reg_name, fun_name)) = s.rsplit_once('@') {
+                let name = match reg_name.parse() {
+                    Ok(index) => Name::Number(index),
+                    Err(_) => Name::Name(Box::new(reg_name.to_owned())),
+                };
+                Ok(VarIdent::Local {
+                    reg_name: Cow::Owned(name),
+                    fun_name: Cow::Owned(fun_name.to_owned()),
+                })
             } else {
-                let s: &str = &s[1..];
-                if let Some((reg_name, fun_name)) = s.rsplit_once('@') {
-                    let name = match reg_name.parse() {
-                        Ok(index) => Name::Number(index),
-                        Err(_) => Name::Name(Box::new(reg_name.to_owned())),
-                    };
-                    Ok(VarIdent::Local {
-                        reg_name: Cow::Owned(name),
-                        fun_name: Cow::Owned(fun_name.to_owned()),
-                    })
-                } else {
-                    Ok(VarIdent::Global {
-                        name: Cow::Owned(s.to_owned()),
-                    })
-                }
+                Ok(VarIdent::Global {
+                    name: Cow::Owned(s.to_owned()),
+                })
             }
         }
     }

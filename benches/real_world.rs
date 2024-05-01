@@ -1,20 +1,20 @@
 use llvm_ir::Module;
-use pointer_analysis::analysis::{Config, PointsToAnalysis};
+use pointer_analysis::analysis::{Cell, Config, PointsToAnalysis};
 use pointer_analysis::solver::{
     BasicHashSolver, BasicRoaringSolver, BasicSharedBitVecSolver, CallStringSelector,
     ContextInsensitiveSelector, ContextInsensitiveSolver, ContextSelector, ContextSensitiveSolver,
-    HashWavePropagationSolver, IntegerTerm, RoaringWavePropagationSolver,
-    SharedBitVecContextWavePropagationSolver, SharedBitVecWavePropagationSolver,
+    HashContextWavePropagationSolver, RoaringContextWavePropagationSolver,
+    SharedBitVecContextWavePropagationSolver, Solver,
 };
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 fn bench_template<S, C>(name: &str, solver: S, context_selector: C, c: &mut Criterion)
 where
-    S: ContextSensitiveSolver<IntegerTerm, C> + Clone,
+    for<'a> S: ContextSensitiveSolver<Cell<'a>, C>,
     C: ContextSelector + Clone,
 {
-    let solver = solver.as_generic();
+    let solver = solver.as_demand_driven();
     for entry in glob::glob("benchmarks/*/bench.bc").unwrap() {
         let entry = entry.expect("Error in path");
         let bench_name = format!(
@@ -30,9 +30,10 @@ where
 
             b.iter(|| {
                 black_box(PointsToAnalysis::run(
-                    solver.clone(),
+                    &solver,
                     &module,
                     context_selector.clone(),
+                    vec![],
                     &Config::default(),
                 ))
             });
@@ -41,17 +42,21 @@ where
 }
 
 fn hash(c: &mut Criterion) {
-    let solver = BasicHashSolver::new().as_context_sensitive();
+    let solver = BasicHashSolver::new().as_context_sensitive().as_generic();
     bench_template("HashWorklist", solver, ContextInsensitiveSelector, c);
 }
 
 fn roaring(c: &mut Criterion) {
-    let solver = BasicRoaringSolver::new().as_context_sensitive();
+    let solver = BasicRoaringSolver::new()
+        .as_context_sensitive()
+        .as_generic();
     bench_template("RoaringWorklist", solver, ContextInsensitiveSelector, c);
 }
 
 fn shared_bitvec(c: &mut Criterion) {
-    let solver = BasicSharedBitVecSolver::new().as_context_sensitive();
+    let solver = BasicSharedBitVecSolver::new()
+        .as_context_sensitive()
+        .as_generic();
     bench_template(
         "SharedBitVecWorklist",
         solver,
@@ -61,17 +66,17 @@ fn shared_bitvec(c: &mut Criterion) {
 }
 
 fn hash_wave_prop(c: &mut Criterion) {
-    let solver = HashWavePropagationSolver::new().as_context_sensitive();
+    let solver = HashContextWavePropagationSolver::new();
     bench_template("HashWaveProp", solver, ContextInsensitiveSelector, c);
 }
 
 fn roaring_wave_prop(c: &mut Criterion) {
-    let solver = RoaringWavePropagationSolver::new().as_context_sensitive();
+    let solver = RoaringContextWavePropagationSolver::new();
     bench_template("RoaringWaveProp", solver, ContextInsensitiveSelector, c);
 }
 
 fn shared_bitvec_wave_prop(c: &mut Criterion) {
-    let solver = SharedBitVecWavePropagationSolver::new().as_context_sensitive();
+    let solver = SharedBitVecContextWavePropagationSolver::new();
     bench_template(
         "SharedBitVecWaveProp",
         solver,
