@@ -828,55 +828,6 @@ fn try_offset_term(term: IntegerTerm, term_type: TermType, offset: usize) -> Opt
     }
 }
 
-fn offset_term_vec_offsets(
-    term: IntegerTerm,
-    is_function: bool,
-    term_types: &[TermType],
-    offset: usize,
-) -> Option<IntegerTerm> {
-    let term_type = term_types[usize::try_from(term).unwrap()];
-    match term_type {
-        TermType::Basic if !is_function && offset == 0 => Some(term),
-        TermType::Struct(allowed) if !is_function => {
-            (offset <= allowed).then(|| term + u32::try_from(offset).unwrap())
-        }
-        // TODO: Filter on function type
-        TermType::Function(allowed, _) if is_function => {
-            (offset <= allowed).then(|| term + u32::try_from(offset).unwrap())
-        }
-        _ => None,
-    }
-}
-
-fn offset_term(
-    term: IntegerTerm,
-    allowed_offsets: &HashMap<IntegerTerm, usize>,
-    offset: usize,
-) -> Option<IntegerTerm> {
-    if offset == 0 {
-        Some(term)
-    } else {
-        allowed_offsets.get(&term).and_then(|&max_offset| {
-            (offset <= max_offset)
-                .then(|| term + u32::try_from(offset).expect("Could not convert from usize"))
-        })
-    }
-}
-
-fn offset_terms(
-    terms: impl Iterator<Item = IntegerTerm>,
-    allowed_offsets: &HashMap<IntegerTerm, usize>,
-    offset: usize,
-) -> Vec<IntegerTerm> {
-    if offset == 0 {
-        terms.collect()
-    } else {
-        terms
-            .filter_map(|t| offset_term(t, allowed_offsets, offset))
-            .collect()
-    }
-}
-
 #[derive(Clone, Default)]
 pub struct Offsets {
     zero: bool,
