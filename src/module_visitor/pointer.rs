@@ -102,6 +102,7 @@ pub struct PointerModuleVisitor<'a, 'b, O> {
     fresh_counter: usize,
     malloc_wrappers: &'b HashSet<String>,
     realloc_wrappers: &'b HashSet<String>,
+    warn_counts: WarnCounts,
     observer: &'b mut O,
 }
 
@@ -122,6 +123,7 @@ where
             fresh_counter: 0,
             malloc_wrappers,
             realloc_wrappers,
+            warn_counts: WarnCounts::default(),
             observer,
         }
     }
@@ -352,7 +354,7 @@ where
             }
 
             Constant::IntToPtr(constant::IntToPtr { to_type, .. }) => {
-                warn!("IntToPtr detected");
+                self.warn_counts.int_to_ptr += 1;
                 let fresh = self.add_fresh_ident();
                 self.handle_unused_fresh(fresh.clone(), None, pointer_context);
 
@@ -480,7 +482,7 @@ where
                 .get_operand_ident_type(op, context)
                 .expect("Functions should always be relevant"),
             Either::Left(asm) => {
-                warn!("Inline assembly not handled");
+                self.warn_counts.inline_asm += 1;
                 if !is_ptr_type(&asm.ty) && !is_struct_type(&asm.ty) {
                     return;
                 }
@@ -1150,16 +1152,16 @@ where
             }
 
             Instruction::VAArg(VAArg { cur_type, dest, .. }) => {
+                self.warn_counts.va_arg += 1;
                 let dest = VarIdent::new_local(dest, &function.name);
                 let struct_type = StructType::try_from_type(cur_type.clone(), context.structs);
                 self.handle_unused_fresh(dest, struct_type, pointer_context);
-                warn!("Unhandled VAArg");
             }
 
             Instruction::IntToPtr(IntToPtr { dest, .. }) => {
+                self.warn_counts.int_to_ptr += 1;
                 let dest = VarIdent::new_local(dest, &function.name);
                 self.handle_unused_fresh(dest, None, pointer_context);
-                warn!("IntToPtr detected");
             }
 
             Instruction::CmpXchg(CmpXchg {
@@ -1240,6 +1242,31 @@ where
             _ => {}
         }
     }
+
+    fn finalize(&mut self, _context: Context<'a, '_>) {
+        if self.warn_counts.int_to_ptr > 0 {
+            warn!(
+                "Found {} inttoptr instructions",
+                self.warn_counts.int_to_ptr
+            );
+        }
+        if self.warn_counts.va_arg > 0 {
+            warn!("Found {} vaarg instructions", self.warn_counts.va_arg);
+        }
+        if self.warn_counts.inline_asm > 0 {
+            warn!(
+                "Found {} inline asm instructions",
+                self.warn_counts.inline_asm
+            );
+        }
+    }
+}
+
+#[derive(Default)]
+struct WarnCounts {
+    int_to_ptr: u32,
+    va_arg: u32,
+    inline_asm: u32,
 }
 
 fn get_func_type<'a>(function: &'a Either<InlineAssembly, Operand>) -> FunctionType {

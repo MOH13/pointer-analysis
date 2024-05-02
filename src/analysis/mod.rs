@@ -1,7 +1,9 @@
 use indexmap::IndexMap;
 use std::borrow::Cow;
+use std::cell::{RefCell, RefMut};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::mem;
+use std::ops::Deref;
 use std::rc::Rc;
 use std::str::FromStr;
 
@@ -163,37 +165,54 @@ impl PointsToAnalysis {
 }
 
 #[derive(Debug, Clone)]
-pub struct CellCache<'a>(HashMap<Cell<'a>, String>);
+pub struct CellCache<'a>(RefCell<HashMap<Cell<'a>, String>>);
+
+pub struct CacheEntry<'b>(RefMut<'b, String>);
 
 #[derive(Debug, Clone)]
 pub struct PointsToResult<'a, S>(S, Vec<Cell<'a>>, CellCache<'a>);
 
 impl<'a> CellCache<'a> {
-    pub fn new(cells: &[Cell<'a>]) -> Self {
-        let string_cache = cells
-            .into_iter()
-            .map(|c| (c.clone(), c.to_string()))
-            .collect();
-        Self(string_cache)
+    pub fn new() -> Self {
+        Self(RefCell::new(HashMap::new()))
     }
 
-    pub fn string_of(&self, cell: &Cell<'a>) -> &str {
-        self.0.get(cell).expect("Cache did not contain cell")
+    pub fn string_of<'b>(&'b self, cell: &Cell<'a>) -> CacheEntry<'b> {
+        let borrow = self.0.borrow_mut();
+        let a = RefMut::map(borrow, |m| {
+            m.entry(cell.clone()).or_insert_with(|| cell.to_string())
+        });
+        CacheEntry(a)
+    }
+}
+
+impl<'a, 'b> Deref for CacheEntry<'b> {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
 pub trait ResultTrait<'a> {
     type TermSet;
-    fn get(&self, cell: &Cell<'a>) -> Option<Self::TermSet>;
-    fn iter_solutions<'b>(&'b self) -> Box<dyn Iterator<Item = (Cell<'a>, Self::TermSet)> + 'b>
+    fn get<'b>(&'b self, cell: &Cell<'a>) -> Option<LazyTermSet<'a, 'b, Self>>
     where
+        Self: Sized,
+        'a: 'b;
+
+    fn iter_solutions<'b>(
+        &'b self,
+    ) -> impl Iterator<Item = (Cell<'a>, LazyTermSet<'a, 'b, Self>)> + 'b
+    where
+        Self: Sized,
         'a: 'b;
     fn get_cells(&self) -> &[Cell<'a>];
     fn get_cell_cache(&self) -> &CellCache<'a>;
 
     fn filter_result<
         'b,
-        F3: Fn(&Cell<'a>, &Self::TermSet, &CellCache<'a>) -> bool,
+        F3: Fn(&Cell<'a>, &mut LazyTermSet<'a, 'b, Self>, &CellCache<'a>) -> bool,
         F4: Fn(&Cell<'a>, &Cell<'a>, &CellCache<'a>) -> bool,
     >(
         &'b self,
@@ -217,8 +236,44 @@ pub trait ResultTrait<'a> {
 
 impl<'a, S> PointsToResult<'a, S> {
     pub fn new(solution: S, cells: Vec<Cell<'a>>) -> Self {
-        let cache = CellCache::new(&cells);
+        let cache = CellCache::new();
         Self(solution, cells, cache)
+    }
+}
+
+pub enum LazyTermSet<'a, 'b, R: ResultTrait<'a>> {
+    FromResult(Cell<'a>, &'b R),
+    FromSet(R::TermSet),
+}
+
+impl<'a, 'b, R> LazyTermSet<'a, 'b, R>
+where
+    R: ResultTrait<'a>,
+{
+    pub fn from_set(set: R::TermSet) -> Self {
+        Self::FromSet(set)
+    }
+
+    pub fn from_result(cell: Cell<'a>, result: &'b R) -> Self {
+        Self::FromResult(cell, result)
+    }
+
+    pub fn get(&mut self) -> &R::TermSet {
+        if let Self::FromResult(cell, result) = &*self {
+            let new_set = result
+                .get(&cell)
+                .expect("Result set should not be none for LazyTermSet")
+                .into_inner();
+            *self = LazyTermSet::FromSet(new_set);
+        }
+        match &*self {
+            LazyTermSet::FromSet(set) => set,
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn into_inner(self) -> R::TermSet {
+        todo!()
     }
 }
 
@@ -228,15 +283,22 @@ where
 {
     type TermSet = S::TermSet;
 
-    fn get(&self, cell: &Cell<'a>) -> Option<Self::TermSet> {
-        Some(self.0.get(cell))
-    }
-
-    fn iter_solutions<'b>(&'b self) -> Box<dyn Iterator<Item = (Cell<'a>, Self::TermSet)> + 'b>
+    fn get<'b>(&'b self, cell: &Cell<'a>) -> Option<LazyTermSet<'a, 'b, Self>>
     where
         'a: 'b,
     {
-        Box::new(self.1.iter().map(|c| (c.clone(), self.0.get(c))))
+        Some(LazyTermSet::from_set(self.0.get(cell)))
+    }
+
+    fn iter_solutions<'b>(
+        &'b self,
+    ) -> impl Iterator<Item = (Cell<'a>, LazyTermSet<'a, 'b, Self>)> + 'b
+    where
+        'a: 'b,
+    {
+        self.1
+            .iter()
+            .map(|c| (c.clone(), LazyTermSet::from_set(self.0.get(c))))
     }
 
     fn get_cells(&self) -> &[Cell<'a>] {
@@ -256,82 +318,57 @@ pub struct FilteredResults<'a, F1, F2, R> {
     exclude_strs: Vec<String>,
 }
 
-impl<'a, 'b, F1, F2, R> FilteredResults<'b, F1, F2, R>
-where
-    R: ResultTrait<'a>,
-    R::TermSet: TermSetTrait<Term = Cell<'a>>,
-    F1: Fn(&Cell<'a>, &R::TermSet, &CellCache<'a>) -> bool,
-    F2: Fn(&Cell<'a>, &Cell<'a>, &CellCache<'a>) -> bool,
-{
-    fn get_with_solution(
-        &self,
-        cell: &Cell<'a>,
-        result_solution: R::TermSet,
-    ) -> Option<HashSet<Cell<'a>>> {
-        let cell_str = self.get_cell_cache().string_of(cell);
-        if !self.include_strs.is_empty() && !self.include_strs.iter().any(|s| cell_str.contains(s))
-        {
-            return None;
-        }
-        if self.exclude_strs.iter().any(|s| cell_str.contains(s)) {
-            return None;
-        }
-
-        if !(self.key_filter)(cell, &result_solution, self.result.get_cell_cache()) {
-            return None;
-        }
-
-        Some(
-            result_solution
-                .iter()
-                .filter(|t| (self.value_filter)(cell, t, self.result.get_cell_cache()))
-                .collect(),
-        )
-    }
-}
-
 impl<'a, 'b, F1, F2, R> ResultTrait<'a> for FilteredResults<'b, F1, F2, R>
 where
     R: ResultTrait<'a>,
     R::TermSet: TermSetTrait<Term = Cell<'a>>,
-    F1: Fn(&Cell<'a>, &R::TermSet, &CellCache<'a>) -> bool,
+    F1: Fn(&Cell<'a>, &mut LazyTermSet<'a, 'b, R>, &CellCache<'a>) -> bool,
     F2: Fn(&Cell<'a>, &Cell<'a>, &CellCache<'a>) -> bool,
+    'a: 'b,
 {
     type TermSet = HashSet<Cell<'a>>;
 
-    fn get(&self, cell: &Cell<'a>) -> Option<Self::TermSet> {
-        let cell_str = self.get_cell_cache().string_of(cell);
-        if !self.include_strs.is_empty() && !self.include_strs.iter().any(|s| cell_str.contains(s))
-        {
-            return None;
-        }
-        if self.exclude_strs.iter().any(|s| cell_str.contains(s)) {
-            return None;
-        }
-
-        let result_solution = self.result.get(cell)?;
-        if !(self.key_filter)(cell, &result_solution, self.result.get_cell_cache()) {
-            return None;
-        }
-
-        Some(
-            result_solution
-                .iter()
-                .filter(|t| (self.value_filter)(cell, t, self.result.get_cell_cache()))
-                .collect(),
-        )
-    }
-
-    fn iter_solutions<'c>(&'c self) -> Box<dyn Iterator<Item = (Cell<'a>, Self::TermSet)> + 'c>
+    fn get<'c>(&'c self, cell: &Cell<'a>) -> Option<LazyTermSet<'a, 'c, Self>>
     where
         'a: 'c,
     {
-        Box::new(
-            self.result
-                .iter_solutions()
-                .filter_map(|(c, set)| self.get_with_solution(&c, set).map(|s| (c, s))),
-        )
+        if !self.include_strs.is_empty() || !self.exclude_strs.is_empty() {
+            let cell_str = self.get_cell_cache().string_of(cell);
+            if !self.include_strs.is_empty()
+                && !self.include_strs.iter().any(|s| cell_str.contains(s))
+            {
+                return None;
+            }
+            if self.exclude_strs.iter().any(|s| cell_str.contains(s)) {
+                return None;
+            }
+        }
+
+        let mut result_solution = self.result.get(cell)?;
+        if !(self.key_filter)(cell, &mut result_solution, self.result.get_cell_cache()) {
+            return None;
+        }
+
+        Some(LazyTermSet::from_set(
+            result_solution
+                .get()
+                .iter()
+                .filter(|t| (self.value_filter)(cell, t, self.result.get_cell_cache()))
+                .collect(),
+        ))
     }
+
+    fn iter_solutions<'c>(
+        &'c self,
+    ) -> impl Iterator<Item = (Cell<'a>, LazyTermSet<'a, 'c, Self>)> + 'c
+    where
+        'a: 'c,
+    {
+        self.get_cells()
+            .iter()
+            .filter_map(|c| self.get(c).map(|s| (c.clone(), s)))
+    }
+
     fn get_cells(&self) -> &[Cell<'a>] {
         self.result.get_cells()
     }
@@ -341,12 +378,15 @@ where
     }
 }
 
-impl<'a, S: SolverSolution> PointsToResult<'a, S> {
+impl<'a, S> PointsToResult<'a, S>
+where
+    S: SolverSolution<Term = Cell<'a>>,
+{
     pub fn get_all_entries<'b>(
         &'b self,
     ) -> FilteredResults<
         'b,
-        fn(&Cell<'a>, &S::TermSet, &CellCache<'a>) -> bool,
+        fn(&Cell<'a>, &mut LazyTermSet<'a, 'b, Self>, &CellCache<'a>) -> bool,
         fn(&Cell<'a>, &Cell<'a>, &CellCache<'a>) -> bool,
         Self,
     > {
@@ -385,6 +425,7 @@ where
 {
     fn fmt<'d, 'c>(&'d self, f: &'c mut Formatter<'_>) -> fmt::Result {
         for (cell, set) in self.iter_solutions() {
+            let set = set.into_inner();
             writeln!(f, "[[{cell}]] = {set:#?}")?;
         }
         Ok(())

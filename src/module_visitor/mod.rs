@@ -31,6 +31,7 @@ pub trait ModuleVisitor<'a> {
     fn handle_global(&mut self, global: &'a GlobalVariable, context: Context<'a, '_>);
     fn handle_instruction(&mut self, instr: &'a Instruction, context: Context<'a, '_>);
     fn handle_terminator(&mut self, term: &'a Terminator, context: Context<'a, '_>);
+    fn finalize(&mut self, context: Context<'a, '_>);
 
     fn visit_module(&mut self, module: &'a Module) {
         let mut structs = HashMap::new();

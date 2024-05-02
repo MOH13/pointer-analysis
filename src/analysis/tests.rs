@@ -140,8 +140,11 @@ fn run_test_template<S, C>(
             &Config::default(),
         );
 
-        let actual_points_to: HashMap<Cell, HashSet<Cell>> =
-            result.get_all_entries().iter_solutions().collect();
+        let actual_points_to: HashMap<Cell, HashSet<Cell>> = result
+            .get_all_entries()
+            .iter_solutions()
+            .map(|(c, s)| (c, s.into_inner()))
+            .collect();
 
         dbg!(&actual_points_to);
 

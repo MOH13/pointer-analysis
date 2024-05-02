@@ -2,7 +2,6 @@
 source.ll
 *.h.gch
 /llvmtemp
-/benchmarks
 .DS_Store
 *.bc
 *.dot
@@ -10,3 +9,27 @@ source.ll
 heaptrack.*
 perf.data
 perf.data.old
+
+# Benchmarks
+/benchmarks/*/**
+!/benchmarks/versions.md
+
+## Curl
+!/benchmarks/curl/COPYING
+!/benchmarks/curl/bench.bc
+
+## Emacs
+!/benchmarks/emacs/COPYING
+!/benchmarks/emacs/bench.bc
+
+# Htop
+!/benchmarks/htop/COPYING
+!/benchmarks/htop/bench.bc
+
+# Make
+!/benchmarks/make/COPYING
+!/benchmarks/make/bench.bc
+
+# Vim
+!/benchmarks/vim/LICENSE
+!/benchmarks/vim/bench.bc

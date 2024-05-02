@@ -39,8 +39,7 @@ where
 {
     let mut counts: Vec<_> = result
         .iter_solutions()
-        .into_iter()
-        .map(|(_, set)| set.len())
+        .map(|(_, mut set)| set.get().len())
         .collect();
     let num_cells = counts.len();
     let total = counts.iter().sum::<usize>();
@@ -65,7 +64,7 @@ fn show_output<'a, S>(
         let filtered_result = result.filter_result(
             |c, set, cache| {
                 matches!(c, Cell::Stack(..) | Cell::Global(..))
-                    && (args.include_empty || !set.is_empty())
+                    && (args.include_empty || !set.get().is_empty())
                     && (!args.exclude_strings || !cache.string_of(c).contains(STRING_FILTER))
             },
             |_pointer, pointee, cache| {
@@ -93,7 +92,8 @@ fn show_output<'a, S>(
                 let demand_filtered = filtered_result.filter_result(
                     |c, set, _cache| {
                         points_to_demands.contains(c)
-                            || set.iter().any(|t| pointed_by_demands.contains(t))
+                            || (!pointed_by_demands.is_empty()
+                                && set.get().iter().any(|t| pointed_by_demands.contains(t)))
                     },
                     |pointer, pointee, _cache| {
                         points_to_demands.contains(pointer) || pointed_by_demands.contains(pointee)
@@ -132,7 +132,7 @@ fn show_output<'a, S>(
             }
             let filtered_result = result.filter_result(
                 |c, set, cache| {
-                    (args.include_empty || !set.is_empty())
+                    (args.include_empty || !set.get().is_empty())
                         && cache.string_of(c).contains(cleaned_input)
                 },
                 |pointer, pointee, cache| {

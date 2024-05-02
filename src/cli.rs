@@ -11,7 +11,7 @@ pub struct Args {
     // Select used solver
     #[arg(short, long, default_value_t = SolverMode::Wave)]
     pub solver: SolverMode,
-    #[arg(short, long, default_value_t = TermSet::Roaring)]
+    #[arg(short, long, default_value_t = TermSet::SharedBitVec)]
     pub termset: TermSet,
     /// List of keywords that must present to be included in output
     #[arg(short, long)]
@@ -50,10 +50,10 @@ pub struct Args {
     #[arg(short = 'c', long, default_value_t = 1)]
     pub call_string: usize,
     /// List of points-to queries
-    #[arg(long)]
+    #[arg(short = 'T', long)]
     pub points_to_queries: Vec<String>,
     /// List of pointed-by queries
-    #[arg(long)]
+    #[arg(short = 'B', long)]
     pub pointed_by_queries: Vec<String>,
     ///
     #[arg(short, long, default_value_t = false)]
@@ -101,7 +101,7 @@ impl Display for TermSet {
         match self {
             TermSet::Hash => write!(f, "hash"),
             TermSet::Roaring => write!(f, "roaring"),
-            TermSet::SharedBitVec => write!(f, "shared bitvec"),
+            TermSet::SharedBitVec => write!(f, "shared-bit-vec"),
         }
     }
 }
