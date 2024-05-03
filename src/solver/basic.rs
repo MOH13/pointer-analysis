@@ -13,6 +13,9 @@ use super::{
 };
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
 
+static mut TOTAL: usize = 0;
+static mut INSERTED: usize = 0;
+
 #[derive(Clone, Debug)]
 enum UnivCond<T: Clone> {
     SubsetLeft {
@@ -46,8 +49,14 @@ pub struct BasicSolverState<T: Clone, U> {
 
 macro_rules! add_token {
     ($solver:expr, $term:expr, $node:expr) => {
+        unsafe {
+            TOTAL += 1;
+        }
         if $solver.sols[$node as usize].insert($term) {
             $solver.worklist.push_back(($term, $node));
+            unsafe {
+                INSERTED += 1;
+            }
         }
     };
 }
@@ -199,6 +208,10 @@ impl<T: TermSetTrait<Term = IntegerTerm>> BasicSolverState<IntegerTerm, T> {
         for c in input.constraints {
             self.add_constraint(c);
         }
+
+        println!("Total: {} Inserted: {}", unsafe { TOTAL }, unsafe {
+            INSERTED
+        });
     }
 }
 

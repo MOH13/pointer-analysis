@@ -16,6 +16,9 @@ use super::{
 use crate::util::GetTwoMutExt;
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
 
+static mut TOTAL: usize = 0;
+static mut INSERTED: usize = 0;
+
 #[derive(Clone)]
 struct CondLeft<C> {
     right: IntegerTerm,
@@ -187,6 +190,7 @@ where
 enum WorklistEntry<T = IntegerTerm> {
     Demand(Demand<T>),
     Inserted(T, T),
+    InsertedSkipUnweighted(T, T),
 }
 
 impl<T> WorklistEntry<T> {
@@ -197,6 +201,9 @@ impl<T> WorklistEntry<T> {
         match self {
             WorklistEntry::Demand(demand) => WorklistEntry::Demand(demand.map_term(f)),
             WorklistEntry::Inserted(t1, t2) => WorklistEntry::Inserted(f(t1), f(t2)),
+            WorklistEntry::InsertedSkipUnweighted(t1, t2) => {
+                WorklistEntry::InsertedSkipUnweighted(f(t1), f(t2))
+            }
         }
     }
 }
@@ -295,7 +302,16 @@ fn propagate_edge(
     worklist: &mut VecDeque<WorklistEntry>,
 ) {
     if points_to_queries[to as usize] {
-        propagate_edge_all(from, to, offset, sols, term_types, worklist);
+        propagate_edge_all(
+            from,
+            to,
+            offset,
+            sols,
+            pointed_by_buffers,
+            pointed_by_queries,
+            term_types,
+            worklist,
+        );
     } else {
         let mut to_insert = SmallVec::<[_; 64]>::new();
         for &t in &sols[from as usize] {
@@ -341,6 +357,8 @@ fn propagate_edge_all(
     to: IntegerTerm,
     offset: usize,
     sols: &mut [HashSet<IntegerTerm>],
+    pointed_by_buffers: &mut [SmallVec<[IntegerTerm; 2]>],
+    pointed_by_queries: &BitVec,
     term_types: &[TermType],
     worklist: &mut VecDeque<WorklistEntry>,
 ) {
@@ -350,6 +368,11 @@ fn propagate_edge_all(
             let Some(new_term) = try_offset_term(t, term_type, offset) else {
                 continue;
             };
+
+            if offset != 0 && !pointed_by_queries[new_term as usize] {
+                pointed_by_buffers[new_term as usize].push(to);
+            }
+
             if to_set.insert(new_term) {
                 // TODO: we check for pointed by queries
                 worklist.push_back(WorklistEntry::Inserted(to, new_term));
@@ -362,6 +385,11 @@ fn propagate_edge_all(
             let Some(new_term) = try_offset_term(t, term_type, offset) else {
                 continue;
             };
+
+            if offset != 0 && !pointed_by_queries[new_term as usize] {
+                pointed_by_buffers[new_term as usize].push(to);
+            }
+
             if !sols[to as usize].contains(&new_term) {
                 to_insert.push(new_term);
             }
@@ -380,6 +408,8 @@ macro_rules! propagate_edge_all {
             $to,
             $offset,
             &mut $state.edges.sols,
+            &mut $state.edges.pointed_by_buffers,
+            &$state.pointed_by_queries,
             &$state.term_types,
             &mut $state.worklist,
         )
@@ -405,10 +435,16 @@ where
                     self.handle_pointed_by(t);
                 }
                 WorklistEntry::Inserted(x, t) => {
-                    self.handle_inserted(x, t);
+                    self.handle_inserted(x, t, false);
+                }
+                WorklistEntry::InsertedSkipUnweighted(x, t) => {
+                    self.handle_inserted(x, t, true);
                 }
             }
         }
+        println!("TOTAL: {}, INSERTED: {}", unsafe { TOTAL }, unsafe {
+            INSERTED
+        });
     }
 
     fn handle_points_to(&mut self, x: IntegerTerm) {
@@ -479,7 +515,8 @@ where
                 continue;
             }
             if self.edges.sols[x as usize].insert(t) {
-                self.worklist.push_back(WorklistEntry::Inserted(x, t));
+                self.worklist
+                    .push_back(WorklistEntry::InsertedSkipUnweighted(x, t));
             }
             add_pointed_by_query(x, &mut self.pointed_by_queries, &mut self.worklist);
             for &cond_node in &self.edges.stores[x as usize] {
@@ -533,7 +570,7 @@ where
         }
     }
 
-    fn handle_inserted(&mut self, x: IntegerTerm, t: IntegerTerm) {
+    fn handle_inserted(&mut self, x: IntegerTerm, t: IntegerTerm, skip_unweighted: bool) {
         if self.pointed_by_queries[t as usize] {
             add_pointed_by_query(x, &mut self.pointed_by_queries, &mut self.worklist);
             for &cond_node in &self.edges.stores[x as usize] {
@@ -587,6 +624,9 @@ where
         let t_term_type = self.term_types[t as usize];
         for (to, offsets) in &self.edges.subsets[x] {
             for offset in offsets.iter() {
+                if offset == 0 && skip_unweighted {
+                    continue;
+                }
                 let Some(new_term) = try_offset_term(t, t_term_type, offset) else {
                     break;
                 };
@@ -598,9 +638,15 @@ where
                 {
                     continue;
                 }
+                unsafe {
+                    TOTAL += 1;
+                }
                 if self.edges.sols[*to as usize].insert(new_term) {
                     self.worklist
                         .push_back(WorklistEntry::Inserted(*to, new_term));
+                    unsafe {
+                        INSERTED += 1;
+                    }
                 }
             }
         }

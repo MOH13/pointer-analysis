@@ -63,6 +63,7 @@ where
     result.filter_result(
         |c, set, cache| {
             matches!(c, Cell::Stack(..) | Cell::Global(..))
+                && set.get().len() < 200
                 && (args.include_empty || !set.get().is_empty())
                 && (!args.exclude_strings || !cache.string_of(c).contains(STRING_FILTER))
         },
