@@ -201,6 +201,11 @@ pub trait ResultTrait<'a>: Display {
         Self: Sized,
         'a: 'b;
 
+    fn get_eager<'b>(&'b self, cell: &Cell<'a>) -> Option<Self::TermSet>
+    where
+        Self: Sized,
+        'a: 'b;
+
     fn iter_solutions<'b>(
         &'b self,
     ) -> impl Iterator<Item = (Cell<'a>, LazyTermSet<'a, 'b, Self>)> + 'b
@@ -261,9 +266,8 @@ where
     pub fn get(&mut self) -> &R::TermSet {
         if let Self::FromResult(cell, result) = &*self {
             let new_set = result
-                .get(&cell)
-                .expect("Result set should not be none for LazyTermSet")
-                .into_inner();
+                .get_eager(&cell)
+                .expect("Result set should not be none for LazyTermSet");
             *self = LazyTermSet::FromSet(new_set);
         }
         match &*self {
@@ -292,6 +296,13 @@ where
         'a: 'b,
     {
         Some(LazyTermSet::from_result(cell.clone(), self))
+    }
+
+    fn get_eager<'b>(&'b self, cell: &Cell<'a>) -> Option<Self::TermSet>
+    where
+        'a: 'b,
+    {
+        Some(self.0.get(cell))
     }
 
     fn iter_solutions<'b>(
@@ -334,6 +345,13 @@ where
     where
         'a: 'c,
     {
+        self.get_eager(cell).map(LazyTermSet::from_set)
+    }
+
+    fn get_eager<'c>(&'c self, cell: &Cell<'a>) -> Option<Self::TermSet>
+    where
+        'a: 'c,
+    {
         if !self.include_strs.is_empty() || !self.exclude_strs.is_empty() {
             let cell_str = self.get_cell_cache().string_of(cell);
             if !self.include_strs.is_empty()
@@ -351,13 +369,13 @@ where
             return None;
         }
 
-        Some(LazyTermSet::from_set(
+        Some(
             result_solution
                 .get()
                 .iter()
                 .filter(|t| (self.value_filter)(cell, t, self.result.get_cell_cache()))
                 .collect(),
-        ))
+        )
     }
 
     fn iter_solutions<'c>(
