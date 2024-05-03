@@ -52,6 +52,28 @@ where
     println!("Median: {median}");
 }
 
+fn apply_filters<'a, 'b, S>(
+    result: &'b impl ResultTrait<'a, TermSet = S>,
+    args: &'b Args,
+) -> impl ResultTrait<'a> + 'b
+where
+    S: TermSetTrait<Term = Cell<'a>>,
+    'a: 'b,
+{
+    result.filter_result(
+        |c, set, cache| {
+            matches!(c, Cell::Stack(..) | Cell::Global(..))
+                && (args.include_empty || !set.get().is_empty())
+                && (!args.exclude_strings || !cache.string_of(c).contains(STRING_FILTER))
+        },
+        |_pointer, pointee, cache| {
+            !args.exclude_strings || !cache.string_of(pointee).contains(STRING_FILTER)
+        },
+        args.include_keywords.clone(),
+        args.exclude_keywords.clone(),
+    )
+}
+
 fn show_output<'a, S>(
     result: PointsToResult<'a, S>,
     args: &Args,
@@ -61,18 +83,6 @@ fn show_output<'a, S>(
     S::TermSet: Debug + IntoIterator<Item = Cell<'a>> + FromIterator<Cell<'a>>,
 {
     if !args.dont_output {
-        let filtered_result = result.filter_result(
-            |c, set, cache| {
-                matches!(c, Cell::Stack(..) | Cell::Global(..))
-                    && (args.include_empty || !set.get().is_empty())
-                    && (!args.exclude_strings || !cache.string_of(c).contains(STRING_FILTER))
-            },
-            |_pointer, pointee, cache| {
-                !args.exclude_strings || !cache.string_of(pointee).contains(STRING_FILTER)
-            },
-            args.include_keywords.clone(),
-            args.exclude_keywords.clone(),
-        );
         match demand_filter {
             Some(demands) => {
                 let mut points_to_demands = HashSet::new();
@@ -89,11 +99,11 @@ fn show_output<'a, S>(
                     }
                 }
 
-                let demand_filtered = filtered_result.filter_result(
+                let demand_filtered = result.filter_result(
                     |c, set, _cache| {
                         points_to_demands.contains(c)
                             || (!pointed_by_demands.is_empty()
-                                && set.get().iter().any(|t| pointed_by_demands.contains(t)))
+                                && set.get().iter().any(|t| pointed_by_demands.contains(&t)))
                     },
                     |pointer, pointee, _cache| {
                         points_to_demands.contains(pointer) || pointed_by_demands.contains(pointee)
@@ -101,12 +111,14 @@ fn show_output<'a, S>(
                     Vec::new(),
                     Vec::new(),
                 );
-                println!("{demand_filtered}");
+                let filtered_result = apply_filters(&demand_filtered, args);
+                println!("{filtered_result}");
                 if args.count_terms == CountMode::Filtered {
-                    show_count_metrics(&demand_filtered);
+                    show_count_metrics(&filtered_result);
                 }
             }
             None => {
+                let filtered_result = apply_filters(&result, args);
                 println!("{filtered_result}");
                 if args.count_terms == CountMode::Filtered {
                     show_count_metrics(&filtered_result);

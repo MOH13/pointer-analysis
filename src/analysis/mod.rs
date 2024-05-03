@@ -194,8 +194,8 @@ impl<'a, 'b> Deref for CacheEntry<'b> {
     }
 }
 
-pub trait ResultTrait<'a> {
-    type TermSet;
+pub trait ResultTrait<'a>: Display {
+    type TermSet: TermSetTrait<Term = Cell<'a>>;
     fn get<'b>(&'b self, cell: &Cell<'a>) -> Option<LazyTermSet<'a, 'b, Self>>
     where
         Self: Sized,
@@ -272,8 +272,12 @@ where
         }
     }
 
-    pub fn into_inner(self) -> R::TermSet {
-        todo!()
+    pub fn into_inner(mut self) -> R::TermSet {
+        self.get();
+        match self {
+            LazyTermSet::FromSet(set) => set,
+            _ => unreachable!(),
+        }
     }
 }
 
@@ -287,7 +291,7 @@ where
     where
         'a: 'b,
     {
-        Some(LazyTermSet::from_set(self.0.get(cell)))
+        Some(LazyTermSet::from_result(cell.clone(), self))
     }
 
     fn iter_solutions<'b>(
@@ -296,9 +300,7 @@ where
     where
         'a: 'b,
     {
-        self.1
-            .iter()
-            .map(|c| (c.clone(), LazyTermSet::from_set(self.0.get(c))))
+        self.1.iter().map(|c| (c.clone(), self.get(c).unwrap()))
     }
 
     fn get_cells(&self) -> &[Cell<'a>] {
@@ -407,7 +409,6 @@ where
 impl<'a, S> Display for PointsToResult<'a, S>
 where
     S: SolverSolution<Term = Cell<'a>>,
-    S::TermSet: fmt::Debug + IntoIterator<Item = Cell<'a>> + FromIterator<Cell<'a>>,
 {
     fn fmt<'b, 'c>(&'b self, f: &'c mut Formatter<'_>) -> fmt::Result {
         let filtered = self.get_all_entries();
