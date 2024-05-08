@@ -3,12 +3,13 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 use std::mem;
 
-use bitvec::bitvec;
 use bitvec::prelude::*;
+use bitvec::{bitvec, vec};
 use either::Either;
 use hashbrown::{HashMap, HashSet};
 use once_cell::unsync::Lazy;
 use roaring::RoaringBitmap;
+use smallvec::SmallVec;
 
 use super::context::{ContextState, TemplateTerm};
 use super::shared_bitvec::SharedBitVec;
@@ -57,7 +58,10 @@ pub struct PointedByQueries<S> {
     term_set: S,
 }
 
-impl<S> PointedByQueries<S> where S: TermSetTrait<Term = IntegerTerm> {
+impl<S> PointedByQueries<S>
+where
+    S: TermSetTrait<Term = IntegerTerm>,
+{
     pub fn contains(&self, term: IntegerTerm) -> bool {
         self.pointed_by_queries.test(term as usize)
     }
@@ -187,13 +191,10 @@ where
     fn pointed_by_propagation(&mut self) -> bool {
         let mut changed = false;
         let mut new_pointed_by_queries_term_set: S = S::new();
-        for &w in &self.new_pointed_by_queries {
-            new_pointed_by_queries_term_set.insert(w);
-        }
 
         let top_order = self.scc(SccDirection::Forward, vec![], |v, state, to_visit| {
             if state.pointed_by_queries.insert(v) {
-                new_pointed_by_queries_term_set.insert(v);
+                self.new_pointed_by_queries.push(v);
 
                 // For each node taking the address of v
                 for w in todo!() {
@@ -210,6 +211,11 @@ where
                 }
             }
         });
+
+        for &w in &self.new_pointed_by_queries {
+            new_pointed_by_queries_term_set.insert(w);
+        }
+
         for &v in top_order.iter().rev() {
             // Skip if no new terms in solution set
             if self.sols[v as usize].len() == self.p_old[v as usize].len() {
@@ -218,9 +224,9 @@ where
             changed = true;
             let p_old_without_new_queries =
                 self.p_old[v as usize].difference(&new_pointed_by_queries_term_set);
-            let p_dif = self.sols[v as usize].weak_difference(&p_old_without_new_queries);
-            let p_dif_and_queries = ;
-            let p_dif_and_queries_vec = Lazy::new(|| p_dif.iter().collect::<Vec<IntegerTerm>>());
+            let mut p_dif = self.sols[v as usize].weak_difference(&p_old_without_new_queries);
+            p_dif.intersection_assign(&self.pointed_by_queries.term_set);
+            let p_diff_vec = Lazy::new(|| p_dif.iter().collect::<Vec<IntegerTerm>>());
             self.p_old[v as usize].clone_from(&self.sols[v as usize]);
 
             for (&w, offsets) in &self.edges.subset[v as usize] {
@@ -229,8 +235,8 @@ where
                 }
                 for o in offsets.iter() {
                     propagate_terms_into(
-                        &p_dif_and_queries,
-                        p_dif_and_queries_vec.iter().copied(),
+                        &p_dif,
+                        p_diff_vec.iter().copied(),
                         o,
                         &mut self.sols[w as usize],
                         &self.term_types,
@@ -415,6 +421,10 @@ where
             self.sols.resize_with(new_len, S::new);
             self.edges.subset.resize_with(new_len, HashMap::new);
             self.edges.rev_subset.resize_with(new_len, HashSet::new);
+            self.edges.addr_ofs.resize_with(new_len, SmallVec::new);
+            self.edges.rev_addr_ofs.resize_with(new_len, SmallVec::new);
+            self.edges.loads.resize_with(new_len, SmallVec::new);
+            self.edges.stores.resize_with(new_len, SmallVec::new);
             self.term_types.extend_from_slice(&template.types);
             self.parents.extend(
                 (0..num_instantiated).map(|i| (instantiated_start_index + i) as IntegerTerm),
@@ -580,6 +590,13 @@ where
             self.edges.rev_subset[parent as usize].insert(parent as IntegerTerm);
         }
 
+        self.edges.rev_addr_ofs[parent as usize]
+            .extend_from_slice(self.edges.rev_addr_ofs[child as usize].as_slice());
+        self.edges.loads[parent as usize]
+            .extend_from_slice(self.edges.loads[child as usize].as_slice());
+        self.edges.stores[parent as usize]
+            .extend_from_slice(self.edges.stores[child as usize].as_slice());
+
         self.parents[child as usize] = parent;
         self.p_old[child as usize] = S::new();
     }
@@ -647,7 +664,6 @@ where
         }
 
         let parents = Vec::from_iter(0..sols.len() as IntegerTerm);
-
         let left_conds = vec![];
         let right_conds = vec![];
         let call_dummies = vec![];
@@ -655,6 +671,11 @@ where
         let p_cache_left = vec![S::new(); left_conds.len()];
         let p_cache_right = vec![S::new(); right_conds.len()];
         let p_cache_call_dummies = vec![];
+        let addr_ofs = vec![SmallVec::new(); sols.len()];
+        let rev_addr_ofs = vec![SmallVec::new(); sols.len()];
+        let loads = vec![SmallVec::new(); sols.len()];
+        let stores = vec![SmallVec::new(); sols.len()];
+
         let mut state = TidalPropagationSolverState {
             context_state,
             sols,
@@ -663,11 +684,15 @@ where
             p_cache_right,
             p_cache_call_dummies,
             edges: Edges {
+                addr_ofs,
+                rev_addr_ofs,
                 subset,
                 rev_subset,
                 left_conds,
                 right_conds,
                 call_dummies,
+                loads,
+                stores,
             },
             term_types,
             parents,
@@ -730,6 +755,10 @@ struct Edges<C: ContextSelector> {
     left_conds: Vec<CondLeftEntry<C::Context>>,
     right_conds: Vec<CondRightEntry<C::Context>>,
     call_dummies: Vec<CallDummyEntry<C::Context>>,
+    loads: Vec<SmallVec<[IntegerTerm; 2]>>,
+    stores: Vec<SmallVec<[IntegerTerm; 2]>>,
+    addr_ofs: Vec<SmallVec<[IntegerTerm; 2]>>,
+    rev_addr_ofs: Vec<SmallVec<[IntegerTerm; 2]>>,
 }
 
 impl<C: ContextSelector> Edges<C> {
@@ -737,6 +766,8 @@ impl<C: ContextSelector> Edges<C> {
         match c {
             Constraint::Inclusion { term, node } => {
                 // self.sols[node as usize].insert(term);
+                self.addr_ofs[term as usize].push(node);
+                self.rev_addr_ofs[node as usize].push(term);
             }
             Constraint::Subset {
                 left,
@@ -758,6 +789,7 @@ impl<C: ContextSelector> Edges<C> {
                     call_site,
                     context,
                 });
+                self.loads[right as usize].push(cond_node);
                 // self.p_cache_left.push(S::new());
             }
             Constraint::UnivCondSubsetRight {
@@ -773,6 +805,7 @@ impl<C: ContextSelector> Edges<C> {
                     call_site,
                     context,
                 });
+                self.stores[left as usize].push(cond_node);
                 // self.p_cache_right.push(S::new());
             }
             Constraint::CallDummy {

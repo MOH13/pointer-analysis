@@ -806,8 +806,8 @@ struct Edges<C> {
     sols: Vec<HashSet<IntegerTerm>>,
     subsets: Subsets,
     conds: Vec<Vec<Cond<C>>>,
-    loads: Vec<SmallVec<[IntegerTerm; 1]>>,
-    stores: Vec<SmallVec<[IntegerTerm; 1]>>,
+    loads: Vec<SmallVec<[IntegerTerm; 2]>>,
+    stores: Vec<SmallVec<[IntegerTerm; 2]>>,
     pointed_by_buffers: Vec<SmallVec<[IntegerTerm; 2]>>,
     rev_addr_ofs: Vec<SmallVec<[IntegerTerm; 2]>>,
 }
