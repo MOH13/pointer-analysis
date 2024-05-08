@@ -482,6 +482,83 @@ impl TermSetTrait for SharedBitVec {
         }
     }
 
+    fn intersection_assign(&mut self, other: &Self) {
+        match (self, other) {
+            (this @ SharedBitVec::Array(_), SharedBitVec::Array(other_terms)) => {
+                // TODO: Help us Polonius, you are our only hope
+                let self_terms = match this {
+                    SharedBitVec::Array(terms) => terms,
+                    _ => unreachable!(),
+                };
+
+                let mut merged: ArrayVec<_, ARRAY_VEC_SIZE> = ArrayVec::new();
+                let mut self_idx = 0;
+                let mut other_idx = 0;
+                while self_idx < self_terms.len() || other_idx < other_terms.len() {
+                    match (self_terms.get(self_idx), other_terms.get(other_idx)) {
+                        (Some(&self_term), Some(&other_term)) => {
+                            if self_term < other_term {
+                                self_idx += 1;
+                            } else if self_term > other_term {
+                                other_idx += 1;
+                            } else {
+                                merged.push(self_term);
+                                self_idx += 1;
+                                other_idx += 1;
+                            }
+                        }
+                        (Some(&self_term), None) => {
+                            break;
+                        }
+                        (None, Some(&other_term)) => {
+                            break;
+                        }
+                        (None, None) => unreachable!(),
+                    }
+                }
+
+                *this = SharedBitVec::Array(merged);
+            }
+            (this @ SharedBitVec::Array(_), SharedBitVec::BitVec(_)) => {
+                // TODO: Help us Polonius, you are our only hope
+                let terms = match this {
+                    SharedBitVec::Array(terms) => terms,
+                    _ => unreachable!(),
+                };
+
+                terms.retain(|term| other.contains(*term));
+            }
+            (SharedBitVec::BitVec(inner), SharedBitVec::Array(terms)) => {
+                for &term in terms {
+                    inner.remove(term);
+                }
+            }
+            (SharedBitVec::BitVec(self_inner), SharedBitVec::BitVec(other_inner)) => {
+                let self_segments = &mut self_inner.segments;
+                let other_segments = &other_inner.segments;
+
+                if other_segments.len() == 0 {
+                    return;
+                }
+
+                let start_index = match self_segments
+                    .binary_search_by_key(&other_segments[0].start_index, |s| s.start_index)
+                {
+                    Ok(i) => i,
+                    Err(i) => i,
+                };
+
+                let mut self_iter = self_segments[start_index..].iter_mut();
+                let mut other_idx = 0;
+                let mut cur_write_idx = 0;
+
+                for self_segment in &mut self_iter {
+                    // do stuff
+                }
+            }
+        }
+    }
+
     fn extend<T: Iterator<Item = Self::Term>>(&mut self, other: T) {
         for term in other {
             self.insert(term);

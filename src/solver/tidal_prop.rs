@@ -5,6 +5,7 @@ use std::mem;
 
 use bitvec::bitvec;
 use bitvec::prelude::*;
+use either::Either;
 use hashbrown::{HashMap, HashSet};
 use once_cell::unsync::Lazy;
 use roaring::RoaringBitmap;
@@ -51,6 +52,26 @@ impl<S, C> TidalPropagationSolver<S, C> {
     }
 }
 
+pub struct PointedByQueries<S> {
+    pointed_by_queries: uniset::BitSet,
+    term_set: S,
+}
+
+impl<S> PointedByQueries<S> where S: TermSetTrait<Term = IntegerTerm> {
+    pub fn contains(&self, term: IntegerTerm) -> bool {
+        self.pointed_by_queries.test(term as usize)
+    }
+
+    pub fn insert(&mut self, term: IntegerTerm) -> bool {
+        if !self.contains(term) {
+            self.pointed_by_queries.set(term as usize);
+            self.term_set.insert(term);
+            return true;
+        }
+        false
+    }
+}
+
 pub struct TidalPropagationSolverState<T, S, C: ContextSelector> {
     sols: Vec<S>,
     p_old: Vec<S>,
@@ -62,7 +83,9 @@ pub struct TidalPropagationSolverState<T, S, C: ContextSelector> {
     term_types: Vec<TermType>,
     parents: Vec<IntegerTerm>,
     points_to_queries: uniset::BitSet,
-    pointed_by_queries: uniset::BitSet,
+    pointed_by_queries: PointedByQueries<S>,
+    new_points_to_queries: Vec<IntegerTerm>,
+    new_pointed_by_queries: Vec<IntegerTerm>,
 }
 
 impl<T, S, C: ContextSelector> TidalPropagationSolverState<T, S, C> {
@@ -107,14 +130,115 @@ where
     }
 
     fn points_to_propagation(&mut self) -> bool {
+        let mut changed = false;
         let top_order = self.scc(
             SccDirection::Backward,
             self.points_to_queries
                 .iter()
                 .map(|t| t as IntegerTerm)
                 .collect(),
-            |_, _, _| {},
+            |v, state, to_visit| {
+                if !state.points_to_queries.test(v as usize) {
+                    state.points_to_queries.set(v as usize);
+                    state.new_pointed_by_queries.push(v);
+                    // get addr-of terms
+                    // state.sols[v as usize] = ...
+
+                    // For each node taking the address of v
+                    for w in todo!() {
+                        let w = get_representative(state.parents, w);
+                        state.sols[w as usize].insert(v);
+                    }
+                    // For each load v <- *w
+                    for w in todo!() {
+                        to_visit.push(get_representative(state.parents, w))
+                    }
+                }
+            },
         );
+        for &v in top_order.iter() {
+            // Skip if no new terms in solution set
+            if self.sols[v as usize].len() == self.p_old[v as usize].len() {
+                continue;
+            }
+            changed = true;
+            let p_dif = self.sols[v as usize].weak_difference(&self.p_old[v as usize]);
+            let p_dif_vec = Lazy::new(|| p_dif.iter().collect::<Vec<IntegerTerm>>());
+            self.p_old[v as usize].clone_from(&self.sols[v as usize]);
+
+            for (&w, offsets) in &self.edges.subset[v as usize] {
+                if !self.points_to_queries.test(w as usize) {
+                    continue;
+                }
+                for o in offsets.iter() {
+                    propagate_terms_into(
+                        &p_dif,
+                        p_dif_vec.iter().copied(),
+                        o,
+                        &mut self.sols[w as usize],
+                        &self.term_types,
+                    );
+                }
+            }
+        }
+        changed
+    }
+
+    fn pointed_by_propagation(&mut self) -> bool {
+        let mut changed = false;
+        let mut new_pointed_by_queries_term_set: S = S::new();
+        for &w in &self.new_pointed_by_queries {
+            new_pointed_by_queries_term_set.insert(w);
+        }
+
+        let top_order = self.scc(SccDirection::Forward, vec![], |v, state, to_visit| {
+            if state.pointed_by_queries.insert(v) {
+                new_pointed_by_queries_term_set.insert(v);
+
+                // For each node taking the address of v
+                for w in todo!() {
+                    let w = get_representative(state.parents, w);
+                    to_visit.push(w);
+                    state.sols[w as usize].insert(v);
+                }
+
+                // For each store *w <- v
+                for w in todo!() {
+                    state
+                        .new_points_to_queries
+                        .push(get_representative(state.parents, w));
+                }
+            }
+        });
+        for &v in top_order.iter().rev() {
+            // Skip if no new terms in solution set
+            if self.sols[v as usize].len() == self.p_old[v as usize].len() {
+                continue;
+            }
+            changed = true;
+            let p_old_without_new_queries =
+                self.p_old[v as usize].difference(&new_pointed_by_queries_term_set);
+            let p_dif = self.sols[v as usize].weak_difference(&p_old_without_new_queries);
+            let p_dif_and_queries = ;
+            let p_dif_and_queries_vec = Lazy::new(|| p_dif.iter().collect::<Vec<IntegerTerm>>());
+            self.p_old[v as usize].clone_from(&self.sols[v as usize]);
+
+            for (&w, offsets) in &self.edges.subset[v as usize] {
+                if !self.points_to_queries.test(w as usize) {
+                    continue;
+                }
+                for o in offsets.iter() {
+                    propagate_terms_into(
+                        &p_dif_and_queries,
+                        p_dif_and_queries_vec.iter().copied(),
+                        o,
+                        &mut self.sols[w as usize],
+                        &self.term_types,
+                    );
+                }
+            }
+        }
+        changed
     }
 
     fn wave_propagate_iteration(&mut self, top_order: Vec<IntegerTerm>) -> bool {
@@ -368,11 +492,17 @@ where
 
         let mut visit_state = SccVisitState {
             sols: &mut self.sols,
+            points_to_queries: &mut self.points_to_queries,
+            pointed_by_queries: &mut self.pointed_by_queries,
+            new_points_to_queries: &mut self.new_points_to_queries,
+            new_pointed_by_queries: &mut self.new_pointed_by_queries,
+            parents: &mut self.parents,
         };
 
         while let Some(v) = internal_state.to_visit.pop() {
             if internal_state.d[v as usize] == 0 {
                 visit(
+                    direction,
                     &mut internal_state,
                     &mut visit_state,
                     &self.edges,
@@ -671,6 +801,7 @@ impl<C: ContextSelector> Edges<C> {
 }
 
 fn visit<'a, F, S, C>(
+    direction: SccDirection,
     internal: &mut SccInternalState,
     visit_state: &mut SccVisitState<'a, S>,
     edges: &Edges<C>,
@@ -686,13 +817,22 @@ fn visit<'a, F, S, C>(
     internal.d[v as usize] = internal.iteration;
     internal.r[v as usize] = Some(v);
 
-    for (&w, offsets) in &edges.subset[v as usize] {
+    let edges_iter = match direction {
+        SccDirection::Forward => Either::Left(edges.subset[v as usize].iter()),
+        SccDirection::Backward => Either::Right(
+            edges.rev_subset[v as usize]
+                .iter()
+                .map(|w| (w, edges.subset[*w as usize].get(&v).unwrap())),
+        ),
+    };
+
+    for (&w, offsets) in edges_iter {
         if !offsets.contains(0) {
             continue;
         }
 
         if internal.d[w as usize] == 0 {
-            visit(internal, visit_state, edges, visit_handler, w);
+            visit(direction, internal, visit_state, edges, visit_handler, w);
         }
         if !internal.c[w as usize] {
             let r_v = internal.r[v as usize].unwrap();
@@ -740,9 +880,14 @@ struct SccInternalState {
 
 struct SccVisitState<'a, S> {
     sols: &'a mut [S],
+    points_to_queries: &'a mut uniset::BitSet,
+    pointed_by_queries: &'a mut PointedByQueries<S>,
+    new_points_to_queries: &'a mut Vec<IntegerTerm>,
+    new_pointed_by_queries: &'a mut Vec<IntegerTerm>,
+    parents: &'a mut [IntegerTerm],
 }
 
-fn get_representative_no_mutation(parents: &Vec<IntegerTerm>, child: IntegerTerm) -> IntegerTerm {
+fn get_representative_no_mutation(parents: &[IntegerTerm], child: IntegerTerm) -> IntegerTerm {
     let mut node = child;
     loop {
         let parent = parents[node as usize];
@@ -753,7 +898,7 @@ fn get_representative_no_mutation(parents: &Vec<IntegerTerm>, child: IntegerTerm
     }
 }
 
-fn get_representative(parents: &mut Vec<IntegerTerm>, child: IntegerTerm) -> IntegerTerm {
+fn get_representative(parents: &mut [IntegerTerm], child: IntegerTerm) -> IntegerTerm {
     let parent = parents[child as usize];
     if parent == child {
         return child;

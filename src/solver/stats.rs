@@ -59,6 +59,8 @@ impl<T: Hash + Eq + Clone> TermSetTrait for DummyTermSet<T> {
 
     fn union_assign(&mut self, _other: &Self) {}
 
+    fn intersection_assign(&mut self, other: &Self) {}
+
     fn extend<U: Iterator<Item = Self::Term>>(&mut self, _other: U) {}
 
     fn difference(&self, _other: &Self) -> Self {

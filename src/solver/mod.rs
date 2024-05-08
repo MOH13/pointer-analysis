@@ -220,6 +220,7 @@ pub trait TermSetTrait: Clone + Default + PartialEq {
     // Returns true if the term was not present before insertion
     fn insert(&mut self, term: Self::Term) -> bool;
     fn union_assign(&mut self, other: &Self);
+    fn intersection_assign(&mut self, other: &Self);
     fn extend<T: Iterator<Item = Self::Term>>(&mut self, other: T);
     fn iter(&self) -> impl Iterator<Item = Self::Term>;
     fn difference(&self, other: &Self) -> Self;
@@ -264,6 +265,11 @@ impl<T: Eq + PartialEq + Hash + Clone> TermSetTrait for HashSet<T> {
     #[inline]
     fn union_assign(&mut self, other: &Self) {
         Extend::extend(self, other.iter().cloned());
+    }
+
+    #[inline]
+    fn intersection_assign(&mut self, other: &Self) {
+        self.retain(|v| other.contains(v));
     }
 
     #[inline]
@@ -313,6 +319,11 @@ impl TermSetTrait for RoaringBitmap {
     #[inline]
     fn union_assign(&mut self, other: &Self) {
         *self |= other;
+    }
+
+    #[inline]
+    fn intersection_assign(&mut self, other: &Self) {
+        *self &= other;
     }
 
     #[inline]
