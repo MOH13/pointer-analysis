@@ -12,11 +12,11 @@ mod shared_bitvec;
 mod stats;
 #[cfg(test)]
 mod tests;
+mod tidal_prop;
 
 pub use basic::{
     BasicHashSolver, BasicRoaringSolver, BasicSharedBitVecSolver, JustificationSolver,
 };
-// pub use bit_vec::BasicBitVecSolver;
 pub use basic_demand::BasicDemandSolver;
 pub use context::{
     CallSite, CallStringSelector, ContextInsensitiveSelector, ContextSelector,
