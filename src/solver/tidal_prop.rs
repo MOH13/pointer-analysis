@@ -68,6 +68,8 @@ pub struct TidalPropagationSolverState<T, S, C: ContextSelector> {
     visited_pointed_by: uniset::BitSet,
     new_points_to_queries: Vec<IntegerTerm>,
     new_pointed_by_queries: Vec<IntegerTerm>,
+    new_incomming: Vec<IntegerTerm>,
+    iteration_nodes: Vec<IntegerTerm>,
 }
 
 impl<T, S, C: ContextSelector> TidalPropagationSolverState<T, S, C> {
@@ -91,6 +93,7 @@ where
             changed = self.points_to_propagation();
             changed |= self.pointed_by_propagation();
             changed |= self.add_edges_after_wave_prop();
+            self.cleanup();
             println!("Iteration {iters}");
         }
 
@@ -104,6 +107,7 @@ where
             self.points_to_queries
                 .iter()
                 .map(|t| t as IntegerTerm)
+                .chain(self.new_points_to_queries.iter().copied())
                 .collect(),
             |v, state, to_visit| {
                 if !state.points_to_queries.test(v as usize) {
@@ -120,6 +124,8 @@ where
                 }
             },
         );
+        self.iteration_nodes.extend_from_slice(&top_order);
+
         for &v in top_order.iter() {
             // Skip if no new terms in solution set
             if self.sols[v as usize].len() == self.p_old[v as usize].len() {
@@ -144,6 +150,8 @@ where
                 }
             }
         }
+
+        self.new_points_to_queries.clear();
         changed
     }
 
@@ -151,23 +159,48 @@ where
         let mut changed = false;
         let mut new_pointed_by_queries_term_set: S = S::new();
 
-        let top_order = self.scc(SccDirection::Forward, vec![], |v, state, to_visit| {
-            if state.visited_pointed_by.test(v as usize) {
-                state.visited_pointed_by.set(v as usize);
-                state.new_pointed_by_queries.push(v);
+        let mut starting_nodes = vec![];
 
-                for &w in &state.edges.addr_ofs[v as usize] {
-                    let w = get_representative(state.parents, w);
-                    to_visit.push(w);
-                }
-
-                for &w in &state.edges.stores[v as usize] {
-                    state
-                        .new_points_to_queries
-                        .push(get_representative(state.parents, w));
-                }
+        for &q in &self.new_pointed_by_queries {
+            for &t in &self.edges.addr_ofs[q as usize] {
+                // TODO: deduplicate?
+                starting_nodes.push(get_representative(&mut self.parents, t));
             }
-        });
+        }
+
+        for t in self.new_incomming.drain(..) {
+            let t = get_representative(&mut self.parents, t);
+            if self
+                .new_pointed_by_queries
+                .iter()
+                .any(|&q| self.sols[t as usize].contains(q))
+            {
+                starting_nodes.push(t);
+            }
+        }
+
+        let top_order = self.scc(
+            SccDirection::Forward,
+            starting_nodes,
+            |v, state, to_visit| {
+                if state.visited_pointed_by.test(v as usize) {
+                    state.visited_pointed_by.set(v as usize);
+                    state.new_pointed_by_queries.push(v);
+
+                    for &w in &state.edges.addr_ofs[v as usize] {
+                        let w = get_representative(state.parents, w);
+                        to_visit.push(w);
+                    }
+
+                    for &w in &state.edges.stores[v as usize] {
+                        state
+                            .new_points_to_queries
+                            .push(get_representative(state.parents, w));
+                    }
+                }
+            },
+        );
+        self.iteration_nodes.extend_from_slice(&top_order);
 
         for &v in &self.new_pointed_by_queries {
             new_pointed_by_queries_term_set.insert(v);
@@ -204,6 +237,8 @@ where
                 }
             }
         }
+
+        self.new_pointed_by_queries.clear();
         changed
     }
 
@@ -263,6 +298,7 @@ where
                     if edges_between(&mut self.edges.subset, t, right).insert(0) {
                         self.sols[right as usize].union_assign(&self.p_old[t as usize]);
                         self.edges.rev_subset[right as usize].insert(t);
+                        self.new_incomming.push(right);
                         changed = true;
                     }
                 }
@@ -299,12 +335,19 @@ where
                     if edges_between(&mut self.edges.subset, left, t).insert(0) {
                         self.sols[t as usize].union_assign(&self.p_old[left as usize]);
                         self.edges.rev_subset[t as usize].insert(left);
+                        self.new_incomming.push(t);
                         changed = true;
                     }
                 }
             }
         }
         changed
+    }
+
+    fn cleanup(&mut self) {
+        for v in self.iteration_nodes.drain(..) {
+            self.p_old[v as usize].clone_from(&self.sols[v as usize]);
+        }
     }
 
     fn try_offset_and_instantiate(
@@ -620,6 +663,8 @@ where
             visited_pointed_by: uniset::BitSet::new(),
             new_points_to_queries: vec![],
             new_pointed_by_queries: vec![],
+            new_incomming: vec![],
+            iteration_nodes: vec![],
         };
 
         for c in global.constraints {
