@@ -3,8 +3,8 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 use std::mem;
 
+use bitvec::bitvec;
 use bitvec::prelude::*;
-use bitvec::{bitvec, vec};
 use either::Either;
 use hashbrown::{HashMap, HashSet};
 use once_cell::unsync::Lazy;
@@ -53,29 +53,6 @@ impl<S, C> TidalPropagationSolver<S, C> {
     }
 }
 
-pub struct PointedByQueries<S> {
-    pointed_by_queries: uniset::BitSet,
-    term_set: S,
-}
-
-impl<S> PointedByQueries<S>
-where
-    S: TermSetTrait<Term = IntegerTerm>,
-{
-    pub fn contains(&self, term: IntegerTerm) -> bool {
-        self.pointed_by_queries.test(term as usize)
-    }
-
-    pub fn insert(&mut self, term: IntegerTerm) -> bool {
-        if !self.contains(term) {
-            self.pointed_by_queries.set(term as usize);
-            self.term_set.insert(term);
-            return true;
-        }
-        false
-    }
-}
-
 pub struct TidalPropagationSolverState<T, S, C: ContextSelector> {
     sols: Vec<S>,
     p_old: Vec<S>,
@@ -87,7 +64,8 @@ pub struct TidalPropagationSolverState<T, S, C: ContextSelector> {
     term_types: Vec<TermType>,
     parents: Vec<IntegerTerm>,
     points_to_queries: uniset::BitSet,
-    pointed_by_queries: PointedByQueries<S>,
+    pointed_by_queries: S,
+    visited_pointed_by: uniset::BitSet,
     new_points_to_queries: Vec<IntegerTerm>,
     new_pointed_by_queries: Vec<IntegerTerm>,
 }
@@ -104,29 +82,15 @@ where
     T: Hash + Eq + Clone + Debug,
     S: TermSetTrait<Term = u32> + Debug,
 {
-    fn run_wave_propagation(&mut self) {
-        self.scc(
-            SccDirection::Forward,
-            (0..self.term_count() as IntegerTerm).collect(),
-            |_, _, _| {},
-        );
-
+    fn run_tidal_propagation(&mut self) {
         let mut iters = 0u64;
 
         let mut changed = true;
         while changed {
             iters += 1;
-            let top_order = self.scc(
-                SccDirection::Forward,
-                (0..self.term_count() as IntegerTerm).collect(),
-                |_, _, _| {},
-            );
-
-            let mut nodes_with_new_outgoing = S::new();
-
-            changed = self.wave_propagate_iteration(top_order);
-
-            changed |= self.add_edges_after_wave_prop(&mut nodes_with_new_outgoing);
+            changed = self.points_to_propagation();
+            changed |= self.pointed_by_propagation();
+            changed |= self.add_edges_after_wave_prop();
             println!("Iteration {iters}");
         }
 
@@ -145,16 +109,12 @@ where
                 if !state.points_to_queries.test(v as usize) {
                     state.points_to_queries.set(v as usize);
                     state.new_pointed_by_queries.push(v);
-                    // get addr-of terms
-                    // state.sols[v as usize] = ...
 
-                    // For each node taking the address of v
-                    for w in todo!() {
-                        let w = get_representative(state.parents, w);
-                        state.sols[w as usize].insert(v);
+                    for &w in &state.edges.rev_addr_ofs[v as usize] {
+                        state.sols[v as usize].insert(w);
                     }
-                    // For each load v <- *w
-                    for w in todo!() {
+
+                    for &w in &state.edges.loads[v as usize] {
                         to_visit.push(get_representative(state.parents, w))
                     }
                 }
@@ -168,7 +128,6 @@ where
             changed = true;
             let p_dif = self.sols[v as usize].weak_difference(&self.p_old[v as usize]);
             let p_dif_vec = Lazy::new(|| p_dif.iter().collect::<Vec<IntegerTerm>>());
-            self.p_old[v as usize].clone_from(&self.sols[v as usize]);
 
             for (&w, offsets) in &self.edges.subset[v as usize] {
                 if !self.points_to_queries.test(w as usize) {
@@ -193,18 +152,16 @@ where
         let mut new_pointed_by_queries_term_set: S = S::new();
 
         let top_order = self.scc(SccDirection::Forward, vec![], |v, state, to_visit| {
-            if state.pointed_by_queries.insert(v) {
-                self.new_pointed_by_queries.push(v);
+            if state.visited_pointed_by.test(v as usize) {
+                state.visited_pointed_by.set(v as usize);
+                state.new_pointed_by_queries.push(v);
 
-                // For each node taking the address of v
-                for w in todo!() {
+                for &w in &state.edges.addr_ofs[v as usize] {
                     let w = get_representative(state.parents, w);
                     to_visit.push(w);
-                    state.sols[w as usize].insert(v);
                 }
 
-                // For each store *w <- v
-                for w in todo!() {
+                for &w in &state.edges.stores[v as usize] {
                     state
                         .new_points_to_queries
                         .push(get_representative(state.parents, w));
@@ -212,8 +169,13 @@ where
             }
         });
 
-        for &w in &self.new_pointed_by_queries {
-            new_pointed_by_queries_term_set.insert(w);
+        for &v in &self.new_pointed_by_queries {
+            new_pointed_by_queries_term_set.insert(v);
+            for &w in &self.edges.addr_ofs[v as usize] {
+                let w = get_representative(&mut self.parents, w);
+                self.sols[w as usize].insert(v);
+            }
+            self.pointed_by_queries.insert(v);
         }
 
         for &v in top_order.iter().rev() {
@@ -225,38 +187,9 @@ where
             let p_old_without_new_queries =
                 self.p_old[v as usize].difference(&new_pointed_by_queries_term_set);
             let mut p_dif = self.sols[v as usize].weak_difference(&p_old_without_new_queries);
-            p_dif.intersection_assign(&self.pointed_by_queries.term_set);
-            let p_diff_vec = Lazy::new(|| p_dif.iter().collect::<Vec<IntegerTerm>>());
-            self.p_old[v as usize].clone_from(&self.sols[v as usize]);
-
-            for (&w, offsets) in &self.edges.subset[v as usize] {
-                if !self.points_to_queries.test(w as usize) {
-                    continue;
-                }
-                for o in offsets.iter() {
-                    propagate_terms_into(
-                        &p_dif,
-                        p_diff_vec.iter().copied(),
-                        o,
-                        &mut self.sols[w as usize],
-                        &self.term_types,
-                    );
-                }
-            }
-        }
-        changed
-    }
-
-    fn wave_propagate_iteration(&mut self, top_order: Vec<IntegerTerm>) -> bool {
-        let mut changed = false;
-        for &v in top_order.iter().rev() {
-            // Skip if no new terms in solution set
-            if self.sols[v as usize].len() == self.p_old[v as usize].len() {
-                continue;
-            }
-            changed = true;
-            let p_dif = self.sols[v as usize].weak_difference(&self.p_old[v as usize]);
+            p_dif.intersection_assign(&self.pointed_by_queries);
             let p_dif_vec = Lazy::new(|| p_dif.iter().collect::<Vec<IntegerTerm>>());
+            // todo - Move to cleanup:
             self.p_old[v as usize].clone_from(&self.sols[v as usize]);
 
             for (&w, offsets) in &self.edges.subset[v as usize] {
@@ -274,7 +207,7 @@ where
         changed
     }
 
-    fn add_edges_after_wave_prop(&mut self, nodes_with_new_outgoing: &mut S) -> bool {
+    fn add_edges_after_wave_prop(&mut self) -> bool {
         let mut changed = false;
         let call_dummies = self.edges.call_dummies.clone();
         for (
@@ -331,7 +264,6 @@ where
                         self.sols[right as usize].union_assign(&self.p_old[t as usize]);
                         self.edges.rev_subset[right as usize].insert(t);
                         changed = true;
-                        nodes_with_new_outgoing.insert(t);
                     }
                 }
             }
@@ -368,7 +300,6 @@ where
                         self.sols[t as usize].union_assign(&self.p_old[left as usize]);
                         self.edges.rev_subset[t as usize].insert(left);
                         changed = true;
-                        nodes_with_new_outgoing.insert(t);
                     }
                 }
             }
@@ -486,7 +417,7 @@ where
         visit_handler: F,
     ) -> Vec<IntegerTerm>
     where
-        F: Fn(IntegerTerm, &mut SccVisitState<S>, &mut Vec<IntegerTerm>),
+        F: Fn(IntegerTerm, &mut SccVisitState<S, C>, &mut Vec<IntegerTerm>),
     {
         let node_count = self.term_count();
         let mut internal_state = SccInternalState {
@@ -501,9 +432,10 @@ where
         };
 
         let mut visit_state = SccVisitState {
+            edges: &self.edges,
             sols: &mut self.sols,
             points_to_queries: &mut self.points_to_queries,
-            pointed_by_queries: &mut self.pointed_by_queries,
+            visited_pointed_by: &mut self.visited_pointed_by,
             new_points_to_queries: &mut self.new_points_to_queries,
             new_pointed_by_queries: &mut self.new_pointed_by_queries,
             parents: &mut self.parents,
@@ -590,12 +522,12 @@ where
             self.edges.rev_subset[parent as usize].insert(parent as IntegerTerm);
         }
 
-        self.edges.rev_addr_ofs[parent as usize]
-            .extend_from_slice(self.edges.rev_addr_ofs[child as usize].as_slice());
-        self.edges.loads[parent as usize]
-            .extend_from_slice(self.edges.loads[child as usize].as_slice());
-        self.edges.stores[parent as usize]
-            .extend_from_slice(self.edges.stores[child as usize].as_slice());
+        let child_addr_ofs = mem::take(&mut self.edges.addr_ofs[child as usize]);
+        self.edges.rev_addr_ofs[parent as usize].extend_from_slice(child_addr_ofs.as_slice());
+        let child_loads = mem::take(&mut self.edges.loads[child as usize]);
+        self.edges.loads[parent as usize].extend_from_slice(child_loads.as_slice());
+        let child_stores = mem::take(&mut self.edges.stores[child as usize]);
+        self.edges.stores[parent as usize].extend_from_slice(child_stores.as_slice());
 
         self.parents[child as usize] = parent;
         self.p_old[child as usize] = S::new();
@@ -663,39 +595,31 @@ where
             sols[function_term_info.pointer_node as usize].insert(fun_term);
         }
 
-        let parents = Vec::from_iter(0..sols.len() as IntegerTerm);
-        let left_conds = vec![];
-        let right_conds = vec![];
-        let call_dummies = vec![];
-        let p_old = vec![S::new(); sols.len()];
-        let p_cache_left = vec![S::new(); left_conds.len()];
-        let p_cache_right = vec![S::new(); right_conds.len()];
-        let p_cache_call_dummies = vec![];
-        let addr_ofs = vec![SmallVec::new(); sols.len()];
-        let rev_addr_ofs = vec![SmallVec::new(); sols.len()];
-        let loads = vec![SmallVec::new(); sols.len()];
-        let stores = vec![SmallVec::new(); sols.len()];
-
         let mut state = TidalPropagationSolverState {
             context_state,
             sols,
-            p_old,
-            p_cache_left,
-            p_cache_right,
-            p_cache_call_dummies,
+            p_old: vec![S::new(); num_terms],
+            p_cache_left: vec![],
+            p_cache_right: vec![],
+            p_cache_call_dummies: vec![],
             edges: Edges {
-                addr_ofs,
-                rev_addr_ofs,
+                addr_ofs: vec![SmallVec::new(); num_terms],
+                rev_addr_ofs: vec![SmallVec::new(); num_terms],
                 subset,
                 rev_subset,
-                left_conds,
-                right_conds,
-                call_dummies,
-                loads,
-                stores,
+                left_conds: vec![],
+                right_conds: vec![],
+                call_dummies: vec![],
+                loads: vec![SmallVec::new(); num_terms],
+                stores: vec![SmallVec::new(); num_terms],
             },
             term_types,
-            parents,
+            parents: Vec::from_iter(0..num_terms as IntegerTerm),
+            points_to_queries: uniset::BitSet::new(),
+            pointed_by_queries: S::new(),
+            visited_pointed_by: uniset::BitSet::new(),
+            new_points_to_queries: vec![],
+            new_pointed_by_queries: vec![],
         };
 
         for c in global.constraints {
@@ -709,7 +633,7 @@ where
             state.get_or_instantiate_function(entrypoint, empty_context.clone());
         }
 
-        state.run_wave_propagation();
+        state.run_tidal_propagation();
 
         state
     }
@@ -836,12 +760,12 @@ impl<C: ContextSelector> Edges<C> {
 fn visit<'a, F, S, C>(
     direction: SccDirection,
     internal: &mut SccInternalState,
-    visit_state: &mut SccVisitState<'a, S>,
+    visit_state: &mut SccVisitState<'a, S, C>,
     edges: &Edges<C>,
     visit_handler: &F,
     v: IntegerTerm,
 ) where
-    for<'b> F: Fn(IntegerTerm, &mut SccVisitState<'b, S>, &mut Vec<IntegerTerm>),
+    for<'b> F: Fn(IntegerTerm, &mut SccVisitState<'b, S, C>, &mut Vec<IntegerTerm>),
     C: ContextSelector,
 {
     visit_handler(v, visit_state, &mut internal.to_visit);
@@ -894,6 +818,7 @@ fn visit<'a, F, S, C>(
     }
 }
 
+#[derive(Clone, Copy)]
 enum SccDirection {
     Forward,
     Backward,
@@ -911,10 +836,11 @@ struct SccInternalState {
     top_order: Vec<IntegerTerm>,
 }
 
-struct SccVisitState<'a, S> {
+struct SccVisitState<'a, S, C: ContextSelector> {
+    edges: &'a Edges<C>,
     sols: &'a mut [S],
     points_to_queries: &'a mut uniset::BitSet,
-    pointed_by_queries: &'a mut PointedByQueries<S>,
+    visited_pointed_by: &'a mut uniset::BitSet,
     new_points_to_queries: &'a mut Vec<IntegerTerm>,
     new_pointed_by_queries: &'a mut Vec<IntegerTerm>,
     parents: &'a mut [IntegerTerm],

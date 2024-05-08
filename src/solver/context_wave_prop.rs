@@ -72,8 +72,6 @@ where
     S: TermSetTrait<Term = u32> + Debug,
 {
     fn run_wave_propagation(&mut self) {
-        SCC::run(self).apply_to_graph(self);
-
         let mut iters = 0u64;
 
         let mut changed = true;

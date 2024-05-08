@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use std::ops::BitOr;
+use std::ops::{BitAnd, BitOr};
 use std::rc::Rc;
 
 use arrayvec::ArrayVec;
@@ -51,6 +51,18 @@ impl BitOr for Chunk {
 
     fn bitor(self, rhs: Self) -> Self::Output {
         let new_data = self.data | rhs.data;
+        Chunk {
+            data: new_data,
+            len: new_data.len() as u32,
+        }
+    }
+}
+
+impl BitAnd for Chunk {
+    type Output = Chunk;
+
+    fn bitand(self, rhs: Self) -> Self::Output {
+        let new_data = self.data & rhs.data;
         Chunk {
             data: new_data,
             len: new_data.len() as u32,
@@ -548,13 +560,28 @@ impl TermSetTrait for SharedBitVec {
                     Err(i) => i,
                 };
 
-                let mut self_iter = self_segments[start_index..].iter_mut();
                 let mut other_idx = 0;
                 let mut cur_write_idx = 0;
 
-                for self_segment in &mut self_iter {
-                    // do stuff
+                for self_idx in start_index..self_segments.len() {
+                    let self_segment = &self_segments[self_idx];
+                    self_inner.len -= self_segment.chunk.len;
+                    match other_segments[other_idx..]
+                        .binary_search_by_key(&self_segment.start_index, |s| s.start_index)
+                    {
+                        Ok(idx) => {
+                            let new_chunk = *self_segment.chunk & *other_segments[idx].chunk;
+                            *Rc::make_mut(&mut self_segments[cur_write_idx].chunk) = new_chunk;
+                            self_inner.len += new_chunk.len;
+                            cur_write_idx += 1;
+                            other_idx = idx;
+                        }
+                        Err(idx) => {
+                            other_idx = idx;
+                        }
+                    }
                 }
+                self_segments.truncate(cur_write_idx);
             }
         }
     }
