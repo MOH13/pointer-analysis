@@ -67,7 +67,7 @@ where
 
     fn solve(&self, input: DemandContextSensitiveInput<T, C>) -> Self::Solution {
         let global = input.input.global.clone();
-        let entrypoints = input.input.entrypoints.clone();
+        // let entrypoints = input.input.entrypoints.clone();
 
         let (context_state, fun_term_infos) = ContextState::from_context_input(input.input);
         let empty_context = context_state.context_selector.empty();
@@ -159,14 +159,14 @@ where
                         );
                     }
                 }
-                Demand::PointedBy(node) => {
-                    let abstract_term = state.context_state.mapping.term_to_integer(&node);
+                Demand::PointedBy(term) => {
+                    let abstract_term = state.context_state.mapping.term_to_integer(&term);
                     state
                         .abstract_pointed_by_queries
                         .set(abstract_term as usize, true);
-                    if let Some(node) = state.context_state.term_to_concrete_global(&node) {
+                    if let Some(term) = state.context_state.term_to_concrete_global(&term) {
                         add_pointed_by_query(
-                            node,
+                            term,
                             &mut state.points_to_queries,
                             &mut state.worklist,
                         );

@@ -14,8 +14,9 @@ use smallvec::SmallVec;
 use super::context::{ContextState, TemplateTerm};
 use super::shared_bitvec::SharedBitVec;
 use super::{
-    edges_between, try_offset_term, CallSite, Constraint, ContextSelector, ContextSensitiveInput,
-    IntegerTerm, Offsets, Solver, SolverExt, SolverSolution, TermSetTrait, TermType,
+    edges_between, try_offset_term, CallSite, Constraint, ContextSelector, Demand,
+    DemandContextSensitiveInput, IntegerTerm, Offsets, Solver, SolverExt, SolverSolution,
+    TermSetTrait, TermType,
 };
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
 
@@ -66,6 +67,9 @@ pub struct TidalPropagationSolverState<T, S, C: ContextSelector> {
     points_to_queries: uniset::BitSet,
     pointed_by_queries: S,
     visited_pointed_by: uniset::BitSet,
+    is_return_or_parameter: BitVec,
+    abstract_points_to_queries: BitVec,
+    abstract_pointed_by_queries: BitVec,
     new_points_to_queries: Vec<IntegerTerm>,
     new_pointed_by_queries: Vec<IntegerTerm>,
     new_incomming: Vec<IntegerTerm>,
@@ -110,16 +114,32 @@ where
                 .chain(self.new_points_to_queries.iter().copied())
                 .collect(),
             |v, state, to_visit| {
-                if !state.points_to_queries.test(v as usize) {
-                    state.points_to_queries.set(v as usize);
-                    state.new_pointed_by_queries.push(v);
+                if state.points_to_queries.test(v as usize) {
+                    return;
+                }
+                state.points_to_queries.set(v as usize);
+                state.new_pointed_by_queries.push(v);
 
-                    for &w in &state.edges.rev_addr_ofs[v as usize] {
-                        state.sols[v as usize].insert(w);
-                    }
+                for &w in &state.edges.rev_addr_ofs[v as usize] {
+                    state.sols[v as usize].insert(w);
+                }
 
-                    for &w in &state.edges.loads[v as usize] {
-                        to_visit.push(get_representative(state.parents, w))
+                for &w in &state.edges.loads[v as usize] {
+                    to_visit.push(get_representative(state.parents, w))
+                }
+
+                if state.is_return_or_parameter[v as usize] {
+                    let (fun_index, relative_index) = state
+                        .context_state
+                        .get_function_and_relative_index_from_concrete_index(v);
+                    let fun_index = fun_index.expect("Term should be in a function");
+                    let template = &state.context_state.templates[fun_index as usize];
+                    if relative_index >= template.num_return_terms
+                        && relative_index < template.num_return_terms + template.num_parameter_terms
+                    {
+                        state
+                            .new_pointed_by_queries
+                            .push(state.context_state.templates[0].start_index + fun_index);
                     }
                 }
             },
@@ -184,18 +204,33 @@ where
             starting_nodes,
             |v, state, to_visit| {
                 if state.visited_pointed_by.test(v as usize) {
-                    state.visited_pointed_by.set(v as usize);
-                    state.new_pointed_by_queries.push(v);
+                    return;
+                }
+                state.visited_pointed_by.set(v as usize);
+                state.new_pointed_by_queries.push(v);
 
-                    for &w in &state.edges.addr_ofs[v as usize] {
-                        let w = get_representative(state.parents, w);
-                        to_visit.push(w);
-                    }
+                for &w in &state.edges.addr_ofs[v as usize] {
+                    let w = get_representative(state.parents, w);
+                    to_visit.push(w);
+                }
 
-                    for &w in &state.edges.stores[v as usize] {
+                for &w in &state.edges.stores[v as usize] {
+                    state
+                        .new_points_to_queries
+                        .push(get_representative(state.parents, w));
+                }
+
+                if state.is_return_or_parameter[v as usize] {
+                    let (fun_index, relative_index) = state
+                        .context_state
+                        .get_function_and_relative_index_from_concrete_index(v);
+                    let fun_index = fun_index.expect("Term should be in a function");
+                    let num_return_terms =
+                        state.context_state.templates[fun_index as usize].num_return_terms;
+                    if relative_index < num_return_terms {
                         state
-                            .new_points_to_queries
-                            .push(get_representative(state.parents, w));
+                            .new_pointed_by_queries
+                            .push(state.context_state.templates[0].start_index + fun_index);
                     }
                 }
             },
@@ -222,8 +257,6 @@ where
             let mut p_dif = self.sols[v as usize].weak_difference(&p_old_without_new_queries);
             p_dif.intersection_assign(&self.pointed_by_queries);
             let p_dif_vec = Lazy::new(|| p_dif.iter().collect::<Vec<IntegerTerm>>());
-            // todo - Move to cleanup:
-            self.p_old[v as usize].clone_from(&self.sols[v as usize]);
 
             for (&w, offsets) in &self.edges.subset[v as usize] {
                 for o in offsets.iter() {
@@ -346,7 +379,9 @@ where
 
     fn cleanup(&mut self) {
         for v in self.iteration_nodes.drain(..) {
-            self.p_old[v as usize].clone_from(&self.sols[v as usize]);
+            if self.p_old[v as usize].len() != self.sols[v as usize].len() {
+                self.p_old[v as usize].clone_from(&self.sols[v as usize]);
+            }
         }
     }
 
@@ -393,17 +428,29 @@ where
             let num_instantiated = template.types.len();
             let new_len = instantiated_start_index + num_instantiated;
             self.sols.resize_with(new_len, S::new);
-            self.edges.subset.resize_with(new_len, HashMap::new);
-            self.edges.rev_subset.resize_with(new_len, HashSet::new);
-            self.edges.addr_ofs.resize_with(new_len, SmallVec::new);
-            self.edges.rev_addr_ofs.resize_with(new_len, SmallVec::new);
-            self.edges.loads.resize_with(new_len, SmallVec::new);
-            self.edges.stores.resize_with(new_len, SmallVec::new);
+            self.edges.resize(new_len);
             self.term_types.extend_from_slice(&template.types);
             self.parents.extend(
                 (0..num_instantiated).map(|i| (instantiated_start_index + i) as IntegerTerm),
             );
             self.p_old.resize_with(new_len, S::new);
+            self.is_return_or_parameter.resize(new_len, false);
+
+            for i in 0..(template.num_return_terms + template.num_parameter_terms) as usize {
+                self.is_return_or_parameter
+                    .set(instantiated_start_index + i, true);
+            }
+
+            for i in 0..num_instantiated as u32 {
+                let abstract_term = template.start_index + i;
+                let concrete_term = instantiated_start_index as IntegerTerm + i;
+                if self.abstract_points_to_queries[abstract_term as usize] {
+                    self.new_points_to_queries.push(concrete_term);
+                }
+                if self.abstract_pointed_by_queries[abstract_term as usize] {
+                    self.new_pointed_by_queries.push(concrete_term);
+                }
+            }
 
             let constraints = template.constraints.clone();
             for constraint in constraints {
@@ -449,8 +496,14 @@ where
     }
 
     fn add_constraint(&mut self, c: Constraint<IntegerTerm>, context: C::Context) {
-        let c = c.map_terms(|&t| get_representative(&mut self.parents, t));
-        self.edges.add_constraint(c, context);
+        let rep_c = c.map_terms(|&t| get_representative(&mut self.parents, t));
+        self.edges.add_constraint(rep_c, context);
+        match c {
+            Constraint::UnivCondSubsetLeft { .. } => self.p_cache_left.push(S::new()),
+            Constraint::UnivCondSubsetRight { .. } => self.p_cache_right.push(S::new()),
+            Constraint::CallDummy { .. } => self.p_cache_call_dummies.push(S::new()),
+            _ => {}
+        }
     }
 
     fn scc<F>(
@@ -460,7 +513,7 @@ where
         visit_handler: F,
     ) -> Vec<IntegerTerm>
     where
-        F: Fn(IntegerTerm, &mut SccVisitState<S, C>, &mut Vec<IntegerTerm>),
+        F: Fn(IntegerTerm, &mut SccVisitState<T, S, C>, &mut Vec<IntegerTerm>),
     {
         let node_count = self.term_count();
         let mut internal_state = SccInternalState {
@@ -477,8 +530,10 @@ where
         let mut visit_state = SccVisitState {
             edges: &self.edges,
             sols: &mut self.sols,
+            context_state: &self.context_state,
             points_to_queries: &mut self.points_to_queries,
             visited_pointed_by: &mut self.visited_pointed_by,
+            is_return_or_parameter: &self.is_return_or_parameter,
             new_points_to_queries: &mut self.new_points_to_queries,
             new_pointed_by_queries: &mut self.new_pointed_by_queries,
             parents: &mut self.parents,
@@ -605,7 +660,7 @@ where
 {
 }
 
-impl<T, S, C> Solver<ContextSensitiveInput<T, C>> for TidalPropagationSolver<S, C>
+impl<T, S, C> Solver<DemandContextSensitiveInput<T, C>> for TidalPropagationSolver<S, C>
 where
     T: Hash + Eq + Clone + Debug,
     S: TermSetTrait<Term = IntegerTerm> + Debug,
@@ -613,11 +668,11 @@ where
 {
     type Solution = TidalPropagationSolverState<T, S, C>;
 
-    fn solve(&self, input: ContextSensitiveInput<T, C>) -> Self::Solution {
-        let global = input.global.clone();
-        let entrypoints = input.entrypoints.clone();
+    fn solve(&self, input: DemandContextSensitiveInput<T, C>) -> Self::Solution {
+        let global = input.input.global.clone();
+        // let entrypoints = input.input.entrypoints.clone();
 
-        let (context_state, function_term_infos) = ContextState::from_context_input(input);
+        let (context_state, function_term_infos) = ContextState::from_context_input(input.input);
         let empty_context = context_state.context_selector.empty();
 
         let num_terms = context_state.num_concrete_terms();
@@ -638,6 +693,7 @@ where
             sols[function_term_info.pointer_node as usize].insert(fun_term);
         }
 
+        let num_abstract_terms = context_state.mapping.terms.len();
         let mut state = TidalPropagationSolverState {
             context_state,
             sols,
@@ -661,6 +717,9 @@ where
             points_to_queries: uniset::BitSet::new(),
             pointed_by_queries: S::new(),
             visited_pointed_by: uniset::BitSet::new(),
+            is_return_or_parameter: bitvec::bitvec![0; num_terms],
+            abstract_points_to_queries: bitvec::bitvec![0; num_abstract_terms],
+            abstract_pointed_by_queries: bitvec::bitvec![0; num_abstract_terms],
             new_points_to_queries: vec![],
             new_pointed_by_queries: vec![],
             new_incomming: vec![],
@@ -674,7 +733,33 @@ where
             );
         }
 
-        for entrypoint in entrypoints {
+        for demand in input.demands {
+            match demand {
+                Demand::PointsTo(term) => {
+                    let abstract_term = state.context_state.mapping.term_to_integer(&term);
+                    state
+                        .abstract_points_to_queries
+                        .set(abstract_term as usize, true);
+                    if let Some(term) = state.context_state.term_to_concrete_global(&term) {
+                        state.new_points_to_queries.push(term);
+                    }
+                }
+                Demand::PointedBy(term) => {
+                    let abstract_term = state.context_state.mapping.term_to_integer(&term);
+                    state
+                        .abstract_pointed_by_queries
+                        .set(abstract_term as usize, true);
+                    if let Some(term) = state.context_state.term_to_concrete_global(&term) {
+                        state.new_pointed_by_queries.push(term);
+                    }
+                }
+            }
+        }
+
+        // for entrypoint in entrypoints {
+        //     state.get_or_instantiate_function(entrypoint, empty_context.clone());
+        // }
+        for entrypoint in 0..state.context_state.templates.len() {
             state.get_or_instantiate_function(entrypoint, empty_context.clone());
         }
 
@@ -759,7 +844,6 @@ impl<C: ContextSelector> Edges<C> {
                     context,
                 });
                 self.loads[right as usize].push(cond_node);
-                // self.p_cache_left.push(S::new());
             }
             Constraint::UnivCondSubsetRight {
                 cond_node,
@@ -775,7 +859,6 @@ impl<C: ContextSelector> Edges<C> {
                     context,
                 });
                 self.stores[left as usize].push(cond_node);
-                // self.p_cache_right.push(S::new());
             }
             Constraint::CallDummy {
                 cond_node,
@@ -788,7 +871,6 @@ impl<C: ContextSelector> Edges<C> {
                     call_site,
                     context,
                 });
-                // self.p_cache_call_dummies.push(S::new());
             }
         };
     }
@@ -800,17 +882,26 @@ impl<C: ContextSelector> Edges<C> {
         }
         res
     }
+
+    fn resize(&mut self, size: usize) {
+        self.subset.resize_with(size, HashMap::new);
+        self.rev_subset.resize_with(size, HashSet::new);
+        self.addr_ofs.resize_with(size, SmallVec::new);
+        self.rev_addr_ofs.resize_with(size, SmallVec::new);
+        self.loads.resize_with(size, SmallVec::new);
+        self.stores.resize_with(size, SmallVec::new);
+    }
 }
 
-fn visit<'a, F, S, C>(
+fn visit<'a, F, T, S, C>(
     direction: SccDirection,
     internal: &mut SccInternalState,
-    visit_state: &mut SccVisitState<'a, S, C>,
+    visit_state: &mut SccVisitState<'a, T, S, C>,
     edges: &Edges<C>,
     visit_handler: &F,
     v: IntegerTerm,
 ) where
-    for<'b> F: Fn(IntegerTerm, &mut SccVisitState<'b, S, C>, &mut Vec<IntegerTerm>),
+    for<'b> F: Fn(IntegerTerm, &mut SccVisitState<'b, T, S, C>, &mut Vec<IntegerTerm>),
     C: ContextSelector,
 {
     visit_handler(v, visit_state, &mut internal.to_visit);
@@ -881,11 +972,13 @@ struct SccInternalState {
     top_order: Vec<IntegerTerm>,
 }
 
-struct SccVisitState<'a, S, C: ContextSelector> {
+struct SccVisitState<'a, T, S, C: ContextSelector> {
     edges: &'a Edges<C>,
     sols: &'a mut [S],
+    context_state: &'a ContextState<T, C>,
     points_to_queries: &'a mut uniset::BitSet,
     visited_pointed_by: &'a mut uniset::BitSet,
+    is_return_or_parameter: &'a BitVec,
     new_points_to_queries: &'a mut Vec<IntegerTerm>,
     new_pointed_by_queries: &'a mut Vec<IntegerTerm>,
     parents: &'a mut [IntegerTerm],

@@ -16,8 +16,8 @@ use crate::solver::{
     BasicDemandSolver, BasicHashSolver, BasicRoaringSolver, BasicSharedBitVecSolver,
     CallStringSelector, ContextInsensitiveSolver, ContextSelector, Demand,
     DemandContextSensitiveInput, HashContextWavePropagationSolver,
-    RoaringContextWavePropagationSolver, SharedBitVecContextWavePropagationSolver, Solver,
-    SolverExt,
+    RoaringContextWavePropagationSolver, SharedBitVecContextWavePropagationSolver,
+    SharedBitVecTidalPropagationSolver, Solver, SolverExt,
 };
 
 use super::Cell;
@@ -238,6 +238,17 @@ fn basic_demand(resource: &str) {
     run_test_template(
         resource,
         BasicDemandSolver::new(),
+        CallStringSelector::<2>::new(),
+        true,
+    )
+}
+
+#[test_resources("res/context_insensitive/**/test_config.json")]
+#[test_resources("res/context_sensitive/**/test_config.json")]
+fn tidal_prop(resource: &str) {
+    run_test_template(
+        resource,
+        SharedBitVecTidalPropagationSolver::new(),
         CallStringSelector::<2>::new(),
         true,
     )

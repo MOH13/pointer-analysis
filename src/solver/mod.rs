@@ -27,6 +27,9 @@ pub use context_wave_prop::{
     SharedBitVecContextWavePropagationSolver,
 };
 pub use stats::StatSolver;
+pub use tidal_prop::{
+    HashTidalPropagationSolver, RoaringTidalPropagationSolver, SharedBitVecTidalPropagationSolver,
+};
 
 use crate::visualizer::Node;
 
