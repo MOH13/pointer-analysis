@@ -109,7 +109,7 @@ pub struct CallStringSelector<const MAX: usize> {
 pub struct CallStringContext<const MAX: usize>(ArrayVec<CallSite, MAX>);
 
 impl<const MAX: usize> CallStringSelector<MAX> {
-    /// Construct a `CallStringSelector` with `call_string_length = 0`
+    /// Construct a `CallStringSelector` with `call_string_length = MAX`
     pub fn new() -> Self {
         Self::with_call_string_length(MAX)
     }

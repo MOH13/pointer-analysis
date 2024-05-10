@@ -324,6 +324,10 @@ impl TermSetTrait for SharedBitVec {
     fn union_assign(&mut self, other: &Self) {
         match (self, other) {
             (this @ SharedBitVec::Array(_), SharedBitVec::Array(other_terms)) => {
+                if other_terms.len() == 0 {
+                    return;
+                }
+
                 // TODO: Help us Polonius, you are our only hope
                 let self_terms = match this {
                     SharedBitVec::Array(terms) => terms,
@@ -519,13 +523,7 @@ impl TermSetTrait for SharedBitVec {
                                 other_idx += 1;
                             }
                         }
-                        (Some(&self_term), None) => {
-                            break;
-                        }
-                        (None, Some(&other_term)) => {
-                            break;
-                        }
-                        (None, None) => unreachable!(),
+                        _ => break,
                     }
                 }
 
@@ -540,10 +538,10 @@ impl TermSetTrait for SharedBitVec {
 
                 terms.retain(|term| other.contains(*term));
             }
-            (SharedBitVec::BitVec(inner), SharedBitVec::Array(terms)) => {
-                for &term in terms {
-                    inner.remove(term);
-                }
+            (this @ SharedBitVec::BitVec(_), SharedBitVec::Array(_)) => {
+                let mut new_array_vec = other.clone();
+                new_array_vec.intersection_assign(this);
+                *this = new_array_vec;
             }
             (SharedBitVec::BitVec(self_inner), SharedBitVec::BitVec(other_inner)) => {
                 let self_segments = &mut self_inner.segments;
@@ -571,9 +569,14 @@ impl TermSetTrait for SharedBitVec {
                     {
                         Ok(idx) => {
                             let new_chunk = *self_segment.chunk & *other_segments[idx].chunk;
-                            *Rc::make_mut(&mut self_segments[cur_write_idx].chunk) = new_chunk;
-                            self_inner.len += new_chunk.len;
-                            cur_write_idx += 1;
+                            if &new_chunk == self_segment.chunk.as_ref() {
+                                self_inner.len += new_chunk.len;
+                                cur_write_idx += 1;
+                            } else if new_chunk.len > 0 {
+                                *Rc::make_mut(&mut self_segments[cur_write_idx].chunk) = new_chunk;
+                                self_inner.len += new_chunk.len;
+                                cur_write_idx += 1;
+                            }
                             other_idx = idx;
                         }
                         Err(idx) => {

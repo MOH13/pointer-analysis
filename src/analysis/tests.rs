@@ -249,7 +249,7 @@ fn tidal_prop(resource: &str) {
     run_test_template(
         resource,
         SharedBitVecTidalPropagationSolver::new(),
-        CallStringSelector::<2>::new(),
+        CallStringSelector::<0>::new(),
         true,
     )
 }

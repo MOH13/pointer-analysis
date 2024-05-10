@@ -72,6 +72,8 @@ pub enum SolverMode {
     Justify,
     /// Demand-driven woklist based solver
     BasicDemand,
+    /// Tidal propagation based solver
+    Tidal,
 }
 
 impl Display for SolverMode {
@@ -82,6 +84,7 @@ impl Display for SolverMode {
             SolverMode::DryRun => write!(f, "dry-run"),
             SolverMode::Justify => write!(f, "justify"),
             SolverMode::BasicDemand => write!(f, "basic-demand"),
+            SolverMode::Tidal => write!(f, "tidal"),
         }
     }
 }

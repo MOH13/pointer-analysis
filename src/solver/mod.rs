@@ -235,6 +235,10 @@ pub trait TermSetTrait: Clone + Default + PartialEq {
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    fn overlaps(&self, other: &Self) -> bool {
+        self.iter().any(|t| other.contains(t))
+    }
 }
 
 impl<T: Eq + PartialEq + Hash + Clone> TermSetTrait for HashSet<T> {
@@ -420,6 +424,7 @@ pub trait SolverInput {
 
 pub type ContextInsensitiveInput<T> = ConstrainedTerms<T>;
 
+#[derive(Debug)]
 pub struct DemandInput<T, I> {
     pub input: I,
     pub demands: Vec<Demand<T>>,

@@ -6,7 +6,8 @@ use llvm_ir::Module;
 use pointer_analysis::analysis::{Cell, Config, PointsToAnalysis, PointsToResult, ResultTrait};
 use pointer_analysis::cli::{Args, CountMode, SolverMode, TermSet};
 use pointer_analysis::solver::{
-    BasicDemandSolver, BasicHashSolver, BasicRoaringSolver, StatSolver,
+    BasicDemandSolver, BasicHashSolver, BasicRoaringSolver, HashTidalPropagationSolver,
+    RoaringTidalPropagationSolver, SharedBitVecTidalPropagationSolver, StatSolver,
 };
 use pointer_analysis::solver::{
     BasicSharedBitVecSolver, CallStringSelector, ContextInsensitiveSolver, Demand,
@@ -62,8 +63,10 @@ where
 {
     result.filter_result(
         |c, set, cache| {
-            matches!(c, Cell::Stack(..) | Cell::Global(..))
-                && set.get().len() < 200
+            matches!(
+                c,
+                Cell::Stack(..) | Cell::Global(..) | Cell::Var(..) | Cell::Return(..)
+            ) && set.get().len() < 200
                 && (args.include_empty || !set.get().is_empty())
                 && (!args.exclude_strings || !cache.string_of(c).contains(STRING_FILTER))
         },
@@ -215,6 +218,15 @@ fn main() -> io::Result<()> {
             .as_dynamic_visualizable(),
         // with demands
         (SolverMode::BasicDemand, _) => BasicDemandSolver::new().as_dynamic_visualizable(),
+        (SolverMode::Tidal, TermSet::Hash) => {
+            HashTidalPropagationSolver::new().as_dynamic_visualizable()
+        }
+        (SolverMode::Tidal, TermSet::Roaring) => {
+            RoaringTidalPropagationSolver::new().as_dynamic_visualizable()
+        }
+        (SolverMode::Tidal, TermSet::SharedBitVec) => {
+            SharedBitVecTidalPropagationSolver::new().as_dynamic_visualizable()
+        }
         (SolverMode::Justify, _) => {
             let solver = JustificationSolver::<Cell>::new()
                 .as_context_sensitive()

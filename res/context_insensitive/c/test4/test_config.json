@@ -1,15 +1,9 @@
 {
-    "c_path": "test4.c",
-    "points_to": {
-        "stack-%x@main": [],
-        "stack-%p@main": [
-            "stack-%x@main"
-        ],
-        "stack-%q@main": [
-            "stack-%x@main"
-        ],
-        "stack-%p.addr@id": [
-            "stack-%x@main"
-        ]
-    }
+  "c_path": "test4.c",
+  "points_to": {
+    "stack-%x@main": [],
+    "stack-%p@main": ["stack-%x@main"],
+    "stack-%q@main": ["stack-%x@main"],
+    "stack-%param.addr@id": ["stack-%x@main"]
+  }
 }
