@@ -64,6 +64,7 @@ pub struct TidalPropagationSolverState<T, S, C: ContextSelector> {
     context_state: ContextState<T, C>,
     edges: Edges<C>,
     term_types: Vec<TermType>,
+    abstract_rev_offsets: Vec<SmallVec<[u32; 2]>>,
     parents: Vec<IntegerTerm>,
     points_to_queries: uniset::BitSet,
     pointed_by_queries: S,
@@ -95,6 +96,12 @@ where
         while changed {
             iters += 1;
             changed = self.points_to_propagation();
+
+            let mut new_pbs = HashSet::new();
+            for &i in self.new_pointed_by_queries.iter() {
+                new_pbs.insert(self.context_state.concrete_to_input(i));
+            }
+
             changed |= self.pointed_by_propagation();
             changed |= self.add_edges_after_wave_prop();
 
@@ -109,10 +116,6 @@ where
             let mut pbs = HashSet::new();
             for i in self.pointed_by_queries.iter() {
                 pbs.insert(self.context_state.concrete_to_input(i));
-            }
-            let mut new_pbs = HashSet::new();
-            for &i in self.new_pointed_by_queries.iter() {
-                new_pbs.insert(self.context_state.concrete_to_input(i));
             }
             let edges = self.edges.subset.iter().enumerate().flat_map(|(f, e)| {
                 let ctx = &self.context_state;
@@ -196,10 +199,6 @@ where
                 }
             },
         );
-        dbg!(top_order
-            .iter()
-            .map(|t| self.context_state.concrete_to_input(*t))
-            .collect::<Vec<_>>());
 
         for &v in top_order.iter() {
             // Skip if no new terms in solution set
@@ -237,6 +236,16 @@ where
 
         let mut starting_nodes = vec![];
 
+        for &q in &self.new_pointed_by_queries.clone() {
+            for q2 in offsetable_terms(
+                q,
+                &self.context_state.abstract_indices,
+                &self.abstract_rev_offsets,
+            ) {
+                self.new_pointed_by_queries.push(q2);
+            }
+        }
+
         for &q in &self.new_pointed_by_queries {
             for &t in &self.edges.addr_ofs[q as usize] {
                 // TODO: deduplicate?
@@ -260,6 +269,18 @@ where
                 }
                 state.visited_pointed_by.set(v as usize);
                 state.new_pointed_by_queries.push(v);
+
+                for q in offsetable_terms(
+                    v,
+                    &state.context_state.abstract_indices,
+                    state.abstract_rev_offsets,
+                ) {
+                    // TODO: deduplicate?
+                    state.new_pointed_by_queries.push(q);
+                    for &t in &state.edges.addr_ofs[q as usize] {
+                        to_visit.push(get_representative(&mut state.parents, t));
+                    }
+                }
 
                 for &w in &state.edges.addr_ofs[v as usize] {
                     let w = get_representative(state.parents, w);
@@ -287,6 +308,10 @@ where
                 }
             },
         );
+        dbg!(top_order
+            .iter()
+            .map(|t| self.context_state.concrete_to_input(*t))
+            .collect::<Vec<_>>());
 
         for &v in &self.new_pointed_by_queries {
             new_pointed_by_queries_term_set.insert(v);
@@ -314,13 +339,24 @@ where
 
             for (&w, offsets) in &self.edges.subset[v as usize] {
                 for o in offsets.iter() {
-                    propagate_terms_into(
-                        &p_dif,
-                        p_dif_vec.iter().copied(),
-                        o,
-                        &mut self.sols[w as usize],
-                        &self.term_types,
-                    );
+                    if o == 0 {
+                        self.sols[w as usize].union_assign(&p_dif);
+                    } else {
+                        let to_add = p_dif_vec.iter().filter_map(|&t| {
+                            if let TermType::Struct(allowed) = self.term_types[t as usize] {
+                                (o <= allowed).then(|| t + o as IntegerTerm)
+                            } else {
+                                None
+                            }
+                        });
+                        for t in to_add {
+                            if self.pointed_by_queries.contains(t) {
+                                self.sols[w as usize].insert(t);
+                            } else {
+                                self.edges.addr_ofs[t as usize].push(w);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -587,11 +623,12 @@ where
         };
 
         let mut visit_state = SccVisitState {
-            edges: &self.edges,
             sols: &mut self.sols,
             term_types: &self.term_types,
+            abstract_rev_offsets: &self.abstract_rev_offsets,
             p_old_points_to: &mut self.p_old_points_to,
             context_state: &self.context_state,
+            edges: &self.edges,
             points_to_queries: &mut self.points_to_queries,
             visited_pointed_by: &mut self.visited_pointed_by,
             is_return_or_parameter: &self.is_return_or_parameter,
@@ -703,6 +740,18 @@ where
     }
 }
 
+fn offsetable_terms(
+    term: IntegerTerm,
+    abstract_indices: &[IntegerTerm],
+    abstract_rev_offsets: &[SmallVec<[u32; 2]>],
+) -> impl Iterator<Item = IntegerTerm> {
+    let abstract_term = abstract_indices[term as usize];
+    abstract_rev_offsets[abstract_term as usize]
+        .clone()
+        .into_iter()
+        .map(move |o| term - o)
+}
+
 fn propagate_terms_into<S: TermSetTrait<Term = IntegerTerm>>(
     term_set: &S,
     term_set_iter: impl IntoIterator<Item = IntegerTerm>,
@@ -747,44 +796,69 @@ where
         let empty_context = context_state.context_selector.empty();
 
         let num_terms = context_state.num_concrete_terms();
+        let num_abstract = context_state.mapping.terms.len();
 
-        let mut sols = vec![S::new(); num_terms];
-        let subset: Vec<HashMap<IntegerTerm, Offsets>> = vec![HashMap::new(); num_terms];
-        let rev_subset = vec![HashSet::new(); num_terms];
+        let mut edges = Edges {
+            addr_ofs: vec![SmallVec::new(); num_terms],
+            rev_addr_ofs: vec![SmallVec::new(); num_terms],
+            subset: vec![HashMap::new(); num_terms],
+            rev_subset: vec![HashSet::new(); num_terms],
+            left_conds: vec![],
+            right_conds: vec![],
+            call_dummies: vec![],
+            loads: vec![SmallVec::new(); num_terms],
+            stores: vec![SmallVec::new(); num_terms],
+        };
 
-        let mut term_types = vec![TermType::Basic; sols.len()];
-        for (t, tt) in &global.term_types {
-            let abstract_term = context_state.mapping.term_to_integer(t);
-            term_types[abstract_term as usize] = *tt;
+        let mut term_types = vec![TermType::Basic; num_terms];
+        let mut abstract_rev_offsets = vec![SmallVec::new(); num_abstract];
+
+        let global_term_types_iter = global
+            .term_types
+            .iter()
+            .map(|(t, tt)| (context_state.mapping.term_to_integer(t), *tt));
+        let template_term_types_iter = context_state.templates.iter().flat_map(|t| {
+            t.types
+                .iter()
+                .enumerate()
+                .map(|(i, tt)| (t.start_index + i as u32, *tt))
+        });
+        for (from, tt) in global_term_types_iter.clone() {
+            term_types[from as usize] = tt;
+        }
+        for (from, tt) in global_term_types_iter.chain(template_term_types_iter) {
+            if let TermType::Struct(max_offset) = tt {
+                for offset in 1..=max_offset as u32 {
+                    let to = from + offset;
+                    abstract_rev_offsets[to as usize].push(offset);
+                }
+            }
         }
 
         for (i, function_term_info) in function_term_infos.into_iter().enumerate() {
             let fun_term = (global.terms.len() + i) as IntegerTerm;
             term_types[fun_term as usize] = function_term_info.term_type;
-            sols[function_term_info.pointer_node as usize].insert(fun_term);
+            edges.add_constraint(
+                Constraint::Inclusion {
+                    term: fun_term,
+                    node: function_term_info.pointer_node,
+                },
+                empty_context.clone(),
+            );
         }
 
         let num_abstract_terms = context_state.mapping.terms.len();
         let mut state = TidalPropagationSolverState {
+            edges,
             context_state,
-            sols,
+            sols: vec![S::new(); num_terms],
             p_old_points_to: vec![S::new(); num_terms],
             p_old_pointed_by: vec![S::new(); num_terms],
             p_cache_left: vec![],
             p_cache_right: vec![],
             p_cache_call_dummies: vec![],
-            edges: Edges {
-                addr_ofs: vec![SmallVec::new(); num_terms],
-                rev_addr_ofs: vec![SmallVec::new(); num_terms],
-                subset,
-                rev_subset,
-                left_conds: vec![],
-                right_conds: vec![],
-                call_dummies: vec![],
-                loads: vec![SmallVec::new(); num_terms],
-                stores: vec![SmallVec::new(); num_terms],
-            },
             term_types,
+            abstract_rev_offsets,
             parents: Vec::from_iter(0..num_terms as IntegerTerm),
             points_to_queries: uniset::BitSet::new(),
             pointed_by_queries: S::new(),
@@ -975,6 +1049,9 @@ fn visit<'a, F, T, S, C>(
     for<'b> F: Fn(IntegerTerm, &mut SccVisitState<'b, T, S, C>, &mut Vec<IntegerTerm>),
     C: ContextSelector,
 {
+    if internal.d[v as usize] != 0 {
+        return;
+    }
     visit_handler(v, visit_state, &mut internal.to_visit);
 
     internal.iteration += 1;
@@ -992,6 +1069,8 @@ fn visit<'a, F, T, S, C>(
 
     for (&w, offsets) in edges_iter {
         if !offsets.contains(0) {
+            debug_assert!(offsets.has_non_zero());
+            internal.to_visit.push(w);
             continue;
         }
 
@@ -1044,11 +1123,12 @@ struct SccInternalState {
 }
 
 struct SccVisitState<'a, T, S, C: ContextSelector> {
-    edges: &'a Edges<C>,
     sols: &'a mut [S],
     term_types: &'a [TermType],
+    abstract_rev_offsets: &'a [SmallVec<[u32; 2]>],
     p_old_points_to: &'a [S],
     context_state: &'a ContextState<T, C>,
+    edges: &'a Edges<C>,
     points_to_queries: &'a mut uniset::BitSet,
     visited_pointed_by: &'a mut uniset::BitSet,
     is_return_or_parameter: &'a BitVec,

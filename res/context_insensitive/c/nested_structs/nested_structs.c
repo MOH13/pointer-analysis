@@ -2,16 +2,30 @@
 
 typedef struct
 {
-    int *f;
-    int *g;
+    int *field;
 } simple;
+
+typedef struct
+{
+    struct
+    {
+        int f11;
+        int f12;
+    } f1;
+    struct
+    {
+        int *f21;
+        simple f22;
+    } f2[10];
+} nested;
 
 int main()
 {
-    int a = 0;
-    int b = 0;
-    int c = 0;
-    int d = 0;
+    int x = 0;
+    nested a;
+    a.f2[7].f21 = &x;
 
-    simple x[] = {{.f = &a, .g = &b}, {.f = &c, .g = &d}};
+    nested *ap = &a;
+    ap->f2[7].f22.field = ap->f2[7].f21;
+    int *q = ap->f2[7].f22.field;
 }

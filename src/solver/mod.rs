@@ -897,4 +897,8 @@ impl Offsets {
             .into_iter()
             .chain(self.offsets.iter().copied())
     }
+
+    pub fn has_non_zero(&self) -> bool {
+        self.offsets.len() > 0
+    }
 }
