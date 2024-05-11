@@ -561,30 +561,38 @@ impl TermSetTrait for SharedBitVec {
                 let mut other_idx = 0;
                 let mut cur_write_idx = 0;
 
+                let mut new_len = 0;
+
                 for self_idx in start_index..self_segments.len() {
+                    if other_idx == other_segments.len() {
+                        break;
+                    }
                     let self_segment = &self_segments[self_idx];
-                    self_inner.len -= self_segment.chunk.len;
                     match other_segments[other_idx..]
                         .binary_search_by_key(&self_segment.start_index, |s| s.start_index)
                     {
                         Ok(idx) => {
-                            let new_chunk = *self_segment.chunk & *other_segments[idx].chunk;
+                            other_idx += idx;
+                            let new_chunk = *self_segment.chunk & *other_segments[other_idx].chunk;
                             if &new_chunk == self_segment.chunk.as_ref() {
-                                self_inner.len += new_chunk.len;
+                                self_segments[cur_write_idx] = self_segment.clone();
+                                new_len += new_chunk.len;
                                 cur_write_idx += 1;
                             } else if new_chunk.len > 0 {
+                                let start_index = self_segment.start_index;
                                 *Rc::make_mut(&mut self_segments[cur_write_idx].chunk) = new_chunk;
-                                self_inner.len += new_chunk.len;
+                                self_segments[cur_write_idx].start_index = start_index;
+                                new_len += new_chunk.len;
                                 cur_write_idx += 1;
                             }
-                            other_idx = idx;
                         }
                         Err(idx) => {
-                            other_idx = idx;
+                            other_idx += idx;
                         }
                     }
                 }
                 self_segments.truncate(cur_write_idx);
+                self_inner.len = new_len;
             }
         }
     }
@@ -821,5 +829,81 @@ mod tests {
                 .windows(2)
                 .all(|w| w[0].start_index < w[1].start_index),
         }
+    }
+
+    #[quickcheck]
+    fn test_union_assign_len(t1: Vec<Term>, t2: Vec<Term>) -> bool {
+        let mut bitvec1 = SharedBitVec::new();
+        let mut bitvec2 = SharedBitVec::new();
+        for term in &t1 {
+            bitvec1.insert(*term);
+        }
+        for term in &t2 {
+            bitvec2.insert(*term);
+        }
+        bitvec1.union_assign(&bitvec2);
+        bitvec1.len() == bitvec1.iter().count()
+    }
+
+    #[quickcheck]
+    fn test_intersection_assign(t1: Vec<Term>, t2: Vec<Term>) -> bool {
+        let mut bitvec1 = SharedBitVec::new();
+        let mut bitvec2 = SharedBitVec::new();
+        for term in &t1 {
+            bitvec1.insert(*term);
+        }
+        for term in &t2 {
+            bitvec2.insert(*term);
+        }
+        let mut intersection = bitvec1.clone();
+        intersection.intersection_assign(&bitvec2);
+        let mut res = true;
+        for t in bitvec1.iter() {
+            if bitvec2.contains(t) && !intersection.contains(t) {
+                res = false;
+                break;
+            }
+        }
+        for t in bitvec2.iter() {
+            if bitvec1.contains(t) && !intersection.contains(t) {
+                res = false;
+                break;
+            }
+        }
+        if !res {
+            println!(
+                "intersection: {:?}",
+                intersection.iter().collect::<Vec<_>>()
+            );
+        }
+        res
+    }
+
+    #[quickcheck]
+    fn test_intersection_assign_len(t1: Vec<Term>, t2: Vec<Term>) -> bool {
+        let mut bitvec1 = SharedBitVec::new();
+        let mut bitvec2 = SharedBitVec::new();
+        for term in &t1 {
+            bitvec1.insert(*term);
+        }
+        for term in &t2 {
+            bitvec2.insert(*term);
+        }
+        bitvec1.intersection_assign(&bitvec2);
+        bitvec1.len() == bitvec1.iter().count()
+    }
+
+    #[quickcheck]
+    fn test_difference_len(t1: Vec<Term>, t2: Vec<Term>) -> bool {
+        let mut bitvec1 = SharedBitVec::new();
+        let mut bitvec2 = SharedBitVec::new();
+        for term in &t1 {
+            bitvec1.insert(*term);
+        }
+        for term in &t2 {
+            bitvec2.insert(*term);
+        }
+        let res = bitvec1.difference(&bitvec2);
+        res.len() == res.iter().count()
     }
 }

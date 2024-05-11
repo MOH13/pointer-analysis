@@ -96,45 +96,8 @@ where
         while changed {
             iters += 1;
             changed = self.points_to_propagation();
-
-            // let mut new_pbs = HashSet::new();
-            // for &i in self.new_pointed_by_queries.iter() {
-            //     new_pbs.insert(self.context_state.concrete_to_input(i));
-            // }
-
             changed |= self.pointed_by_propagation();
             changed |= self.add_edges_after_wave_prop();
-
-            // let mut pts = HashSet::new();
-            // for i in self.points_to_queries.iter() {
-            //     pts.insert(self.context_state.concrete_to_input(i as IntegerTerm));
-            // }
-            // let mut new_pts = HashSet::new();
-            // for &i in self.new_points_to_queries.iter() {
-            //     new_pts.insert(self.context_state.concrete_to_input(i as IntegerTerm));
-            // }
-            // let mut pbs = HashSet::new();
-            // for i in self.pointed_by_queries.iter() {
-            //     pbs.insert(self.context_state.concrete_to_input(i));
-            // }
-            // let edges = self.edges.subset.iter().enumerate().flat_map(|(f, e)| {
-            //     let ctx = &self.context_state;
-            //     e.iter().flat_map(move |(t, o)| {
-            //         o.iter().map(move |o| {
-            //             (
-            //                 ctx.concrete_to_input(f as u32),
-            //                 o,
-            //                 ctx.concrete_to_input(*t),
-            //             )
-            //         })
-            //     })
-            // });
-
-            // println!("Points-to queries: {:?}", pts);
-            // println!("New points-to queries: {:?}", new_pts);
-            // println!("Pointed-by queries: {:?}", pbs);
-            // println!("New pointed-by queries: {:?}", new_pbs);
-            // println!("Edges: {:?}", edges.collect::<Vec<_>>());
 
             println!("Iteration {iters}");
         }
@@ -310,10 +273,6 @@ where
                 }
             },
         );
-        // dbg!(top_order
-        //     .iter()
-        //     .map(|t| self.context_state.concrete_to_input(*t))
-        //     .collect::<Vec<_>>());
 
         for &v in &self.new_pointed_by_queries {
             new_pointed_by_queries_term_set.insert(v);
@@ -509,12 +468,8 @@ where
                     .context_state
                     .function_term_functions
                     .get(&term)
-                    .unwrap_or_else(|| {
-                        let input_term = self.context_state.concrete_to_input(term);
-                        dbg!(term - self.context_state.templates[0].start_index);
-                        dbg!(self.context_state.templates.len());
-                        panic!("function term {input_term:?} should have a function")
-                    }) as usize;
+                    .expect("function term should have a function")
+                    as usize;
                 let function_term = self.get_or_instantiate_function(f_index, new_context);
                 (offset <= allowed).then(|| function_term + offset as IntegerTerm)
             }
@@ -652,13 +607,7 @@ where
 
         while let Some(v) = internal_state.to_visit.pop() {
             if internal_state.d[v as usize] == 0 {
-                visit(
-                    &mut internal_state,
-                    &mut visit_state,
-                    &self.edges,
-                    &visit_handler,
-                    v,
-                );
+                visit(&mut internal_state, &mut visit_state, &visit_handler, v);
             }
         }
 
@@ -1053,7 +1002,6 @@ impl<C: ContextSelector> Edges<C> {
 fn visit<'a, F, T, S, C>(
     internal: &mut SccInternalState,
     visit_state: &mut SccVisitState<'a, T, S, C>,
-    edges: &Edges<C>,
     visit_handler: &F,
     v: IntegerTerm,
 ) where
@@ -1070,11 +1018,11 @@ fn visit<'a, F, T, S, C>(
     internal.r[v as usize] = Some(v);
 
     let edges_iter = match internal.direction {
-        SccDirection::Forward => Either::Left(edges.subset[v as usize].iter()),
+        SccDirection::Forward => Either::Left(visit_state.edges.subset[v as usize].iter()),
         SccDirection::Backward => Either::Right(
-            edges.rev_subset[v as usize]
+            visit_state.edges.rev_subset[v as usize]
                 .iter()
-                .map(|w| (w, edges.subset[*w as usize].get(&v).unwrap())),
+                .map(|w| (w, visit_state.edges.subset[*w as usize].get(&v).unwrap())),
         ),
     };
 
@@ -1088,7 +1036,7 @@ fn visit<'a, F, T, S, C>(
         }
 
         if internal.d[w as usize] == 0 {
-            visit(internal, visit_state, edges, visit_handler, w);
+            visit(internal, visit_state, visit_handler, w);
         }
         if !internal.c[w as usize] {
             let r_v = internal.r[v as usize].unwrap();
