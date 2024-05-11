@@ -97,44 +97,44 @@ where
             iters += 1;
             changed = self.points_to_propagation();
 
-            let mut new_pbs = HashSet::new();
-            for &i in self.new_pointed_by_queries.iter() {
-                new_pbs.insert(self.context_state.concrete_to_input(i));
-            }
+            // let mut new_pbs = HashSet::new();
+            // for &i in self.new_pointed_by_queries.iter() {
+            //     new_pbs.insert(self.context_state.concrete_to_input(i));
+            // }
 
             changed |= self.pointed_by_propagation();
             changed |= self.add_edges_after_wave_prop();
 
-            let mut pts = HashSet::new();
-            for i in self.points_to_queries.iter() {
-                pts.insert(self.context_state.concrete_to_input(i as IntegerTerm));
-            }
-            let mut new_pts = HashSet::new();
-            for &i in self.new_points_to_queries.iter() {
-                new_pts.insert(self.context_state.concrete_to_input(i as IntegerTerm));
-            }
-            let mut pbs = HashSet::new();
-            for i in self.pointed_by_queries.iter() {
-                pbs.insert(self.context_state.concrete_to_input(i));
-            }
-            let edges = self.edges.subset.iter().enumerate().flat_map(|(f, e)| {
-                let ctx = &self.context_state;
-                e.iter().flat_map(move |(t, o)| {
-                    o.iter().map(move |o| {
-                        (
-                            ctx.concrete_to_input(f as u32),
-                            o,
-                            ctx.concrete_to_input(*t),
-                        )
-                    })
-                })
-            });
+            // let mut pts = HashSet::new();
+            // for i in self.points_to_queries.iter() {
+            //     pts.insert(self.context_state.concrete_to_input(i as IntegerTerm));
+            // }
+            // let mut new_pts = HashSet::new();
+            // for &i in self.new_points_to_queries.iter() {
+            //     new_pts.insert(self.context_state.concrete_to_input(i as IntegerTerm));
+            // }
+            // let mut pbs = HashSet::new();
+            // for i in self.pointed_by_queries.iter() {
+            //     pbs.insert(self.context_state.concrete_to_input(i));
+            // }
+            // let edges = self.edges.subset.iter().enumerate().flat_map(|(f, e)| {
+            //     let ctx = &self.context_state;
+            //     e.iter().flat_map(move |(t, o)| {
+            //         o.iter().map(move |o| {
+            //             (
+            //                 ctx.concrete_to_input(f as u32),
+            //                 o,
+            //                 ctx.concrete_to_input(*t),
+            //             )
+            //         })
+            //     })
+            // });
 
-            println!("Points-to queries: {:?}", pts);
-            println!("New points-to queries: {:?}", new_pts);
-            println!("Pointed-by queries: {:?}", pbs);
-            println!("New pointed-by queries: {:?}", new_pbs);
-            println!("Edges: {:?}", edges.collect::<Vec<_>>());
+            // println!("Points-to queries: {:?}", pts);
+            // println!("New points-to queries: {:?}", new_pts);
+            // println!("Pointed-by queries: {:?}", pbs);
+            // println!("New pointed-by queries: {:?}", new_pbs);
+            // println!("Edges: {:?}", edges.collect::<Vec<_>>());
 
             println!("Iteration {iters}");
         }
@@ -146,6 +146,7 @@ where
         let mut changed = false;
         let top_order = self.scc(
             SccDirection::Backward,
+            true,
             self.points_to_queries
                 .iter()
                 .map(|t| t as IntegerTerm)
@@ -262,6 +263,7 @@ where
 
         let top_order = self.scc(
             SccDirection::Forward,
+            false,
             starting_nodes,
             |v, state, to_visit| {
                 if state.visited_pointed_by.test(v as usize) {
@@ -308,10 +310,10 @@ where
                 }
             },
         );
-        dbg!(top_order
-            .iter()
-            .map(|t| self.context_state.concrete_to_input(*t))
-            .collect::<Vec<_>>());
+        // dbg!(top_order
+        //     .iter()
+        //     .map(|t| self.context_state.concrete_to_input(*t))
+        //     .collect::<Vec<_>>());
 
         for &v in &self.new_pointed_by_queries {
             new_pointed_by_queries_term_set.insert(v);
@@ -338,6 +340,7 @@ where
             self.p_old_pointed_by[v as usize] = pointed_by_sols;
 
             for (&w, offsets) in &self.edges.subset[v as usize] {
+                let mut should_set_new_incoming = false;
                 for o in offsets.iter() {
                     if o == 0 {
                         self.sols[w as usize].union_assign(&p_dif);
@@ -351,12 +354,15 @@ where
                         });
                         for t in to_add {
                             if self.pointed_by_queries.contains(t) {
-                                self.sols[w as usize].insert(t);
+                                should_set_new_incoming |= self.sols[w as usize].insert(t);
                             } else {
                                 self.edges.addr_ofs[t as usize].push(w);
                             }
                         }
                     }
+                }
+                if should_set_new_incoming {
+                    self.new_incoming.push(w);
                 }
             }
         }
@@ -503,8 +509,12 @@ where
                     .context_state
                     .function_term_functions
                     .get(&term)
-                    .expect("function term should have a function")
-                    as usize;
+                    .unwrap_or_else(|| {
+                        let input_term = self.context_state.concrete_to_input(term);
+                        dbg!(term - self.context_state.templates[0].start_index);
+                        dbg!(self.context_state.templates.len());
+                        panic!("function term {input_term:?} should have a function")
+                    }) as usize;
                 let function_term = self.get_or_instantiate_function(f_index, new_context);
                 (offset <= allowed).then(|| function_term + offset as IntegerTerm)
             }
@@ -604,6 +614,7 @@ where
     fn scc<F>(
         &mut self,
         direction: SccDirection,
+        visit_weighted: bool,
         initial_nodes: Vec<IntegerTerm>,
         visit_handler: F,
     ) -> Vec<IntegerTerm>
@@ -612,6 +623,8 @@ where
     {
         let node_count = self.term_count();
         let mut internal_state = SccInternalState {
+            direction,
+            visit_weighted,
             node_count,
             iteration: 0,
             d: vec![0; node_count],
@@ -640,7 +653,6 @@ where
         while let Some(v) = internal_state.to_visit.pop() {
             if internal_state.d[v as usize] == 0 {
                 visit(
-                    direction,
                     &mut internal_state,
                     &mut visit_state,
                     &self.edges,
@@ -1039,7 +1051,6 @@ impl<C: ContextSelector> Edges<C> {
 }
 
 fn visit<'a, F, T, S, C>(
-    direction: SccDirection,
     internal: &mut SccInternalState,
     visit_state: &mut SccVisitState<'a, T, S, C>,
     edges: &Edges<C>,
@@ -1058,7 +1069,7 @@ fn visit<'a, F, T, S, C>(
     internal.d[v as usize] = internal.iteration;
     internal.r[v as usize] = Some(v);
 
-    let edges_iter = match direction {
+    let edges_iter = match internal.direction {
         SccDirection::Forward => Either::Left(edges.subset[v as usize].iter()),
         SccDirection::Backward => Either::Right(
             edges.rev_subset[v as usize]
@@ -1070,12 +1081,14 @@ fn visit<'a, F, T, S, C>(
     for (&w, offsets) in edges_iter {
         if !offsets.contains(0) {
             debug_assert!(offsets.has_non_zero());
-            internal.to_visit.push(w);
+            if internal.visit_weighted {
+                internal.to_visit.push(w);
+            }
             continue;
         }
 
         if internal.d[w as usize] == 0 {
-            visit(direction, internal, visit_state, edges, visit_handler, w);
+            visit(internal, visit_state, edges, visit_handler, w);
         }
         if !internal.c[w as usize] {
             let r_v = internal.r[v as usize].unwrap();
@@ -1111,6 +1124,8 @@ enum SccDirection {
 }
 
 struct SccInternalState {
+    direction: SccDirection,
+    visit_weighted: bool,
     node_count: usize,
     iteration: usize,
     /// 0 means not visited.
