@@ -387,10 +387,8 @@ where
                         if self.points_to_queries.test(right as usize) {
                             self.sols[right as usize]
                                 .union_assign(&self.p_old_points_to[t as usize]);
-                        } else {
-                            self.sols[right as usize]
-                                .union_assign(&self.p_old_pointed_by[t as usize]);
                         }
+                        self.sols[right as usize].union_assign(&self.p_old_pointed_by[t as usize]);
                         self.edges.rev_subset[right as usize].insert(t);
                         self.new_incoming.push(right);
                         changed = true;
@@ -430,10 +428,8 @@ where
                         if self.points_to_queries.test(t as usize) {
                             self.sols[t as usize]
                                 .union_assign(&self.p_old_points_to[left as usize]);
-                        } else {
-                            self.sols[t as usize]
-                                .union_assign(&self.p_old_pointed_by[left as usize]);
                         }
+                        self.sols[t as usize].union_assign(&self.p_old_pointed_by[left as usize]);
                         self.edges.rev_subset[t as usize].insert(left);
                         self.new_incoming.push(t);
                         changed = true;
@@ -688,8 +684,8 @@ where
             self.edges.rev_subset[parent as usize].insert(parent as IntegerTerm);
         }
 
-        let child_addr_ofs = mem::take(&mut self.edges.addr_ofs[child as usize]);
-        self.edges.rev_addr_ofs[parent as usize].extend_from_slice(child_addr_ofs.as_slice());
+        let child_rev_addr_ofs = mem::take(&mut self.edges.rev_addr_ofs[child as usize]);
+        self.edges.rev_addr_ofs[parent as usize].extend_from_slice(child_rev_addr_ofs.as_slice());
         let child_loads = mem::take(&mut self.edges.loads[child as usize]);
         self.edges.loads[parent as usize].extend_from_slice(child_loads.as_slice());
         let child_stores = mem::take(&mut self.edges.stores[child as usize]);

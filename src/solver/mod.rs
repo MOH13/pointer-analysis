@@ -424,7 +424,7 @@ pub trait SolverInput {
 
 pub type ContextInsensitiveInput<T> = ConstrainedTerms<T>;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct DemandInput<T, I> {
     pub input: I,
     pub demands: Vec<Demand<T>>,

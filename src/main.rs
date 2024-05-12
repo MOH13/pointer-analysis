@@ -42,6 +42,10 @@ where
         .iter_solutions()
         .map(|(_, mut set)| set.get().len())
         .collect();
+    if counts.is_empty() {
+        println!("No metrics possible: empty result set");
+        return;
+    }
     let num_cells = counts.len();
     let total = counts.iter().sum::<usize>();
     let max = counts.iter().copied().max().unwrap_or(0);
@@ -63,10 +67,7 @@ where
 {
     result.filter_result(
         |c, set, cache| {
-            matches!(
-                c,
-                Cell::Stack(..) | Cell::Global(..) | Cell::Var(..) | Cell::Return(..)
-            ) && set.get().len() < 200
+            matches!(c, Cell::Stack(..) | Cell::Global(..))
                 && (args.include_empty || !set.get().is_empty())
                 && (!args.exclude_strings || !cache.string_of(c).contains(STRING_FILTER))
         },

@@ -12,7 +12,7 @@ use super::{
     TermType,
 };
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct FunctionInput<T> {
     pub fun_name: Rc<str>,
     pub return_terms: Vec<T>,
@@ -20,7 +20,7 @@ pub struct FunctionInput<T> {
     pub constrained_terms: ConstrainedTerms<T>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ContextSensitiveInput<T, C> {
     pub global: ConstrainedTerms<T>,
     pub functions: Vec<FunctionInput<T>>,
