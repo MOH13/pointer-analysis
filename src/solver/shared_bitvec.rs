@@ -4,6 +4,7 @@ use std::rc::Rc;
 
 use arrayvec::ArrayVec;
 use either::Either;
+use sdset::exponential_search_by_key;
 use smallvec::SmallVec;
 use tinybitset::TinyBitSet;
 
@@ -404,9 +405,11 @@ impl TermSetTrait for SharedBitVec {
                     return;
                 }
 
-                let start_index = match self_segments
-                    .binary_search_by_key(&other_segments[0].start_index, |s| s.start_index)
-                {
+                let start_index = match exponential_search_by_key(
+                    &self_segments,
+                    &other_segments[0].start_index,
+                    |s| s.start_index,
+                ) {
                     Ok(i) => i,
                     Err(i) => i,
                 };
@@ -568,12 +571,15 @@ impl TermSetTrait for SharedBitVec {
                         break;
                     }
                     let self_segment = &self_segments[self_idx];
-                    match other_segments[other_idx..]
-                        .binary_search_by_key(&self_segment.start_index, |s| s.start_index)
-                    {
+                    match exponential_search_by_key(
+                        &other_segments[other_idx..],
+                        &self_segment.start_index,
+                        |s| s.start_index,
+                    ) {
                         Ok(idx) => {
-                            other_idx += idx;
-                            let new_chunk = *self_segment.chunk & *other_segments[other_idx].chunk;
+                            other_idx += idx + 1;
+                            let new_chunk =
+                                *self_segment.chunk & *other_segments[other_idx - 1].chunk;
                             if &new_chunk == self_segment.chunk.as_ref() {
                                 self_segments[cur_write_idx] = self_segment.clone();
                                 new_len += new_chunk.len;
@@ -699,9 +705,11 @@ impl TermSetTrait for SharedBitVec {
                 let mut self_iter = self_inner.segments.iter();
                 let mut other_idx = 0;
                 while let Some(segment) = self_iter.next() {
-                    match other_segments[other_idx..]
-                        .binary_search_by_key(&segment.start_index, |s| s.start_index)
-                    {
+                    match exponential_search_by_key(
+                        &other_segments[other_idx..],
+                        &segment.start_index,
+                        |s| s.start_index,
+                    ) {
                         Ok(i) => {
                             other_idx += i + 1;
                             let other_segment = &other_segments[other_idx - 1];
@@ -746,6 +754,7 @@ impl TermSetTrait for SharedBitVec {
         }
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -54,6 +54,41 @@ impl<S, C> TidalPropagationSolver<S, C> {
     }
 }
 
+struct PointedByQueries<S> {
+    bitset: BitVec,
+    termset: S,
+}
+
+impl<S: TermSetTrait<Term = IntegerTerm>> PointedByQueries<S> {
+    fn new(len: usize) -> Self {
+        Self {
+            bitset: BitVec::repeat(false, len),
+            termset: S::new(),
+        }
+    }
+
+    fn resize(&mut self, new_len: usize) {
+        self.bitset.resize(new_len, false);
+    }
+
+    fn insert(&mut self, term: IntegerTerm) -> bool {
+        if !self.contains(term) {
+            self.bitset.set(term as usize, true);
+            self.termset.insert(term);
+            return true;
+        }
+        false
+    }
+
+    fn contains(&self, term: IntegerTerm) -> bool {
+        self.bitset[term as usize]
+    }
+
+    fn get_termset(&self) -> &S {
+        &self.termset
+    }
+}
+
 pub struct TidalPropagationSolverState<T, S, C: ContextSelector> {
     sols: Vec<S>,
     p_old_points_to: Vec<S>,
@@ -67,7 +102,7 @@ pub struct TidalPropagationSolverState<T, S, C: ContextSelector> {
     abstract_rev_offsets: Vec<SmallVec<[u32; 2]>>,
     parents: Vec<IntegerTerm>,
     points_to_queries: uniset::BitSet,
-    pointed_by_queries: S,
+    pointed_by_queries: PointedByQueries<S>,
     visited_pointed_by: uniset::BitSet,
     is_return_or_parameter: BitVec,
     abstract_points_to_queries: BitVec,
@@ -196,7 +231,6 @@ where
 
     fn pointed_by_propagation(&mut self) -> bool {
         let mut changed = false;
-        let mut new_pointed_by_queries_term_set: S = S::new();
 
         let mut starting_nodes = vec![];
 
@@ -210,6 +244,9 @@ where
             }
         }
 
+        self.new_pointed_by_queries
+            .retain(|&q| !self.pointed_by_queries.contains(q));
+
         for &q in &self.new_pointed_by_queries {
             for &t in &self.edges.addr_ofs[q as usize] {
                 // TODO: deduplicate?
@@ -219,7 +256,7 @@ where
 
         for v in self.new_incoming.drain(..) {
             let v = get_representative(&mut self.parents, v);
-            if self.sols[v as usize].overlaps(&self.pointed_by_queries) {
+            if self.sols[v as usize].overlaps(self.pointed_by_queries.get_termset()) {
                 starting_nodes.push(v);
             }
         }
@@ -274,13 +311,17 @@ where
             },
         );
 
+        let mut new_pointed_by_queries_bitset = BitVec::<usize>::repeat(false, self.term_count());
+
         for &v in &self.new_pointed_by_queries {
-            new_pointed_by_queries_term_set.insert(v);
-            for &w in &self.edges.addr_ofs[v as usize] {
-                let w = get_representative(&mut self.parents, w);
-                self.sols[w as usize].insert(v);
+            if !new_pointed_by_queries_bitset[v as usize] {
+                new_pointed_by_queries_bitset.set(v as usize, true);
+                for &w in &self.edges.addr_ofs[v as usize] {
+                    let w = get_representative(&mut self.parents, w);
+                    self.sols[w as usize].insert(v);
+                }
+                self.pointed_by_queries.insert(v);
             }
-            self.pointed_by_queries.insert(v);
         }
 
         for &v in top_order.iter().rev() {
@@ -289,12 +330,9 @@ where
                 continue;
             }
             changed = true;
-            let p_old_without_new_queries =
-                self.p_old_pointed_by[v as usize].difference(&new_pointed_by_queries_term_set);
-            // TODO: intersection
             let mut pointed_by_sols = self.sols[v as usize].clone();
-            pointed_by_sols.intersection_assign(&self.pointed_by_queries);
-            let p_dif = pointed_by_sols.weak_difference(&p_old_without_new_queries);
+            pointed_by_sols.intersection_assign(self.pointed_by_queries.get_termset());
+            let p_dif = pointed_by_sols.weak_difference(&self.p_old_pointed_by[v as usize]);
             let p_dif_vec = Lazy::new(|| p_dif.iter().collect::<Vec<IntegerTerm>>());
             self.p_old_pointed_by[v as usize] = pointed_by_sols;
 
@@ -316,6 +354,7 @@ where
                                 should_set_new_incoming |= self.sols[w as usize].insert(t);
                             } else {
                                 self.edges.addr_ofs[t as usize].push(w);
+                                self.edges.rev_addr_ofs[w as usize].push(t);
                             }
                         }
                     }
@@ -492,10 +531,12 @@ where
             self.parents.extend(
                 (0..num_instantiated).map(|i| (instantiated_start_index + i) as IntegerTerm),
             );
+
+            self.pointed_by_queries.resize(new_len);
+
             self.p_old_points_to.resize_with(new_len, S::new);
             self.p_old_pointed_by.resize_with(new_len, S::new);
             self.is_return_or_parameter.resize(new_len, false);
-
             for i in 0..(template.num_return_terms + template.num_parameter_terms) as usize {
                 self.is_return_or_parameter
                     .set(instantiated_start_index + i, true);
@@ -631,7 +672,7 @@ where
         let p_pt_old = &self.p_old_points_to[parent as usize];
         let p_pt_old_vec = Lazy::new(|| p_pt_old.iter().collect::<Vec<IntegerTerm>>());
         let p_pb_old = &self.p_old_pointed_by[parent as usize];
-        // let p_pb_old_vec = Lazy::new(|| p_pb_old.iter().collect::<Vec<IntegerTerm>>());
+        let p_pb_old_vec = Lazy::new(|| p_pb_old.iter().collect::<Vec<IntegerTerm>>());
         let child_edges = mem::take(&mut self.edges.subset[child as usize]);
 
         for (&other, offsets) in &child_edges {
@@ -651,10 +692,26 @@ where
                     );
                 }
             }
-            if offsets.contains(0) {
-                other_term_set.union_assign(&p_pb_old);
-            } else {
-                // Todo: Pointed-by prop
+            for o in offsets.iter() {
+                if o == 0 {
+                    self.sols[other as usize].union_assign(&p_pb_old);
+                } else {
+                    let to_add = p_pb_old_vec.iter().filter_map(|&t| {
+                        if let TermType::Struct(allowed) = self.term_types[t as usize] {
+                            (o <= allowed).then(|| t + o as IntegerTerm)
+                        } else {
+                            None
+                        }
+                    });
+                    for t in to_add {
+                        if self.pointed_by_queries.contains(t) {
+                            self.sols[other as usize].insert(t);
+                        } else {
+                            self.edges.addr_ofs[t as usize].push(other);
+                            self.edges.rev_addr_ofs[other as usize].push(t);
+                        }
+                    }
+                }
             }
 
             self.edges.subset[parent as usize]
@@ -822,7 +879,7 @@ where
             abstract_rev_offsets,
             parents: Vec::from_iter(0..num_terms as IntegerTerm),
             points_to_queries: uniset::BitSet::new(),
-            pointed_by_queries: S::new(),
+            pointed_by_queries: PointedByQueries::new(num_terms),
             visited_pointed_by: uniset::BitSet::new(),
             is_return_or_parameter: bitvec::bitvec![0; num_terms],
             abstract_points_to_queries: bitvec::bitvec![0; num_abstract_terms],

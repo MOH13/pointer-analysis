@@ -44,7 +44,7 @@ where
         .collect();
     let num_cells = counts.len();
     let total = counts.iter().sum::<usize>();
-    let max = counts.iter().copied().max().unwrap_or(0);
+    let max = counts.iter().max().copied().unwrap_or(0);
     let mean = total as f64 / num_cells as f64;
     let median = counts.select_nth_unstable(num_cells / 2).1;
     println!("Total: {total}");

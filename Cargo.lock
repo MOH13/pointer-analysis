@@ -762,6 +762,7 @@ dependencies = [
  "quickcheck",
  "quickcheck_macros",
  "roaring",
+ "sdset",
  "serde",
  "serde_json",
  "smallvec",
@@ -943,6 +944,12 @@ name = "scopeguard"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d29ab0c6d3fc0ee92fe66e2d99f700eab17a8d57d1c1d3b748380fb20baa78cd"
+
+[[package]]
+name = "sdset"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cbb21fe0588557792176c89bc7b943027b14f346d03c6be6a199c2860277d93a"
 
 [[package]]
 name = "semver"
