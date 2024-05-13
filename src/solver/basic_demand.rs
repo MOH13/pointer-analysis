@@ -16,9 +16,6 @@ use super::{
 use crate::util::GetTwoMutExt;
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
 
-static mut TOTAL: usize = 0;
-static mut INSERTED: usize = 0;
-
 #[derive(Clone)]
 struct CondLeft<C> {
     right: IntegerTerm,
@@ -438,9 +435,6 @@ where
                 }
             }
         }
-        println!("TOTAL: {}, INSERTED: {}", unsafe { TOTAL }, unsafe {
-            INSERTED
-        });
         println!("points to queries: {}", self.points_to_queries.count_ones());
         println!(
             "pointed by queries: {:?}",
@@ -484,6 +478,9 @@ where
             if relative_index >= template.num_return_terms
                 && relative_index < template.num_return_terms + template.num_parameter_terms
             {
+                if self.context_state.templates[0].start_index + fun_index == 5382 {
+                    println!("param term: {}", x);
+                }
                 add_pointed_by_query(
                     self.context_state.templates[0].start_index + fun_index,
                     &mut self.pointed_by_queries,
@@ -518,6 +515,8 @@ where
             if self.edges.sols[x as usize].insert(t) {
                 self.worklist
                     .push_back(WorklistEntry::InsertedSkipUnweighted(x, t));
+            } else {
+                self.add_return_function_term_query(x);
             }
             add_pointed_by_query(x, &mut self.pointed_by_queries, &mut self.worklist);
             for &cond_node in &self.edges.stores[x as usize] {
@@ -577,21 +576,7 @@ where
             for &cond_node in &self.edges.stores[x as usize] {
                 add_points_to_query(cond_node, &mut self.points_to_queries, &mut self.worklist);
             }
-            if self.is_return_or_parameter[x as usize] {
-                let (fun_index, relative_index) = self
-                    .context_state
-                    .get_function_and_relative_index_from_concrete_index(x);
-                let fun_index = fun_index.expect("Term should be in a function");
-                let num_return_terms =
-                    self.context_state.templates[fun_index as usize].num_return_terms;
-                if relative_index < num_return_terms {
-                    add_pointed_by_query(
-                        self.context_state.templates[0].start_index + fun_index,
-                        &mut self.pointed_by_queries,
-                        &mut self.worklist,
-                    );
-                }
-            }
+            self.add_return_function_term_query(x);
         }
 
         for cond in self.edges.conds[x as usize].clone() {
@@ -639,15 +624,9 @@ where
                 {
                     continue;
                 }
-                unsafe {
-                    TOTAL += 1;
-                }
                 if self.edges.sols[*to as usize].insert(new_term) {
                     self.worklist
                         .push_back(WorklistEntry::Inserted(*to, new_term));
-                    unsafe {
-                        INSERTED += 1;
-                    }
                 }
             }
         }
@@ -761,6 +740,27 @@ where
             }
         }
         index
+    }
+
+    fn add_return_function_term_query(&mut self, term: IntegerTerm) {
+        if self.is_return_or_parameter[term as usize] {
+            let (fun_index, relative_index) = self
+                .context_state
+                .get_function_and_relative_index_from_concrete_index(term);
+            let fun_index = fun_index.expect("Term should be in a function");
+            let num_return_terms =
+                self.context_state.templates[fun_index as usize].num_return_terms;
+            if relative_index < num_return_terms {
+                if self.context_state.templates[0].start_index + fun_index == 5382 {
+                    println!("return term: {}", term);
+                }
+                add_pointed_by_query(
+                    self.context_state.templates[0].start_index + fun_index,
+                    &mut self.pointed_by_queries,
+                    &mut self.worklist,
+                );
+            }
+        }
     }
 
     fn offsetable_terms(&self, term: IntegerTerm) -> impl Iterator<Item = IntegerTerm> {

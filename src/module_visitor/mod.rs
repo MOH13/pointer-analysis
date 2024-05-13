@@ -95,7 +95,7 @@ pub enum VarIdent<'a> {
 }
 
 impl<'a> VarIdent<'a> {
-    fn new_local(reg_name: &'a Name, fun_name: &'a str) -> Self {
+    pub fn new_local(reg_name: &'a Name, fun_name: &'a str) -> Self {
         Self::Local {
             reg_name: Cow::Borrowed(reg_name),
             fun_name: Cow::Borrowed(fun_name),

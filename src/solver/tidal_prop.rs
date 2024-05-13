@@ -104,7 +104,7 @@ pub struct TidalPropagationSolverState<T, S, C: ContextSelector> {
     points_to_queries: uniset::BitSet,
     pointed_by_queries: PointedByQueries<S>,
     visited_pointed_by: uniset::BitSet,
-    is_return_or_parameter: BitVec,
+    return_and_parameter_children: Vec<SmallVec<[IntegerTerm; 2]>>,
     abstract_points_to_queries: BitVec,
     abstract_pointed_by_queries: BitVec,
     new_points_to_queries: Vec<IntegerTerm>,
@@ -190,10 +190,10 @@ where
                     to_visit.push(get_representative(state.parents, w))
                 }
 
-                if state.is_return_or_parameter[v as usize] {
+                for &w in &state.return_and_parameter_children[v as usize] {
                     let (fun_index, relative_index) = state
                         .context_state
-                        .get_function_and_relative_index_from_concrete_index(v);
+                        .get_function_and_relative_index_from_concrete_index(w);
                     let fun_index = fun_index.expect("Term should be in a function");
                     let template = &state.context_state.templates[fun_index as usize];
                     if relative_index >= template.num_return_terms
@@ -274,6 +274,7 @@ where
                 if state.visited_pointed_by.test(v as usize) {
                     return;
                 }
+
                 state.visited_pointed_by.set(v as usize);
                 local_new_queries.push(v);
 
@@ -296,16 +297,16 @@ where
                         .push(get_representative(state.parents, w));
                 }
 
-                if state.is_return_or_parameter[v as usize] {
+                for &w in &state.return_and_parameter_children[v as usize] {
                     let (fun_index, relative_index) = state
                         .context_state
-                        .get_function_and_relative_index_from_concrete_index(v);
+                        .get_function_and_relative_index_from_concrete_index(w);
                     let fun_index = fun_index.expect("Term should be in a function");
                     let num_return_terms =
                         state.context_state.templates[fun_index as usize].num_return_terms;
                     if relative_index < num_return_terms {
                         let fun_term = state.context_state.templates[0].start_index + fun_index;
-                        state.new_pointed_by_queries.push(fun_term);
+                        local_new_queries.push(fun_term);
                         for &t in &state.edges.addr_ofs[fun_term as usize] {
                             to_visit.push(get_representative(&mut state.parents, t));
                         }
@@ -531,10 +532,11 @@ where
 
             self.p_old_points_to.resize_with(new_len, S::new);
             self.p_old_pointed_by.resize_with(new_len, S::new);
-            self.is_return_or_parameter.resize(new_len, false);
+            self.return_and_parameter_children
+                .resize_with(new_len, SmallVec::new);
             for i in 0..(template.num_return_terms + template.num_parameter_terms) as usize {
-                self.is_return_or_parameter
-                    .set(instantiated_start_index + i, true);
+                self.return_and_parameter_children[instantiated_start_index + i]
+                    .push((instantiated_start_index + i) as IntegerTerm);
             }
 
             for i in 0..num_instantiated as u32 {
@@ -635,7 +637,7 @@ where
             edges: &self.edges,
             points_to_queries: &mut self.points_to_queries,
             visited_pointed_by: &mut self.visited_pointed_by,
-            is_return_or_parameter: &self.is_return_or_parameter,
+            return_and_parameter_children: &self.return_and_parameter_children,
             new_points_to_queries: &mut self.new_points_to_queries,
             new_pointed_by_queries: &mut self.new_pointed_by_queries,
             parents: &mut self.parents,
@@ -731,32 +733,37 @@ where
             }
         }
 
-        if parent == 39104 {
-            println!(
-                "self visited: {}, child ({child}, visited: {}) stores: {:?}",
-                self.visited_pointed_by.test(parent as usize),
-                self.visited_pointed_by.test(child as usize),
-                self.edges.stores[child as usize]
-                    .iter()
-                    .map(|t| self.context_state.concrete_to_input(*t))
-                    .collect::<Vec<_>>()
-            );
-        }
         if self.visited_pointed_by.test(parent as usize)
-        // && !self.visited_pointed_by.test(child as usize)
+            && !self.visited_pointed_by.test(child as usize)
         {
             self.new_pointed_by_queries.push(child);
             for &w in &self.edges.stores[child as usize] {
                 self.new_points_to_queries
                     .push(get_representative(&mut self.parents, w));
             }
+            for &w in &self.return_and_parameter_children[child as usize] {
+                let (fun_index, relative_index) = self
+                    .context_state
+                    .get_function_and_relative_index_from_concrete_index(w);
+                let fun_index = fun_index.expect("Term should be in a function");
+                let num_return_terms =
+                    self.context_state.templates[fun_index as usize].num_return_terms;
+                if relative_index < num_return_terms {
+                    let fun_term = self.context_state.templates[0].start_index + fun_index;
+                    self.new_pointed_by_queries.push(fun_term);
+                }
+            }
         }
 
         self.edges.rev_subset[parent as usize].union_assign(&child_rev_edges);
-
         if self.edges.rev_subset[parent as usize].remove(&(child as IntegerTerm)) {
             self.edges.rev_subset[parent as usize].insert(parent as IntegerTerm);
         }
+
+        let child_return_and_parameter_children =
+            mem::take(&mut self.return_and_parameter_children[child as usize]);
+        self.return_and_parameter_children[parent as usize]
+            .extend_from_slice(&child_return_and_parameter_children);
 
         let child_rev_addr_ofs = mem::take(&mut self.edges.rev_addr_ofs[child as usize]);
         self.edges.rev_addr_ofs[parent as usize].extend_from_slice(child_rev_addr_ofs.as_slice());
@@ -811,7 +818,7 @@ impl<T, S, C> Solver<DemandContextSensitiveInput<T, C>> for TidalPropagationSolv
 where
     T: Hash + Eq + Clone + Debug,
     S: TermSetTrait<Term = IntegerTerm> + Debug,
-    C: ContextSelector,
+    C: ContextSelector + Clone,
 {
     type Solution = TidalPropagationSolverState<T, S, C>;
 
@@ -890,7 +897,7 @@ where
             points_to_queries: uniset::BitSet::new(),
             pointed_by_queries: PointedByQueries::new(num_terms),
             visited_pointed_by: uniset::BitSet::new(),
-            is_return_or_parameter: bitvec::bitvec![0; num_terms],
+            return_and_parameter_children: vec![SmallVec::new(); num_terms],
             abstract_points_to_queries: bitvec::bitvec![0; num_abstract_terms],
             abstract_pointed_by_queries: bitvec::bitvec![0; num_abstract_terms],
             new_points_to_queries: vec![],
@@ -936,6 +943,20 @@ where
         }
 
         state.run_tidal_propagation();
+
+        let mut points_to_queries = state.points_to_queries.clone();
+        for i in 0..state.sols.len() {
+            let rep = get_representative_no_mutation(&state.parents, i as u32);
+            if points_to_queries.test(rep as usize) {
+                points_to_queries.set(i);
+            }
+        }
+
+        println!("points to queries: {}", points_to_queries.iter().count());
+        println!(
+            "pointed by queries: {:?}",
+            state.pointed_by_queries.termset.len()
+        );
 
         state
     }
@@ -1160,7 +1181,7 @@ struct SccVisitState<'a, T, S, C: ContextSelector> {
     edges: &'a Edges<C>,
     points_to_queries: &'a mut uniset::BitSet,
     visited_pointed_by: &'a mut uniset::BitSet,
-    is_return_or_parameter: &'a BitVec,
+    return_and_parameter_children: &'a [SmallVec<[IntegerTerm; 2]>],
     new_points_to_queries: &'a mut Vec<IntegerTerm>,
     new_pointed_by_queries: &'a mut Vec<IntegerTerm>,
     parents: &'a mut [IntegerTerm],
@@ -1324,5 +1345,155 @@ where
         // }
 
         edges
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use llvm_ir::{Module, Name};
+
+    use crate::analysis::{Cell, Config, PointsToAnalysis};
+    use crate::module_visitor::VarIdent;
+    use crate::solver::tidal_prop::get_representative_no_mutation;
+    use crate::solver::{
+        try_offset_term, ContextInsensitiveSelector, Demand, IntegerTerm, TermSetTrait,
+    };
+
+    use super::{offsetable_terms, SharedBitVecTidalPropagationSolver};
+
+    #[test]
+    fn tidal_invariants() {
+        let solver = SharedBitVecTidalPropagationSolver::new();
+        let module =
+            Module::from_bc_path("benchmarks/make/bench.bc").expect("Error parsing bc file");
+        let demands = vec![Demand::PointsTo(Cell::Var(VarIdent::new_local(
+            &Name::Number(6),
+            "eval_buffer",
+        )))];
+        let state = PointsToAnalysis::run(
+            &solver,
+            &module,
+            ContextInsensitiveSelector,
+            demands,
+            &Config::default(),
+        )
+        .into_solution();
+
+        for i in 0..state.sols.len() {
+            if state.points_to_queries.test(i) {
+                for &t in state.edges.rev_addr_ofs[i].iter() {
+                    assert!(state.sols[i].contains(t));
+                }
+                for j in &state.edges.loads[i] {
+                    assert!(state
+                        .points_to_queries
+                        .test(get_representative_no_mutation(&state.parents, *j) as usize));
+                }
+            }
+            for (j, offsets) in &state.edges.subset[i as usize] {
+                if state.points_to_queries.test(*j as usize) {
+                    assert!(state.points_to_queries.test(i as usize));
+                    for offset in offsets.iter() {
+                        for t in state.sols[i as usize].iter() {
+                            if let Some(t) =
+                                try_offset_term(t, state.term_types[t as usize], offset)
+                            {
+                                assert!(state.sols[*j as usize].contains(t));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for i in 0..state.sols.len() {
+            if state.pointed_by_queries.contains(i as IntegerTerm) {
+                for x in &state.edges.addr_ofs[i as usize] {
+                    assert!(state.sols[*x as usize].contains(i as IntegerTerm));
+                }
+                for t in
+                    offsetable_terms(i as u32, &state.context_state, &state.abstract_rev_offsets)
+                {
+                    assert!(state.pointed_by_queries.contains(t));
+                }
+            }
+            for t in state.sols[i as usize].iter() {
+                if state.pointed_by_queries.contains(t) {
+                    for cond in &state.edges.stores[i] {
+                        let cond_rep =
+                            get_representative_no_mutation(&state.parents, *cond) as usize;
+                        assert!(
+                            state
+                                .points_to_queries
+                                .test(
+                                    cond_rep
+                                ),
+                            "{:?} ({i}) points to {:?} ({t}). *{:?} ({cond}) (query: {}) [rep {:?} ({cond_rep})] <- {:?} ({i})",
+                            state.context_state.concrete_to_input(i as u32),
+                            state.context_state.concrete_to_input(t),
+                            state.context_state.concrete_to_input(*cond),
+                            state.points_to_queries.test(*cond as usize),
+                            state.context_state.concrete_to_input(cond_rep as u32),
+                            state.context_state.concrete_to_input(i as u32),
+                        );
+                    }
+                    assert!(
+                        state.visited_pointed_by.test(i),
+                        "{:?} ({i}) points to {:?} ({t})",
+                        state.context_state.concrete_to_input(i as u32),
+                        state.context_state.concrete_to_input(t)
+                    );
+                }
+                for (j, offsets) in &state.edges.subset[i as usize] {
+                    for offset in offsets.iter() {
+                        if let Some(t2) = try_offset_term(t, state.term_types[t as usize], offset) {
+                            if state.pointed_by_queries.contains(t2) {
+                                assert!(
+                                    state.sols[*j as usize].contains(t2),
+                                    "{:?} ({i}) visited: {} -> {:?} ({j}) visited: {}\n{:?} ({t}) + {offset} = {:?} ({t2})",
+                                    state.context_state.concrete_to_input(i as u32),
+                                    state.visited_pointed_by.test(i),
+                                    state.context_state.concrete_to_input(*j),
+                                    state.visited_pointed_by.test(*j as usize),
+                                    state.context_state.concrete_to_input(t),
+                                    state.context_state.concrete_to_input(t2),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            if state.parents[i] == i as u32 && state.visited_pointed_by.test(i) {
+                assert!(state.sols[i].overlaps(state.pointed_by_queries.get_termset()));
+            }
+        }
+        for (fun_idx, template) in state.context_state.templates.iter().enumerate() {
+            let mut should_have_query = false;
+            'outer: for (_, start) in &state.context_state.instantiated_contexts[fun_idx] {
+                for ret in *start..*start + template.num_return_terms as u32 {
+                    if state.sols[ret as usize].overlaps(state.pointed_by_queries.get_termset()) {
+                        should_have_query = true;
+                        break 'outer;
+                    }
+                }
+                for param in *start + template.num_return_terms
+                    ..*start + template.num_return_terms + template.num_parameter_terms as u32
+                {
+                    if state.points_to_queries.test(param as usize) {
+                        should_have_query = true;
+                        break 'outer;
+                    }
+                }
+            }
+            let fun_term = state.context_state.templates[0].start_index + fun_idx as u32;
+
+            assert!(
+                !should_have_query || state.pointed_by_queries.contains(fun_term),
+                "fun_term: {:?} ({}), has points-to: {}, rep: {:?}",
+                state.context_state.concrete_to_input(fun_term),
+                fun_term,
+                state.points_to_queries.test(fun_term as usize),
+                state.parents[fun_term as usize],
+            );
+        }
     }
 }
