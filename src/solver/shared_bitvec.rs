@@ -879,6 +879,12 @@ mod tests {
                 break;
             }
         }
+        for t in intersection.iter() {
+            if !bitvec1.contains(t) || !bitvec2.contains(t) {
+                res = false;
+                break;
+            }
+        }
         if !res {
             println!(
                 "intersection: {:?}",

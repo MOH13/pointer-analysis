@@ -423,10 +423,6 @@ where
 {
     fn solve(&mut self) {
         while let Some(entry) = self.worklist.pop_front() {
-            // dbg!(
-            //     entry.map_terms(|&t| self.context_state.concrete_to_input(t)),
-            //     // &self.worklist
-            // );
             match entry {
                 WorklistEntry::Demand(Demand::PointsTo(x)) => {
                     self.handle_points_to(x);
@@ -445,6 +441,11 @@ where
         println!("TOTAL: {}, INSERTED: {}", unsafe { TOTAL }, unsafe {
             INSERTED
         });
+        println!("points to queries: {}", self.points_to_queries.count_ones());
+        println!(
+            "pointed by queries: {:?}",
+            self.pointed_by_queries.count_ones()
+        );
     }
 
     fn handle_points_to(&mut self, x: IntegerTerm) {
