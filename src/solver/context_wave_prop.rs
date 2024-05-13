@@ -794,14 +794,31 @@ where
 
     // Collapse cycles and update topological order
     fn apply_to_graph(self, state: &mut ContextWavePropagationSolverState<T, S, C>) {
-        let mut removed = HashSet::new();
+        let mut nodes = vec![];
+        let mut components: HashMap<IntegerTerm, (IntegerTerm, u32)> = HashMap::new();
         for v in 0..self.node_count as u32 {
             if let Some(r_v) = self.r[v as usize] {
-                if r_v != v {
-                    self.unify(v, r_v, state);
-                    if self.iterative {
-                        removed.insert(v);
+                let edge_count = state.edges.subset[v as usize].len() as u32;
+                if edge_count == 0 {
+                    continue;
+                }
+                nodes.push((v, r_v));
+                if let Err(mut cur) = components.try_insert(r_v, (v, edge_count)) {
+                    let (cur_best, best_edge_count) = cur.entry.get_mut();
+                    if edge_count > *best_edge_count {
+                        *cur_best = v;
+                        *best_edge_count = edge_count;
                     }
+                }
+            }
+        }
+        let mut removed = HashSet::new();
+        for (v, r_v) in nodes {
+            let &(rep, _) = components.get(&r_v).unwrap();
+            if v != rep {
+                self.unify(v, rep, state);
+                if self.iterative {
+                    removed.insert(v);
                 }
             }
         }

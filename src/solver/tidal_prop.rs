@@ -240,7 +240,6 @@ where
         let mut changed = false;
 
         let mut starting_nodes = vec![];
-
         let mut local_new_queries = vec![];
 
         for q in self.new_pointed_by_queries.drain(..) {
@@ -334,11 +333,11 @@ where
                 continue;
             }
             changed = true;
-            let mut pointed_by_sols = self.sols[v as usize].clone();
-            pointed_by_sols.intersection_assign(self.pointed_by_queries.get_termset());
-            let p_dif = pointed_by_sols.weak_difference(&self.p_old_pointed_by[v as usize]);
+            let mut p_dif =
+                self.sols[v as usize].weak_difference(&self.p_old_pointed_by[v as usize]);
+            p_dif.intersection_assign(&self.pointed_by_queries.get_termset());
+            self.p_old_pointed_by[v as usize].union_assign(&p_dif);
             let p_dif_vec = Lazy::new(|| p_dif.iter().collect::<Vec<IntegerTerm>>());
-            self.p_old_pointed_by[v as usize] = pointed_by_sols;
 
             for (&w, offsets) in &self.edges.subset[v as usize] {
                 let mut should_set_new_incoming = false;
@@ -649,11 +648,28 @@ where
             }
         }
 
+        let mut nodes = vec![];
+        let mut components: HashMap<IntegerTerm, (IntegerTerm, u32)> = HashMap::new();
         for v in 0..internal_state.node_count as u32 {
             if let Some(r_v) = internal_state.r[v as usize] {
-                if r_v != v {
-                    self.unify(v, r_v);
+                let edge_count = self.edges.subset[v as usize].len() as u32;
+                if edge_count == 0 {
+                    continue;
                 }
+                nodes.push((v, r_v));
+                if let Err(mut cur) = components.try_insert(r_v, (v, edge_count)) {
+                    let (cur_best, best_edge_count) = cur.entry.get_mut();
+                    if edge_count > *best_edge_count {
+                        *cur_best = v;
+                        *best_edge_count = edge_count;
+                    }
+                }
+            }
+        }
+        for (v, r_v) in nodes {
+            let &(rep, _) = components.get(&r_v).unwrap();
+            if v != rep {
+                self.unify(v, rep);
             }
         }
 
