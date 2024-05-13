@@ -303,9 +303,11 @@ where
                     let num_return_terms =
                         state.context_state.templates[fun_index as usize].num_return_terms;
                     if relative_index < num_return_terms {
-                        state
-                            .new_pointed_by_queries
-                            .push(state.context_state.templates[0].start_index + fun_index);
+                        let fun_term = state.context_state.templates[0].start_index + fun_index;
+                        state.new_pointed_by_queries.push(fun_term);
+                        for &t in &state.edges.addr_ofs[fun_term as usize] {
+                            to_visit.push(get_representative(&mut state.parents, t));
+                        }
                     }
                 }
             },
@@ -351,7 +353,8 @@ where
                         });
                         for t in to_add {
                             if self.pointed_by_queries.contains(t) {
-                                should_set_new_incoming |= self.sols[w as usize].insert(t);
+                                self.sols[w as usize].insert(t);
+                                should_set_new_incoming = true;
                             } else {
                                 self.edges.addr_ofs[t as usize].push(w);
                                 self.edges.rev_addr_ofs[w as usize].push(t);
@@ -661,6 +664,7 @@ where
 
     fn unify(&mut self, child: IntegerTerm, parent: IntegerTerm) {
         debug_assert_ne!(child, parent);
+        debug_assert!(self.parents[child as usize] == child);
 
         let child_sols = mem::take(&mut self.sols[child as usize]);
         self.sols[parent as usize].union_assign(&child_sols);
@@ -732,6 +736,27 @@ where
                 None => {
                     panic!("Expected edges from {i} to {child}");
                 }
+            }
+        }
+
+        if parent == 39104 {
+            println!(
+                "self visited: {}, child ({child}, visited: {}) stores: {:?}",
+                self.visited_pointed_by.test(parent as usize),
+                self.visited_pointed_by.test(child as usize),
+                self.edges.stores[child as usize]
+                    .iter()
+                    .map(|t| self.context_state.concrete_to_input(*t))
+                    .collect::<Vec<_>>()
+            );
+        }
+        if self.visited_pointed_by.test(parent as usize)
+        // && !self.visited_pointed_by.test(child as usize)
+        {
+            self.new_pointed_by_queries.push(child);
+            for &w in &self.edges.stores[child as usize] {
+                self.new_points_to_queries
+                    .push(get_representative(&mut self.parents, w));
             }
         }
 
