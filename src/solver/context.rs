@@ -276,11 +276,11 @@ where
     )
 }
 
-impl<T, C: ContextSelector> ContextState<T, C>
-where
-    T: Hash + Eq + Clone + Debug,
-{
-    pub fn from_context_input(input: ContextSensitiveInput<T, C>) -> (Self, Vec<FunctionTermInfo>) {
+impl<T, C: ContextSelector> ContextState<T, C> {
+    pub fn from_context_input(input: ContextSensitiveInput<T, C>) -> (Self, Vec<FunctionTermInfo>)
+    where
+        T: Hash + Eq + Clone + Debug,
+    {
         let mapping = GenericIdMap::from_context_input(&input);
 
         let mut abstract_indices = (0..input.global.terms.len() as IntegerTerm).collect::<Vec<_>>();
@@ -342,8 +342,11 @@ where
     pub fn get_function_and_relative_index_from_term(
         &self,
         term: &T,
-    ) -> (Option<IntegerTerm>, IntegerTerm) {
-        let abstract_index = self.mapping.term_to_integer(term);
+    ) -> (Option<IntegerTerm>, IntegerTerm)
+    where
+        T: Hash + Eq + Clone + Debug,
+    {
+        let abstract_index = self.input_to_abstract(term);
 
         self.get_function_and_relative_index_from_abstract_index(abstract_index)
     }
@@ -352,7 +355,7 @@ where
         &self,
         concrete_index: IntegerTerm,
     ) -> (Option<IntegerTerm>, IntegerTerm) {
-        let abstract_index = self.abstract_indices[concrete_index as usize];
+        let abstract_index = self.concrete_to_abstract(concrete_index);
 
         self.get_function_and_relative_index_from_abstract_index(abstract_index)
     }
@@ -401,16 +404,39 @@ where
         }
     }
 
-    pub fn concrete_to_input(&self, term: IntegerTerm) -> T {
-        self.mapping
-            .integer_to_term(self.abstract_indices[term as usize])
+    pub fn input_to_abstract(&self, term: &T) -> IntegerTerm
+    where
+        T: Hash + Eq + Clone + Debug,
+    {
+        self.mapping.term_to_integer(term)
+    }
+
+    pub fn concrete_to_input(&self, term: IntegerTerm) -> T
+    where
+        T: Hash + Eq + Clone + Debug,
+    {
+        self.abstract_to_input(self.concrete_to_abstract(term))
+    }
+
+    pub fn concrete_to_abstract(&self, term: IntegerTerm) -> IntegerTerm {
+        self.abstract_indices[term as usize]
+    }
+
+    pub fn abstract_to_input(&self, term: IntegerTerm) -> T
+    where
+        T: Hash + Eq + Clone + Debug,
+    {
+        self.mapping.integer_to_term(term)
     }
 
     pub fn num_concrete_terms(&self) -> usize {
         self.abstract_indices.len()
     }
 
-    pub fn term_to_concrete_global(&self, term: &T) -> Option<IntegerTerm> {
+    pub fn term_to_concrete_global(&self, term: &T) -> Option<IntegerTerm>
+    where
+        T: Hash + Eq + Clone + Debug,
+    {
         let (fun_index, relative_index) = self.get_function_and_relative_index_from_term(term);
         match fun_index {
             Some(f) if relative_index == 0 => Some(self.templates[0].start_index + f),
