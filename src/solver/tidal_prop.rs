@@ -142,14 +142,22 @@ where
 
     fn points_to_propagation(&mut self) -> bool {
         let mut changed = false;
+
+        let starting_nodes = self
+            .points_to_queries
+            .iter()
+            .map(|t| t as IntegerTerm)
+            .chain(
+                self.new_points_to_queries
+                    .drain(..)
+                    .map(|v| get_representative(&mut self.parents, v)),
+            )
+            .collect();
+
         let top_order = self.scc(
             SccDirection::Backward,
             true,
-            self.points_to_queries
-                .iter()
-                .map(|t| t as IntegerTerm)
-                .chain(self.new_points_to_queries.iter().copied())
-                .collect(),
+            starting_nodes,
             |v, state, to_visit| {
                 if state.points_to_queries.test(v as usize) {
                     return;
@@ -162,7 +170,7 @@ where
                 }
 
                 for &w in &state.edges.rev_subset[v as usize] {
-                    if state.p_old_points_to.len() > 0 {
+                    if state.p_old_points_to[w as usize].len() > 0 {
                         let p_pt_old = &state.p_old_points_to[w as usize];
                         let p_pt_old_vec =
                             Lazy::new(|| p_pt_old.iter().collect::<Vec<IntegerTerm>>());
@@ -225,7 +233,6 @@ where
             }
         }
 
-        self.new_points_to_queries.clear();
         changed
     }
 
@@ -234,20 +241,18 @@ where
 
         let mut starting_nodes = vec![];
 
-        for &q in &self.new_pointed_by_queries.clone() {
-            for q2 in offsetable_terms(
-                q,
-                &self.context_state.abstract_indices,
-                &self.abstract_rev_offsets,
-            ) {
-                self.new_pointed_by_queries.push(q2);
+        let mut local_new_queries = vec![];
+
+        for q in self.new_pointed_by_queries.drain(..) {
+            for q2 in offsetable_terms(q, &self.context_state, &self.abstract_rev_offsets) {
+                local_new_queries.push(q2);
             }
+            local_new_queries.push(q);
         }
 
-        self.new_pointed_by_queries
-            .retain(|&q| !self.pointed_by_queries.contains(q));
+        local_new_queries.retain(|&q| !self.pointed_by_queries.contains(q));
 
-        for &q in &self.new_pointed_by_queries {
+        for &q in &local_new_queries {
             for &t in &self.edges.addr_ofs[q as usize] {
                 // TODO: deduplicate?
                 starting_nodes.push(get_representative(&mut self.parents, t));
@@ -270,15 +275,11 @@ where
                     return;
                 }
                 state.visited_pointed_by.set(v as usize);
-                state.new_pointed_by_queries.push(v);
+                local_new_queries.push(v);
 
-                for q in offsetable_terms(
-                    v,
-                    &state.context_state.abstract_indices,
-                    state.abstract_rev_offsets,
-                ) {
+                for q in offsetable_terms(v, &state.context_state, state.abstract_rev_offsets) {
                     // TODO: deduplicate?
-                    state.new_pointed_by_queries.push(q);
+                    local_new_queries.push(q);
                     for &t in &state.edges.addr_ofs[q as usize] {
                         to_visit.push(get_representative(&mut state.parents, t));
                     }
@@ -315,7 +316,7 @@ where
 
         let mut new_pointed_by_queries_bitset = BitVec::<usize>::repeat(false, self.term_count());
 
-        for &v in &self.new_pointed_by_queries {
+        for v in local_new_queries {
             if !new_pointed_by_queries_bitset[v as usize] {
                 new_pointed_by_queries_bitset.set(v as usize, true);
                 for &w in &self.edges.addr_ofs[v as usize] {
@@ -344,13 +345,9 @@ where
                     if o == 0 {
                         self.sols[w as usize].union_assign(&p_dif);
                     } else {
-                        let to_add = p_dif_vec.iter().filter_map(|&t| {
-                            if let TermType::Struct(allowed) = self.term_types[t as usize] {
-                                (o <= allowed).then(|| t + o as IntegerTerm)
-                            } else {
-                                None
-                            }
-                        });
+                        let to_add = p_dif_vec
+                            .iter()
+                            .filter_map(|&t| try_offset_term(t, self.term_types[t as usize], o));
                         for t in to_add {
                             if self.pointed_by_queries.contains(t) {
                                 self.sols[w as usize].insert(t);
@@ -368,7 +365,6 @@ where
             }
         }
 
-        self.new_pointed_by_queries.clear();
         changed
     }
 
@@ -611,10 +607,10 @@ where
         direction: SccDirection,
         visit_weighted: bool,
         initial_nodes: Vec<IntegerTerm>,
-        visit_handler: F,
+        mut visit_handler: F,
     ) -> Vec<IntegerTerm>
     where
-        F: Fn(IntegerTerm, &mut SccVisitState<T, S, C>, &mut Vec<IntegerTerm>),
+        F: FnMut(IntegerTerm, &mut SccVisitState<T, S, C>, &mut Vec<IntegerTerm>),
     {
         let node_count = self.term_count();
         let mut internal_state = SccInternalState {
@@ -647,7 +643,7 @@ where
 
         while let Some(v) = internal_state.to_visit.pop() {
             if internal_state.d[v as usize] == 0 {
-                visit(&mut internal_state, &mut visit_state, &visit_handler, v);
+                visit(&mut internal_state, &mut visit_state, &mut visit_handler, v);
             }
         }
 
@@ -696,13 +692,9 @@ where
                 if o == 0 {
                     self.sols[other as usize].union_assign(&p_pb_old);
                 } else {
-                    let to_add = p_pb_old_vec.iter().filter_map(|&t| {
-                        if let TermType::Struct(allowed) = self.term_types[t as usize] {
-                            (o <= allowed).then(|| t + o as IntegerTerm)
-                        } else {
-                            None
-                        }
-                    });
+                    let to_add = p_pb_old_vec
+                        .iter()
+                        .filter_map(|&t| try_offset_term(t, self.term_types[t as usize], o));
                     for t in to_add {
                         if self.pointed_by_queries.contains(t) {
                             self.sols[other as usize].insert(t);
@@ -779,12 +771,12 @@ where
     }
 }
 
-fn offsetable_terms(
+fn offsetable_terms<T, C: ContextSelector>(
     term: IntegerTerm,
-    abstract_indices: &[IntegerTerm],
+    context_state: &ContextState<T, C>,
     abstract_rev_offsets: &[SmallVec<[u32; 2]>],
 ) -> impl Iterator<Item = IntegerTerm> {
-    let abstract_term = abstract_indices[term as usize];
+    let abstract_term = context_state.concrete_to_abstract(term);
     abstract_rev_offsets[abstract_term as usize]
         .clone()
         .into_iter()
@@ -801,13 +793,9 @@ fn propagate_terms_into<S: TermSetTrait<Term = IntegerTerm>>(
     if offset == 0 {
         dest_term_set.union_assign(term_set);
     } else {
-        let to_add = term_set_iter.into_iter().filter_map(|t| {
-            if let TermType::Struct(allowed) = term_types[t as usize] {
-                (offset <= allowed).then(|| t + offset as IntegerTerm)
-            } else {
-                None
-            }
-        });
+        let to_add = term_set_iter
+            .into_iter()
+            .filter_map(|t| try_offset_term(t, term_types[t as usize], offset));
         dest_term_set.extend(to_add);
     }
 }
@@ -855,7 +843,7 @@ where
         let global_term_types_iter = global
             .term_types
             .iter()
-            .map(|(t, tt)| (context_state.mapping.term_to_integer(t), *tt));
+            .map(|(t, tt)| (context_state.input_to_abstract(t), *tt));
         let template_term_types_iter = context_state.templates.iter().flat_map(|t| {
             t.types
                 .iter()
@@ -1080,10 +1068,10 @@ impl<C: ContextSelector> Edges<C> {
 fn visit<'a, F, T, S, C>(
     internal: &mut SccInternalState,
     visit_state: &mut SccVisitState<'a, T, S, C>,
-    visit_handler: &F,
+    visit_handler: &mut F,
     v: IntegerTerm,
 ) where
-    for<'b> F: Fn(IntegerTerm, &mut SccVisitState<'b, T, S, C>, &mut Vec<IntegerTerm>),
+    for<'b> F: FnMut(IntegerTerm, &mut SccVisitState<'b, T, S, C>, &mut Vec<IntegerTerm>),
     C: ContextSelector,
 {
     if internal.d[v as usize] != 0 {
