@@ -67,7 +67,7 @@ impl<T, S, C: ContextSelector> ContextWavePropagationSolverState<T, S, C> {
 
 impl<T, S, C> ContextWavePropagationSolverState<T, S, C>
 where
-    C: ContextSelector,
+    C: ContextSelector + Clone,
     T: Hash + Eq + Clone + Debug,
     S: TermSetTrait<Term = u32> + Debug,
 {
@@ -356,15 +356,12 @@ impl<T, S, C> Solver<ContextSensitiveInput<T, C>> for ContextWavePropagationSolv
 where
     T: Hash + Eq + Clone + Debug,
     S: TermSetTrait<Term = IntegerTerm> + Debug,
-    C: ContextSelector,
+    C: ContextSelector + Clone,
 {
     type Solution = ContextWavePropagationSolverState<T, S, C>;
 
     fn solve(&self, input: ContextSensitiveInput<T, C>) -> Self::Solution {
-        let global = input.global.clone();
-        let entrypoints = input.entrypoints.clone();
-
-        let (context_state, function_term_infos) = ContextState::from_context_input(input);
+        let (context_state, function_term_infos) = ContextState::from_context_input(&input);
         let empty_context = context_state.context_selector.empty();
 
         let num_terms = context_state.num_concrete_terms();
@@ -374,13 +371,13 @@ where
         let rev_subset = vec![HashSet::new(); num_terms];
 
         let mut term_types = vec![TermType::Basic; sols.len()];
-        for (t, tt) in &global.term_types {
+        for (t, tt) in &input.global.term_types {
             let abstract_term = context_state.mapping.term_to_integer(t);
             term_types[abstract_term as usize] = *tt;
         }
 
         for (i, function_term_info) in function_term_infos.into_iter().enumerate() {
-            let fun_term = (global.terms.len() + i) as IntegerTerm;
+            let fun_term = (input.global.terms.len() + i) as IntegerTerm;
             term_types[fun_term as usize] = function_term_info.term_type;
             sols[function_term_info.pointer_node as usize].insert(fun_term);
         }
@@ -414,14 +411,14 @@ where
             top_order,
         };
 
-        for c in global.constraints {
+        for c in input.global.constraints {
             state.add_constraint(
                 state.context_state.mapping.translate_constraint(&c),
                 empty_context.clone(),
             );
         }
 
-        for entrypoint in entrypoints {
+        for entrypoint in input.entrypoints {
             state.get_or_instantiate_function(entrypoint, empty_context.clone());
         }
 
@@ -435,7 +432,7 @@ impl<T, S, C> SolverSolution for ContextWavePropagationSolverState<T, S, C>
 where
     T: Hash + Eq + Clone + Debug,
     S: TermSetTrait<Term = IntegerTerm> + Debug,
-    C: ContextSelector,
+    C: ContextSelector + Clone,
 {
     type Term = T;
     type TermSet = HashSet<T>;
@@ -907,7 +904,7 @@ impl<T, S, C> Graph for ContextWavePropagationSolverState<T, S, C>
 where
     T: Display + Debug + Clone + PartialEq + Eq + Hash,
     S: TermSetTrait<Term = IntegerTerm> + Debug,
-    C: ContextSelector,
+    C: ContextSelector + Clone,
     C::Context: Display,
 {
     type Node = ContextWavePropagationNode<T, C::Context>;

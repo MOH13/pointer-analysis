@@ -4,9 +4,9 @@ use clap::Parser;
 use hashbrown::HashSet;
 use llvm_ir::Module;
 use pointer_analysis::analysis::{Cell, Config, PointsToAnalysis, PointsToResult, ResultTrait};
-use pointer_analysis::cli::{Args, CountMode, SolverMode, TermSet};
+use pointer_analysis::cli::{Args, CallGraphMode, CountMode, DemandMode, SolverMode, TermSet};
 use pointer_analysis::solver::{
-    BasicDemandSolver, BasicHashSolver, BasicRoaringSolver, HashTidalPropagationSolver,
+    BasicDemandSolver, BasicHashSolver, BasicRoaringSolver, Demands, HashTidalPropagationSolver,
     RoaringTidalPropagationSolver, SharedBitVecTidalPropagationSolver, StatSolver,
 };
 use pointer_analysis::solver::{
@@ -21,16 +21,27 @@ use std::io::Write;
 
 const STRING_FILTER: &'static str = ".str.";
 
-fn get_demands<'a>(args: &Args) -> Vec<Demand<Cell<'a>>> {
-    args.points_to_queries
-        .iter()
-        .map(|s| Demand::PointsTo(s.parse().unwrap()))
-        .chain(
-            args.pointed_by_queries
+fn get_demands<'a>(args: &Args) -> Demands<Cell<'a>> {
+    match args.demand_mode {
+        DemandMode::All => Demands::All,
+        DemandMode::CallGraph => match args.call_graph_mode {
+            CallGraphMode::PointsTo => Demands::CallGraphPointsTo,
+            CallGraphMode::PointedBy => Demands::CallGraphPointedBy,
+        },
+        DemandMode::List => {
+            let demands = args
+                .points_to_queries
                 .iter()
-                .map(|s| Demand::PointedBy(s.parse().unwrap())),
-        )
-        .collect()
+                .map(|s| Demand::PointsTo(s.parse().unwrap()))
+                .chain(
+                    args.pointed_by_queries
+                        .iter()
+                        .map(|s| Demand::PointedBy(s.parse().unwrap())),
+                )
+                .collect();
+            Demands::List(demands)
+        }
+    }
 }
 
 fn show_count_metrics<'a, T, S>(result: &T)
@@ -67,7 +78,7 @@ where
 {
     result.filter_result(
         |c, set, cache| {
-            matches!(c, Cell::Stack(..) | Cell::Global(..))
+            matches!(c, Cell::Stack(..) | Cell::Global(..) | Cell::Var(..))
                 && (args.include_empty || !set.get().is_empty())
                 && (!args.exclude_strings || !cache.string_of(c).contains(STRING_FILTER))
         },
@@ -276,10 +287,15 @@ fn main() -> io::Result<()> {
         ),
         None => PointsToAnalysis::run(&solver, &module, context_selector, demands.clone(), &config),
     };
-    let demand_filter = if demands.is_empty() || args.full_query_output {
+    let demand_filter = if args.full_query_output {
         None
     } else {
-        Some(demands.as_ref())
+        match &demands {
+            Demands::All => None,
+            Demands::CallGraphPointsTo => None,  // TODO
+            Demands::CallGraphPointedBy => None, // TODO
+            Demands::List(demands) => Some(demands.as_ref()),
+        }
     };
     show_output(result, &args, demand_filter);
 

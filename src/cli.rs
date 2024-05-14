@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::fmt::{self, Display, Formatter};
 
 use clap::Parser;
 use clap::ValueEnum;
@@ -55,6 +55,17 @@ pub struct Args {
     /// List of pointed-by queries
     #[arg(short = 'B', long)]
     pub pointed_by_queries: Vec<String>,
+    /// The kind of demand-driven analysis to run
+    #[arg(short, long, default_value_t = DemandMode::All)]
+    pub demand_mode: DemandMode,
+    /// The kind of call graph analysis to run, requires --demand-mode call-graph
+    #[arg(
+        short = 'g',
+        long,
+        requires = "demand_mode",
+        default_value_t = CallGraphMode::PointedBy
+    )]
+    pub call_graph_mode: CallGraphMode,
     ///
     #[arg(short, long, default_value_t = false)]
     pub full_query_output: bool,
@@ -77,7 +88,7 @@ pub enum SolverMode {
 }
 
 impl Display for SolverMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             SolverMode::Basic => write!(f, "basic"),
             SolverMode::Wave => write!(f, "wave"),
@@ -100,7 +111,7 @@ pub enum TermSet {
 }
 
 impl Display for TermSet {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             TermSet::Hash => write!(f, "hash"),
             TermSet::Roaring => write!(f, "roaring"),
@@ -126,11 +137,43 @@ impl Default for CountMode {
 }
 
 impl Display for CountMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             CountMode::Off => write!(f, "off"),
             CountMode::Unfiltered => write!(f, "unfiltered"),
             CountMode::Filtered => write!(f, "filtered"),
+        }
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
+pub enum DemandMode {
+    All,
+    CallGraph,
+    List,
+}
+
+impl Display for DemandMode {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match self {
+            DemandMode::All => write!(f, "all"),
+            DemandMode::CallGraph => write!(f, "call-graph"),
+            DemandMode::List => write!(f, "list"),
+        }
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
+pub enum CallGraphMode {
+    PointsTo,
+    PointedBy,
+}
+
+impl Display for CallGraphMode {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match self {
+            CallGraphMode::PointsTo => write!(f, "points-to"),
+            CallGraphMode::PointedBy => write!(f, "pointed-by"),
         }
     }
 }

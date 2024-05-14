@@ -15,7 +15,7 @@ use crate::analysis::{Config, PointsToAnalysis, ResultTrait};
 use crate::solver::{
     BasicDemandSolver, BasicHashSolver, BasicRoaringSolver, BasicSharedBitVecSolver,
     CallStringSelector, ContextInsensitiveSolver, ContextSelector, Demand,
-    DemandContextSensitiveInput, HashContextWavePropagationSolver,
+    DemandContextSensitiveInput, Demands, HashContextWavePropagationSolver,
     RoaringContextWavePropagationSolver, SharedBitVecContextWavePropagationSolver,
     SharedBitVecTidalPropagationSolver, Solver, SolverExt,
 };
@@ -133,10 +133,12 @@ fn run_test_template<S, C>(
             &solver,
             &module,
             context_selector.clone(),
-            expected_points_to
-                .iter()
-                .map(|c| Demand::PointsTo(c.0.clone()))
-                .collect(),
+            Demands::List(
+                expected_points_to
+                    .iter()
+                    .map(|c| Demand::PointsTo(c.0.clone()))
+                    .collect(),
+            ),
             &Config::default(),
         );
 

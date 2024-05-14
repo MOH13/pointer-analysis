@@ -3,7 +3,7 @@ use pointer_analysis::analysis::{Cell, Config, PointsToAnalysis};
 use pointer_analysis::solver::{
     BasicHashSolver, BasicRoaringSolver, BasicSharedBitVecSolver, CallStringSelector,
     ContextInsensitiveSelector, ContextInsensitiveSolver, ContextSelector, ContextSensitiveSolver,
-    HashContextWavePropagationSolver, RoaringContextWavePropagationSolver,
+    Demands, HashContextWavePropagationSolver, RoaringContextWavePropagationSolver,
     SharedBitVecContextWavePropagationSolver, Solver,
 };
 
@@ -33,7 +33,7 @@ where
                     &solver,
                     &module,
                     context_selector.clone(),
-                    vec![],
+                    Demands::All,
                     &Config::default(),
                 ))
             });

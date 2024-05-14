@@ -18,9 +18,8 @@ use crate::module_visitor::pointer::{
 use crate::module_visitor::structs::{StructMap, StructType};
 use crate::module_visitor::{ModuleVisitor, VarIdent};
 use crate::solver::{
-    CallSite, ConstrainedTerms, Constraint, ContextSensitiveInput, Demand,
-    DemandContextSensitiveInput, DemandInput, FunctionInput, Solver, SolverSolution, TermSetTrait,
-    TermType,
+    CallSite, ConstrainedTerms, Constraint, ContextSensitiveInput, DemandContextSensitiveInput,
+    DemandInput, Demands, FunctionInput, Solver, SolverSolution, TermSetTrait, TermType,
 };
 use crate::visualizer::Visualizable;
 
@@ -40,7 +39,7 @@ impl PointsToAnalysis {
         solver: &S,
         module: &'a Module,
         context_selector: C,
-        demands: Vec<Demand<Cell<'a>>>,
+        demands: Demands<Cell<'a>>,
         config: &Config,
     ) -> (S::Solution, Vec<Cell<'a>>)
     where
@@ -131,7 +130,7 @@ impl PointsToAnalysis {
         solver: &S,
         module: &'a Module,
         context_selector: C,
-        demands: Vec<Demand<Cell<'a>>>,
+        demands: Demands<Cell<'a>>,
         config: &Config,
     ) -> PointsToResult<'a, S::Solution>
     where
@@ -147,7 +146,7 @@ impl PointsToAnalysis {
         solver: &S,
         module: &'a Module,
         context_selector: C,
-        demands: Vec<Demand<Cell<'a>>>,
+        demands: Demands<Cell<'a>>,
         config: &Config,
         dot_output_path: &str,
     ) -> PointsToResult<'a, S::Solution>

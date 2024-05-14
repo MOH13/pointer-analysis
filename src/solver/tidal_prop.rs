@@ -18,6 +18,7 @@ use super::{
     DemandContextSensitiveInput, IntegerTerm, Offsets, Solver, SolverExt, SolverSolution,
     TermSetTrait, TermType,
 };
+use crate::solver::Demands;
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
 
 #[derive(Clone)]
@@ -120,7 +121,7 @@ impl<T, S, C: ContextSelector> TidalPropagationSolverState<T, S, C> {
 
 impl<T, S, C> TidalPropagationSolverState<T, S, C>
 where
-    C: ContextSelector,
+    C: ContextSelector + Clone,
     T: Hash + Eq + Clone + Debug,
     S: TermSetTrait<Term = u32> + Debug,
 {
@@ -794,7 +795,7 @@ where
     }
 }
 
-fn offsetable_terms<T, C: ContextSelector>(
+fn offsetable_terms<T, C: ContextSelector + Clone>(
     term: IntegerTerm,
     context_state: &ContextState<T, C>,
     abstract_rev_offsets: &[SmallVec<[u32; 2]>],
@@ -839,10 +840,7 @@ where
     type Solution = TidalPropagationSolverState<T, S, C>;
 
     fn solve(&self, input: DemandContextSensitiveInput<T, C>) -> Self::Solution {
-        let global = input.input.global.clone();
-        // let entrypoints = input.input.entrypoints.clone();
-
-        let (context_state, function_term_infos) = ContextState::from_context_input(input.input);
+        let (context_state, fun_term_infos) = ContextState::from_context_input(&input.input);
         let empty_context = context_state.context_selector.empty();
 
         let num_terms = context_state.num_concrete_terms();
@@ -863,7 +861,9 @@ where
         let mut term_types = vec![TermType::Basic; num_terms];
         let mut abstract_rev_offsets = vec![SmallVec::new(); num_abstract];
 
-        let global_term_types_iter = global
+        let global_term_types_iter = input
+            .input
+            .global
             .term_types
             .iter()
             .map(|(t, tt)| (context_state.input_to_abstract(t), *tt));
@@ -885,8 +885,8 @@ where
             }
         }
 
-        for (i, function_term_info) in function_term_infos.into_iter().enumerate() {
-            let fun_term = (global.terms.len() + i) as IntegerTerm;
+        for (i, function_term_info) in fun_term_infos.iter().enumerate() {
+            let fun_term = (input.input.global.terms.len() + i) as IntegerTerm;
             term_types[fun_term as usize] = function_term_info.term_type;
             edges.add_constraint(
                 Constraint::Inclusion {
@@ -921,31 +921,71 @@ where
             new_incoming: vec![],
         };
 
-        for c in global.constraints {
+        for c in &input.input.global.constraints {
             state.add_constraint(
-                state.context_state.mapping.translate_constraint(&c),
+                state.context_state.mapping.translate_constraint(c),
                 empty_context.clone(),
             );
         }
 
-        for demand in input.demands {
-            match demand {
-                Demand::PointsTo(term) => {
-                    let abstract_term = state.context_state.mapping.term_to_integer(&term);
-                    state
-                        .abstract_points_to_queries
-                        .set(abstract_term as usize, true);
-                    if let Some(term) = state.context_state.term_to_concrete_global(&term) {
-                        state.new_points_to_queries.push(term);
+        match input.demands {
+            Demands::All => {
+                state.abstract_points_to_queries = bitvec::bitvec![1; num_abstract_terms];
+                for term in 0..num_terms as u32 {
+                    state.new_points_to_queries.push(term);
+                }
+            }
+            Demands::CallGraphPointsTo => {
+                let function_constraints = input
+                    .input
+                    .functions
+                    .iter()
+                    .flat_map(|f| &f.constrained_terms.constraints);
+                for constraint in input
+                    .input
+                    .global
+                    .constraints
+                    .iter()
+                    .chain(function_constraints)
+                {
+                    if let Constraint::CallDummy { cond_node, .. } = constraint {
+                        let abstract_term = state.context_state.mapping.term_to_integer(cond_node);
+                        state
+                            .abstract_points_to_queries
+                            .set(abstract_term as usize, true);
+                        if let Some(term) = state.context_state.term_to_concrete_global(cond_node) {
+                            state.new_points_to_queries.push(term);
+                        }
                     }
                 }
-                Demand::PointedBy(term) => {
-                    let abstract_term = state.context_state.mapping.term_to_integer(&term);
-                    state
-                        .abstract_pointed_by_queries
-                        .set(abstract_term as usize, true);
-                    if let Some(term) = state.context_state.term_to_concrete_global(&term) {
-                        state.new_pointed_by_queries.push(term);
+            }
+            Demands::CallGraphPointedBy => {
+                for i in 0..fun_term_infos.len() {
+                    let fun_term = (input.input.global.terms.len() + i) as IntegerTerm;
+                    state.new_pointed_by_queries.push(fun_term);
+                }
+            }
+            Demands::List(demands) => {
+                for demand in demands {
+                    match demand {
+                        Demand::PointsTo(term) => {
+                            let abstract_term = state.context_state.mapping.term_to_integer(&term);
+                            state
+                                .abstract_points_to_queries
+                                .set(abstract_term as usize, true);
+                            if let Some(term) = state.context_state.term_to_concrete_global(&term) {
+                                state.new_points_to_queries.push(term);
+                            }
+                        }
+                        Demand::PointedBy(term) => {
+                            let abstract_term = state.context_state.mapping.term_to_integer(&term);
+                            state
+                                .abstract_pointed_by_queries
+                                .set(abstract_term as usize, true);
+                            if let Some(term) = state.context_state.term_to_concrete_global(&term) {
+                                state.new_pointed_by_queries.push(term);
+                            }
+                        }
                     }
                 }
             }
@@ -982,7 +1022,7 @@ impl<T, S, C> SolverSolution for TidalPropagationSolverState<T, S, C>
 where
     T: Hash + Eq + Clone + Debug,
     S: TermSetTrait<Term = IntegerTerm> + Debug,
-    C: ContextSelector,
+    C: ContextSelector + Clone,
 {
     type Term = T;
     type TermSet = HashSet<T>;
@@ -1266,7 +1306,7 @@ impl<T, S, C> Graph for TidalPropagationSolverState<T, S, C>
 where
     T: Display + Debug + Clone + PartialEq + Eq + Hash,
     S: TermSetTrait<Term = IntegerTerm> + Debug,
-    C: ContextSelector,
+    C: ContextSelector + Clone,
     C::Context: Display,
 {
     type Node = TidalPropagationNode<T, C::Context>;
@@ -1372,7 +1412,7 @@ mod tests {
     use crate::module_visitor::VarIdent;
     use crate::solver::tidal_prop::get_representative_no_mutation;
     use crate::solver::{
-        try_offset_term, ContextInsensitiveSelector, Demand, IntegerTerm, TermSetTrait,
+        try_offset_term, ContextInsensitiveSelector, Demand, Demands, IntegerTerm, TermSetTrait,
     };
 
     use super::{offsetable_terms, SharedBitVecTidalPropagationSolver};
@@ -1390,7 +1430,7 @@ mod tests {
             &solver,
             &module,
             ContextInsensitiveSelector,
-            demands,
+            Demands::List(demands),
             &Config::default(),
         )
         .into_solution();

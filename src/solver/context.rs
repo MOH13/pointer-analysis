@@ -276,8 +276,8 @@ where
     )
 }
 
-impl<T, C: ContextSelector> ContextState<T, C> {
-    pub fn from_context_input(input: ContextSensitiveInput<T, C>) -> (Self, Vec<FunctionTermInfo>)
+impl<T, C: ContextSelector + Clone> ContextState<T, C> {
+    pub fn from_context_input(input: &ContextSensitiveInput<T, C>) -> (Self, Vec<FunctionTermInfo>)
     where
         T: Hash + Eq + Clone + Debug,
     {
@@ -311,7 +311,7 @@ impl<T, C: ContextSelector> ContextState<T, C> {
             templates,
             function_term_functions,
             instantiated_contexts,
-            context_selector: input.context_selector,
+            context_selector: input.context_selector.clone(),
             abstract_indices,
         };
 
@@ -402,6 +402,10 @@ impl<T, C: ContextSelector> ContextState<T, C> {
             }
             None => self.context_selector.empty(),
         }
+    }
+
+    pub fn is_function_term(&self, term: IntegerTerm) -> bool {
+        self.function_term_functions.contains_key(&term)
     }
 
     pub fn input_to_abstract(&self, term: &T) -> IntegerTerm

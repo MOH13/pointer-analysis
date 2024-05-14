@@ -195,7 +195,7 @@ macro_rules! cstr {
 
 pub type IntegerTerm = u32;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Demand<T> {
     PointsTo(T),
     PointedBy(T),
@@ -427,7 +427,7 @@ pub type ContextInsensitiveInput<T> = ConstrainedTerms<T>;
 #[derive(Clone, Debug)]
 pub struct DemandInput<T, I> {
     pub input: I,
-    pub demands: Vec<Demand<T>>,
+    pub demands: Demands<T>,
 }
 
 impl<T, I> SolverInput for DemandInput<T, I>
@@ -439,6 +439,14 @@ where
 
 impl<T> SolverInput for ContextInsensitiveInput<T> {
     type Term = T;
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Demands<T> {
+    All,
+    CallGraphPointsTo,
+    CallGraphPointedBy,
+    List(Vec<Demand<T>>),
 }
 
 pub trait SolverSolution {

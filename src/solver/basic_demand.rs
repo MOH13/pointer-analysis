@@ -11,7 +11,7 @@ use smallvec::SmallVec;
 use super::context::{ContextState, TemplateTerm};
 use super::{
     try_offset_term, CallSite, Constraint, ContextSelector, Demand, DemandContextSensitiveInput,
-    IntegerTerm, Offsets, Solver, SolverExt, SolverSolution, TermType,
+    Demands, IntegerTerm, Offsets, Solver, SolverExt, SolverSolution, TermType,
 };
 use crate::util::GetTwoMutExt;
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
@@ -58,15 +58,12 @@ impl SolverExt for BasicDemandSolver {}
 impl<T, C> Solver<DemandContextSensitiveInput<T, C>> for BasicDemandSolver
 where
     T: Hash + Eq + Clone + Debug,
-    C: ContextSelector,
+    C: ContextSelector + Clone,
 {
     type Solution = BasicDemandSolverState<T, C>;
 
     fn solve(&self, input: DemandContextSensitiveInput<T, C>) -> Self::Solution {
-        let global = input.input.global.clone();
-        // let entrypoints = input.input.entrypoints.clone();
-
-        let (context_state, fun_term_infos) = ContextState::from_context_input(input.input);
+        let (context_state, fun_term_infos) = ContextState::from_context_input(&input.input);
         let empty_context = context_state.context_selector.empty();
 
         let num_terms = context_state.num_concrete_terms();
@@ -75,7 +72,9 @@ where
         let mut term_types = vec![TermType::Basic; num_terms];
         let mut abstract_rev_offsets = vec![SmallVec::new(); num_abstract];
 
-        let global_term_types_iter = global
+        let global_term_types_iter = input
+            .input
+            .global
             .term_types
             .iter()
             .map(|(t, tt)| (context_state.mapping.term_to_integer(t), *tt));
@@ -110,13 +109,13 @@ where
             rev_addr_ofs: vec![SmallVec::new(); num_terms],
         };
 
-        for c in global.constraints {
-            let constraint = context_state.mapping.translate_constraint(&c);
+        for c in &input.input.global.constraints {
+            let constraint = context_state.mapping.translate_constraint(c);
             edges.add_constraint(constraint, empty_context.clone());
         }
 
-        for (i, fun_term_info) in fun_term_infos.into_iter().enumerate() {
-            let fun_term = (global.terms.len() + i) as IntegerTerm;
+        for (i, fun_term_info) in fun_term_infos.iter().enumerate() {
+            let fun_term = (input.input.global.terms.len() + i) as IntegerTerm;
             term_types[fun_term as usize] = fun_term_info.term_type;
             edges.add_constraint(
                 Constraint::Inclusion {
@@ -141,32 +140,90 @@ where
             abstract_pointed_by_queries: bitvec::bitvec![0; num_abstract_terms],
         };
 
-        for demand in input.demands {
-            match demand {
-                Demand::PointsTo(term) => {
-                    let abstract_term = state.context_state.mapping.term_to_integer(&term);
-                    state
-                        .abstract_points_to_queries
-                        .set(abstract_term as usize, true);
-                    if let Some(term) = state.context_state.term_to_concrete_global(&term) {
-                        add_points_to_query(
-                            term,
-                            &mut state.points_to_queries,
-                            &mut state.worklist,
-                        );
+        match input.demands {
+            Demands::All => {
+                state.abstract_points_to_queries = bitvec::bitvec![1; num_abstract_terms];
+                state.points_to_queries = bitvec::bitvec![1; num_terms];
+                // We wont end up calling handle_points_to on these terms, so we need to do
+                // the relevant stuff here (but we don't need to worry about making pointed by
+                // queries)
+                for node in 0..num_terms as u32 {
+                    for &term in &state.edges.rev_addr_ofs[node as usize] {
+                        if state.edges.sols[node as usize].insert(term) {
+                            state
+                                .worklist
+                                .push_back(WorklistEntry::Inserted(node, term));
+                        }
                     }
                 }
-                Demand::PointedBy(term) => {
-                    let abstract_term = state.context_state.mapping.term_to_integer(&term);
-                    state
-                        .abstract_pointed_by_queries
-                        .set(abstract_term as usize, true);
-                    if let Some(term) = state.context_state.term_to_concrete_global(&term) {
-                        add_pointed_by_query(
-                            term,
-                            &mut state.points_to_queries,
-                            &mut state.worklist,
-                        );
+            }
+            Demands::CallGraphPointsTo => {
+                let function_constraints = input
+                    .input
+                    .functions
+                    .iter()
+                    .flat_map(|f| &f.constrained_terms.constraints);
+                for constraint in input
+                    .input
+                    .global
+                    .constraints
+                    .iter()
+                    .chain(function_constraints)
+                {
+                    if let Constraint::CallDummy { cond_node, .. } = constraint {
+                        let abstract_term = state.context_state.mapping.term_to_integer(cond_node);
+                        state
+                            .abstract_points_to_queries
+                            .set(abstract_term as usize, true);
+                        if let Some(term) = state.context_state.term_to_concrete_global(cond_node) {
+                            add_points_to_query(
+                                term,
+                                &mut state.points_to_queries,
+                                &mut state.worklist,
+                            );
+                        }
+                    }
+                }
+            }
+            Demands::CallGraphPointedBy => {
+                for i in 0..fun_term_infos.len() {
+                    let fun_term = (input.input.global.terms.len() + i) as IntegerTerm;
+                    add_pointed_by_query(
+                        fun_term,
+                        &mut state.pointed_by_queries,
+                        &mut state.worklist,
+                    );
+                }
+            }
+            Demands::List(demands) => {
+                for demand in demands {
+                    match demand {
+                        Demand::PointsTo(term) => {
+                            let abstract_term = state.context_state.mapping.term_to_integer(&term);
+                            state
+                                .abstract_points_to_queries
+                                .set(abstract_term as usize, true);
+                            if let Some(term) = state.context_state.term_to_concrete_global(&term) {
+                                add_points_to_query(
+                                    term,
+                                    &mut state.points_to_queries,
+                                    &mut state.worklist,
+                                );
+                            }
+                        }
+                        Demand::PointedBy(term) => {
+                            let abstract_term = state.context_state.mapping.term_to_integer(&term);
+                            state
+                                .abstract_pointed_by_queries
+                                .set(abstract_term as usize, true);
+                            if let Some(term) = state.context_state.term_to_concrete_global(&term) {
+                                add_pointed_by_query(
+                                    term,
+                                    &mut state.pointed_by_queries,
+                                    &mut state.worklist,
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -416,7 +473,7 @@ macro_rules! propagate_edge_all {
 impl<T, C> BasicDemandSolverState<T, C>
 where
     T: Hash + Eq + Clone + Debug,
-    C: ContextSelector,
+    C: ContextSelector + Clone,
 {
     fn solve(&mut self) {
         while let Some(entry) = self.worklist.pop_front() {
@@ -478,9 +535,6 @@ where
             if relative_index >= template.num_return_terms
                 && relative_index < template.num_return_terms + template.num_parameter_terms
             {
-                if self.context_state.templates[0].start_index + fun_index == 5382 {
-                    println!("param term: {}", x);
-                }
                 add_pointed_by_query(
                     self.context_state.templates[0].start_index + fun_index,
                     &mut self.pointed_by_queries,
@@ -588,7 +642,11 @@ where
                         cond.offset,
                         &cond.context,
                     ) {
-                        add_edge!(self, offset_term, cond.right, 0);
+                        if !self.context_state.is_function_term(offset_term)
+                            && !self.context_state.is_function_term(cond.right)
+                        {
+                            add_edge!(self, offset_term, cond.right, 0);
+                        }
                     }
                 }
                 Cond::Right(cond) => {
@@ -598,7 +656,11 @@ where
                         cond.offset,
                         &cond.context,
                     ) {
-                        add_edge!(self, cond.left, offset_term, 0);
+                        if !self.context_state.is_function_term(offset_term)
+                            && !self.context_state.is_function_term(cond.left)
+                        {
+                            add_edge!(self, cond.left, offset_term, 0);
+                        }
                     }
                 }
                 Cond::Dummy(cond) => {
@@ -751,9 +813,6 @@ where
             let num_return_terms =
                 self.context_state.templates[fun_index as usize].num_return_terms;
             if relative_index < num_return_terms {
-                if self.context_state.templates[0].start_index + fun_index == 5382 {
-                    println!("return term: {}", term);
-                }
                 add_pointed_by_query(
                     self.context_state.templates[0].start_index + fun_index,
                     &mut self.pointed_by_queries,
@@ -775,13 +834,18 @@ where
 impl<T, C> SolverSolution for BasicDemandSolverState<T, C>
 where
     T: Hash + Eq + Clone + Debug,
-    C: ContextSelector,
+    C: ContextSelector + Clone,
 {
     type Term = T;
 
     type TermSet = HashSet<T>;
 
     fn get(&self, term: &Self::Term) -> Self::TermSet {
+        // let abstract_term = self.context_state.mapping.term_to_integer(term);
+        // if !self.abstract_points_to_queries[abstract_term as usize] {
+        //     return HashSet::new();
+        // }
+
         let (fun_index, relative_index) = self
             .context_state
             .get_function_and_relative_index_from_term(term);
@@ -943,7 +1007,7 @@ where
 impl<T, C> BasicDemandSolverState<T, C>
 where
     T: Hash + Eq + Clone + Debug,
-    C: ContextSelector,
+    C: ContextSelector + Clone,
 {
     fn concrete_index_to_graph_node(
         &self,
@@ -962,7 +1026,7 @@ where
 impl<T, C> Graph for BasicDemandSolverState<T, C>
 where
     T: Hash + Eq + Clone + Display + Debug,
-    C: ContextSelector,
+    C: ContextSelector + Clone,
 {
     type Node = BasicDemandSolverNode<T, C::Context>;
     type Weight = OffsetWeight;
