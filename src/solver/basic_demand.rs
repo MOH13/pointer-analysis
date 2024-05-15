@@ -142,19 +142,9 @@ where
 
         match input.demands {
             Demands::All => {
-                state.abstract_points_to_queries = bitvec::bitvec![1; num_abstract_terms];
-                state.points_to_queries = bitvec::bitvec![1; num_terms];
-                // We wont end up calling handle_points_to on these terms, so we need to do
-                // the relevant stuff here (but we don't need to worry about making pointed by
-                // queries)
-                for node in 0..num_terms as u32 {
-                    for &term in &state.edges.rev_addr_ofs[node as usize] {
-                        if state.edges.sols[node as usize].insert(term) {
-                            state
-                                .worklist
-                                .push_back(WorklistEntry::Inserted(node, term));
-                        }
-                    }
+                state.abstract_pointed_by_queries = bitvec::bitvec![1; num_abstract_terms];
+                for term in 0..num_terms as u32 {
+                    add_pointed_by_query(term, &mut state.pointed_by_queries, &mut state.worklist);
                 }
             }
             Demands::CallGraphPointsTo => {

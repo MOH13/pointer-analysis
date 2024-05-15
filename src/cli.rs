@@ -59,12 +59,7 @@ pub struct Args {
     #[arg(short, long, default_value_t = DemandMode::All)]
     pub demand_mode: DemandMode,
     /// The kind of call graph analysis to run, requires --demand-mode call-graph
-    #[arg(
-        short = 'g',
-        long,
-        requires = "demand_mode",
-        default_value_t = CallGraphMode::PointedBy
-    )]
+    #[arg(short = 'g', long, default_value_t = CallGraphMode::PointedBy)]
     pub call_graph_mode: CallGraphMode,
     ///
     #[arg(short, long, default_value_t = false)]
