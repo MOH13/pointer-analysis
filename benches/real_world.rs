@@ -11,7 +11,7 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 fn bench_template<S, C>(name: &str, solver: S, context_selector: C, c: &mut Criterion)
 where
-    for<'a> S: ContextSensitiveSolver<Cell<'a>, C>,
+    S: ContextSensitiveSolver<Cell, C>,
     C: ContextSelector + Clone,
 {
     let solver = solver.as_demand_driven();

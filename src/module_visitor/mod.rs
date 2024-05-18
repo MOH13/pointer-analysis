@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::fmt::{self, Display, Formatter};
 use std::rc::Rc;
 use std::str::FromStr;
@@ -77,13 +76,13 @@ pub trait ModuleVisitor<'a> {
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum VarIdent<'a> {
+pub enum VarIdent {
     Local {
-        reg_name: Cow<'a, Name>,
-        fun_name: Cow<'a, str>,
+        reg_name: Rc<Name>,
+        fun_name: Rc<str>,
     },
     Global {
-        name: Cow<'a, str>,
+        name: Rc<str>,
     },
     Fresh {
         index: usize,
@@ -94,12 +93,15 @@ pub enum VarIdent<'a> {
     },
 }
 
-impl<'a> VarIdent<'a> {
-    pub fn new_local(reg_name: &'a Name, fun_name: &'a str) -> Self {
+impl VarIdent {
+    pub fn new_local(reg_name: &Name, fun_name: &str) -> Self {
         Self::Local {
-            reg_name: Cow::Borrowed(reg_name),
-            fun_name: Cow::Borrowed(fun_name),
+            reg_name: Rc::new(reg_name.clone()),
+            fun_name: fun_name.into(),
         }
+    }
+    pub fn new_global(name: &str) -> Self {
+        Self::Global { name: name.into() }
     }
 }
 
@@ -116,7 +118,7 @@ impl<'a> VarIdent<'a> {
 //     }
 // }
 
-impl<'a> Display for VarIdent<'a> {
+impl Display for VarIdent {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             Self::Local { reg_name, fun_name } => write!(f, "{reg_name}@{fun_name}"),
@@ -127,7 +129,7 @@ impl<'a> Display for VarIdent<'a> {
     }
 }
 
-impl<'a> FromStr for VarIdent<'a> {
+impl FromStr for VarIdent {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -162,12 +164,12 @@ impl<'a> FromStr for VarIdent<'a> {
                     Err(_) => Name::Name(Box::new(reg_name.to_owned())),
                 };
                 Ok(VarIdent::Local {
-                    reg_name: Cow::Owned(name),
-                    fun_name: Cow::Owned(fun_name.to_owned()),
+                    reg_name: Rc::new(name),
+                    fun_name: fun_name.to_owned().into(),
                 })
             } else {
                 Ok(VarIdent::Global {
-                    name: Cow::Owned(s.to_owned()),
+                    name: s.to_owned().into(),
                 })
             }
         }

@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::rc::Rc;
 
 use either::Either;
@@ -23,60 +22,60 @@ use super::{
 };
 
 #[derive(Debug)]
-pub enum PointerInstruction<'a> {
+pub enum PointerInstruction {
     /// Used to simply register an ident
     Fresh {
-        ident: VarIdent<'a>,
+        ident: VarIdent,
         struct_type: Option<Rc<StructType>>,
     },
     /// x = y
     Assign {
-        dest: VarIdent<'a>,
-        value: VarIdent<'a>,
+        dest: VarIdent,
+        value: VarIdent,
         struct_type: Option<Rc<StructType>>,
     },
     /// *x = y
     Store {
-        address: VarIdent<'a>,
-        value: VarIdent<'a>,
+        address: VarIdent,
+        value: VarIdent,
         struct_type: Option<Rc<StructType>>,
     },
     /// x = *y
     Load {
-        dest: VarIdent<'a>,
-        address: VarIdent<'a>,
+        dest: VarIdent,
+        address: VarIdent,
         struct_type: Option<Rc<StructType>>,
     },
     /// x = alloca ..
     Alloca {
-        dest: VarIdent<'a>,
+        dest: VarIdent,
         struct_type: Option<Rc<StructType>>,
     },
     /// x = malloc()
-    Malloc { dest: VarIdent<'a>, single: bool },
+    Malloc { dest: VarIdent, single: bool },
     /// x = gep y, o1, o2, ..
     Gep {
-        dest: VarIdent<'a>,
-        address: VarIdent<'a>,
+        dest: VarIdent,
+        address: VarIdent,
         indices: Vec<usize>,
         struct_type: Option<Rc<StructType>>, // If none, perform 'flat' gep
     },
     /// x = \phi(y1, y2, ..)
     Phi {
-        dest: VarIdent<'a>,
-        incoming_values: Vec<VarIdent<'a>>,
+        dest: VarIdent,
+        incoming_values: Vec<VarIdent>,
         struct_type: Option<Rc<StructType>>,
     },
     /// [x =] f(y1, y2, ..)
     Call {
-        dest: Option<VarIdent<'a>>,
-        function: VarIdent<'a>,
+        dest: Option<VarIdent>,
+        function: VarIdent,
         func_type_id: u32,
-        arguments: Vec<Option<VarIdent<'a>>>,
+        arguments: Vec<Option<VarIdent>>,
         return_struct_type: Option<Rc<StructType>>,
     },
     /// return x
-    Return { return_reg: VarIdent<'a> },
+    Return { return_reg: VarIdent },
 }
 
 #[derive(Clone, Copy)]
@@ -95,7 +94,7 @@ impl<'a> PointerContext<'a> {
 type FunctionType<'a> = (TypeRef, Box<[TypeRef]>);
 
 pub struct PointerModuleVisitor<'a, 'b, O> {
-    original_ptr_types: HashMap<Option<&'a str>, HashMap<VarIdent<'a>, Rc<StructType>>>,
+    original_ptr_types: HashMap<Option<&'a str>, HashMap<VarIdent, Rc<StructType>>>,
     func_type_indices: HashMap<FunctionType<'a>, u32>,
     func_type_counter: u32,
     std_functions: HashSet<&'a str>,
@@ -128,7 +127,7 @@ where
         }
     }
 
-    fn add_fresh_ident(&mut self) -> VarIdent<'a> {
+    fn add_fresh_ident(&mut self) -> VarIdent {
         let ident = VarIdent::Fresh {
             index: self.fresh_counter,
         };
@@ -140,7 +139,7 @@ where
         &mut self,
         operand: &'a Operand,
         context: Context<'a, '_>,
-    ) -> Option<(VarIdent<'a>, Rc<StructType>)> {
+    ) -> Option<(VarIdent, Rc<StructType>)> {
         if let Some((ident, ty, ..)) = self.get_operand_ident_type(operand, context) {
             let pointer_context = PointerContext::from_context(context);
             let struct_type = self
@@ -163,7 +162,7 @@ where
         &mut self,
         constant: &'a ConstantRef,
         context: Context<'a, '_>,
-    ) -> (Option<VarIdent<'a>>, TypeRef, usize) {
+    ) -> (Option<VarIdent>, TypeRef, usize) {
         let pointer_context = PointerContext::from_context(context);
 
         match constant.as_ref() {
@@ -204,9 +203,7 @@ where
             Constant::Vector(elements) => self.unroll_array(elements, None, context),
 
             Constant::GlobalReference { name, ty } => {
-                let ident = VarIdent::Global {
-                    name: Cow::Borrowed(name),
-                };
+                let ident = VarIdent::new_global(name);
 
                 (Some(ident), context.module.types.pointer_to(ty.clone()), 0)
             }
@@ -393,7 +390,7 @@ where
         elements: &'a [ConstantRef],
         element_type: Option<TypeRef>,
         context: Context<'a, '_>,
-    ) -> (Option<VarIdent<'a>>, TypeRef, usize) {
+    ) -> (Option<VarIdent>, TypeRef, usize) {
         let pointer_context = PointerContext::from_context(context);
 
         let mut fresh = None;
@@ -417,7 +414,7 @@ where
         &mut self,
         operand: &'a Operand,
         context: Context<'a, '_>,
-    ) -> Option<(VarIdent<'a>, TypeRef, usize)> {
+    ) -> Option<(VarIdent, TypeRef, usize)> {
         let function = context
             .function
             .expect("Expected to be called in a function");
@@ -443,7 +440,7 @@ where
 
     fn handle_unused_fresh(
         &mut self,
-        ident: VarIdent<'a>,
+        ident: VarIdent,
         struct_type: Option<Rc<StructType>>,
         pointer_context: PointerContext<'a>,
     ) {
@@ -571,8 +568,8 @@ where
         &mut self,
         function: &str,
         arguments: &'a [(Operand, Vec<ParameterAttribute>)],
-        argument_idents: &Vec<Option<VarIdent<'a>>>,
-        dest: Option<VarIdent<'a>>,
+        argument_idents: &Vec<Option<VarIdent>>,
+        dest: Option<VarIdent>,
         dest_struct_type: Option<Rc<StructType>>,
         context: Context<'a, '_>,
     ) {
@@ -635,12 +632,7 @@ where
         }
     }
 
-    fn handle_malloc(
-        &mut self,
-        dest: Option<VarIdent<'a>>,
-        single: bool,
-        context: PointerContext<'a>,
-    ) {
+    fn handle_malloc(&mut self, dest: Option<VarIdent>, single: bool, context: PointerContext<'a>) {
         let instr = PointerInstruction::Malloc {
             dest: dest.expect("malloc should have a destination"),
             single,
@@ -650,9 +642,9 @@ where
 
     fn handle_join(
         &mut self,
-        dest: VarIdent<'a>,
-        x: VarIdent<'a>,
-        y: VarIdent<'a>,
+        dest: VarIdent,
+        x: VarIdent,
+        y: VarIdent,
         struct_type: Option<Rc<StructType>>,
         context: PointerContext<'a>,
     ) {
@@ -662,8 +654,8 @@ where
 
     fn handle_assign(
         &mut self,
-        dest: VarIdent<'a>,
-        value: VarIdent<'a>,
+        dest: VarIdent,
+        value: VarIdent,
         struct_type: Option<Rc<StructType>>,
         context: PointerContext<'a>,
     ) {
@@ -677,8 +669,8 @@ where
 
     fn handle_memcpy(
         &mut self,
-        dest: VarIdent<'a>,
-        src: VarIdent<'a>,
+        dest: VarIdent,
+        src: VarIdent,
         struct_type: Rc<StructType>,
         pointer_context: PointerContext<'a>,
     ) {
@@ -701,9 +693,9 @@ where
 
     fn handle_bitcast(
         &mut self,
-        dest: VarIdent<'a>,
-        value: VarIdent<'a>,
-        dest_ty: TypeRef,
+        dest: VarIdent,
+        value: VarIdent,
+        _dest_ty: TypeRef,
         src_ty: TypeRef,
         context: Context<'a, '_>,
     ) {
@@ -749,8 +741,8 @@ where
 
     fn handle_extract_value(
         &mut self,
-        dest: VarIdent<'a>,
-        base: VarIdent<'a>,
+        dest: VarIdent,
+        base: VarIdent,
         indices: &[u32],
         degree: usize,
         ty: TypeRef,
@@ -783,9 +775,9 @@ where
 
     fn handle_insert_value(
         &mut self,
-        dest: VarIdent<'a>,
-        base: VarIdent<'a>,
-        value: VarIdent<'a>,
+        dest: VarIdent,
+        base: VarIdent,
+        value: VarIdent,
         indices: &[u32],
         base_degree: usize,
         base_ty: TypeRef,
@@ -812,8 +804,8 @@ where
 
     fn handle_gep(
         &mut self,
-        dest: VarIdent<'a>,
-        address: VarIdent<'a>,
+        dest: VarIdent,
+        address: VarIdent,
         indices: &[Option<usize>],
         degree: usize,
         ty: TypeRef,
@@ -855,9 +847,7 @@ where
         return_type: TypeRef,
         context: Context<'a, '_>,
     ) {
-        let ident = VarIdent::Global {
-            name: Cow::Owned(String::from(name)),
-        };
+        let ident = VarIdent::new_global(name);
         let parameter_idents = parameters
             .iter()
             .map(|p| VarIdent::new_local(&p.name, name))
@@ -924,13 +914,8 @@ where
         };
 
         let struct_type = StructType::try_from_type(ty.clone(), context.structs);
-        self.observer.handle_ptr_global(
-            VarIdent::Global {
-                name: Cow::Borrowed(&global.name),
-            },
-            init_ref,
-            struct_type,
-        );
+        self.observer
+            .handle_ptr_global(VarIdent::new_global(&global.name), init_ref, struct_type);
     }
 
     fn handle_instruction(&mut self, instr: &'a Instruction, context: Context<'a, '_>) {
@@ -1304,22 +1289,18 @@ pub trait PointerModuleObserver<'a> {
     fn handle_ptr_function(
         &mut self,
         fun_name: &'a str,
-        name: VarIdent<'a>,
+        name: VarIdent,
         type_index: u32,
-        parameters: Vec<VarIdent<'a>>,
+        parameters: Vec<VarIdent>,
         return_struct_type: Option<Rc<StructType>>,
     );
     fn handle_ptr_global(
         &mut self,
-        ident: VarIdent<'a>,
-        init_ref: Option<VarIdent<'a>>,
+        ident: VarIdent,
+        init_ref: Option<VarIdent>,
         struct_type: Option<Rc<StructType>>,
     );
-    fn handle_ptr_instruction(
-        &mut self,
-        instr: PointerInstruction<'a>,
-        context: PointerContext<'a>,
-    );
+    fn handle_ptr_instruction(&mut self, instr: PointerInstruction, context: PointerContext<'a>);
 }
 
 fn get_reduced_indices(
@@ -1348,11 +1329,11 @@ fn get_reduced_indices(
 }
 
 fn get_field_ident_type<'a>(
-    base: VarIdent<'a>,
+    base: VarIdent,
     struct_type: &StructType,
     indices: &[u32],
     degree: usize,
-) -> (VarIdent<'a>, TypeRef, usize) {
+) -> (VarIdent, TypeRef, usize) {
     let indices: Vec<_> = indices.iter().map(|&i| Some(i as usize)).collect();
     let (reduced_indices, field_ty, field_degree) =
         get_reduced_indices(struct_type, &indices, degree);

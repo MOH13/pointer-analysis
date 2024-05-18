@@ -73,9 +73,7 @@ fn compile_llvm(config_dir: &Path, llvm_path: &String) -> PathBuf {
     bc_path
 }
 
-fn parse_points_to<'a>(
-    points_to: HashMap<String, Vec<String>>,
-) -> HashMap<Cell<'a>, HashSet<Cell<'a>>> {
+fn parse_points_to(points_to: HashMap<String, Vec<String>>) -> HashMap<Cell, HashSet<Cell>> {
     points_to
         .iter()
         .map(|(cell, pointees)| {
@@ -96,7 +94,7 @@ fn run_test_template<S, C>(
     context_selector: C,
     test_all_combinations: bool,
 ) where
-    for<'a> S: Solver<DemandContextSensitiveInput<Cell<'a>, C>> + Sized,
+    S: Solver<DemandContextSensitiveInput<Cell, C>> + Sized,
     C: ContextSelector + Clone,
 {
     dbg!(resource);

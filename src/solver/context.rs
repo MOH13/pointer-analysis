@@ -433,6 +433,10 @@ impl<T, C: ContextSelector + Clone> ContextState<T, C> {
         self.mapping.integer_to_term(term)
     }
 
+    pub fn num_abstract_terms(&self) -> usize {
+        self.mapping.terms.len()
+    }
+
     pub fn num_concrete_terms(&self) -> usize {
         self.abstract_indices.len()
     }

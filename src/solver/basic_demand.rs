@@ -237,21 +237,6 @@ enum WorklistEntry<T = IntegerTerm> {
     InsertedSkipUnweighted(T, T),
 }
 
-impl<T> WorklistEntry<T> {
-    fn map_terms<U, F>(&self, mut f: F) -> WorklistEntry<U>
-    where
-        F: FnMut(&T) -> U,
-    {
-        match self {
-            WorklistEntry::Demand(demand) => WorklistEntry::Demand(demand.map_term(f)),
-            WorklistEntry::Inserted(t1, t2) => WorklistEntry::Inserted(f(t1), f(t2)),
-            WorklistEntry::InsertedSkipUnweighted(t1, t2) => {
-                WorklistEntry::InsertedSkipUnweighted(f(t1), f(t2))
-            }
-        }
-    }
-}
-
 pub struct BasicDemandSolverState<T, C: ContextSelector> {
     context_state: ContextState<T, C>,
     worklist: VecDeque<WorklistEntry>,

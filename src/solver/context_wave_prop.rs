@@ -13,7 +13,7 @@ use super::context::{ContextState, TemplateTerm};
 use super::shared_bitvec::SharedBitVec;
 use super::{
     edges_between, try_offset_term, CallSite, Constraint, ContextSelector, ContextSensitiveInput,
-    IntegerTerm, Offsets, Solver, SolverExt, SolverSolution, TermSetTrait, TermType,
+    IntegerTerm, Offsets, OnlyOnceStack, Solver, SolverExt, SolverSolution, TermSetTrait, TermType,
 };
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
 
@@ -88,7 +88,14 @@ where
             println!("Iteration {iters}");
         }
 
-        println!("SCC count: {}", self.top_order.len());
+        println!(
+            "SCC count: {}",
+            self.parents
+                .iter()
+                .enumerate()
+                .filter(|(child, parent)| *child == **parent as usize)
+                .count()
+        );
         println!("Iterations: {}", iters);
     }
 
@@ -102,7 +109,7 @@ where
             changed = true;
             let p_dif = self.edges.sols[v as usize].weak_difference(&self.edges.p_old[v as usize]);
             let p_dif_vec = Lazy::new(|| p_dif.iter().collect::<Vec<IntegerTerm>>());
-            self.edges.p_old[v as usize].clone_from(&self.edges.sols[v as usize]);
+            self.edges.p_old[v as usize].union_assign(&p_dif);
 
             for (&w, offsets) in &self.edges.subset[v as usize] {
                 for o in offsets.iter() {
@@ -418,13 +425,59 @@ where
             );
         }
 
-        for entrypoint in input.entrypoints {
+        // for entrypoint in entrypoints {
+        //     state.get_or_instantiate_function(entrypoint, empty_context.clone());
+        // }
+        for entrypoint in 0..state.context_state.templates.len() {
             state.get_or_instantiate_function(entrypoint, empty_context.clone());
         }
 
         state.run_wave_propagation();
 
         state
+    }
+}
+
+impl<T, S, C> ContextWavePropagationSolverState<T, S, C>
+where
+    T: Hash + Eq + Clone + Debug,
+    S: TermSetTrait<Term = IntegerTerm> + Debug,
+    C: ContextSelector + Clone,
+{
+    fn get_stack(&self, term: &T) -> OnlyOnceStack {
+        let (fun_index, relative_index) = self
+            .context_state
+            .get_function_and_relative_index_from_term(term);
+
+        let mut stack = OnlyOnceStack::new(self.context_state.num_abstract_terms());
+
+        match fun_index {
+            Some(i) => {
+                let iter = self.context_state.instantiated_contexts[i as usize]
+                    .iter()
+                    .flat_map(|(_, start_index)| {
+                        let concrete_index = start_index + relative_index;
+                        self.edges.sols
+                            [get_representative_no_mutation(&self.parents, concrete_index) as usize]
+                            .iter()
+                    })
+                    .map(|concrete_index| self.context_state.concrete_to_abstract(concrete_index));
+                for term in iter {
+                    stack.push(term);
+                }
+            }
+            None => {
+                let iter = self.edges.sols
+                    [get_representative_no_mutation(&self.parents, relative_index) as usize]
+                    .iter()
+                    .map(|concrete_index| self.context_state.concrete_to_abstract(concrete_index));
+                for term in iter {
+                    stack.push(term);
+                }
+            }
+        }
+
+        stack
     }
 }
 
@@ -438,27 +491,19 @@ where
     type TermSet = HashSet<T>;
 
     fn get(&self, term: &T) -> Self::TermSet {
-        let (fun_index, relative_index) = self
-            .context_state
-            .get_function_and_relative_index_from_term(term);
+        let stack = self.get_stack(term);
 
-        match fun_index {
-            Some(i) => self.context_state.instantiated_contexts[i as usize]
-                .iter()
-                .flat_map(|(_, start_index)| {
-                    let concrete_index = start_index + relative_index;
-                    self.edges.sols
-                        [get_representative_no_mutation(&self.parents, concrete_index) as usize]
-                        .iter()
-                })
-                .map(|concrete_index| self.context_state.concrete_to_input(concrete_index))
-                .collect(),
-            None => self.edges.sols
-                [get_representative_no_mutation(&self.parents, relative_index) as usize]
-                .iter()
-                .map(|concrete_index| self.context_state.concrete_to_input(concrete_index))
-                .collect(),
-        }
+        HashSet::from_iter(
+            stack
+                .into_iter()
+                .map(|term| self.context_state.abstract_to_input(term)),
+        )
+    }
+
+    fn get_len(&self, term: &T) -> usize {
+        let stack = self.get_stack(term);
+
+        stack.len()
     }
 }
 

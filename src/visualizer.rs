@@ -175,6 +175,10 @@ where
     fn get(&self, node: &Self::Term) -> Self::TermSet {
         self.deref().get(node)
     }
+
+    fn get_len(&self, node: &Self::Term) -> usize {
+        self.deref().get_len(node)
+    }
 }
 
 impl<'s, T> Visualizable for DynamicVisualizableSolution<'s, T>
@@ -252,6 +256,10 @@ where
 
     fn get(&self, node: &Self::Term) -> Self::TermSet {
         self.0.get(node)
+    }
+
+    fn get_len(&self, node: &Self::Term) -> usize {
+        self.0.get_len(node)
     }
 }
 

@@ -21,7 +21,7 @@ use std::io::Write;
 
 const STRING_FILTER: &'static str = ".str.";
 
-fn get_demands<'a>(args: &Args) -> Demands<Cell<'a>> {
+fn get_demands(args: &Args) -> Demands<Cell> {
     match args.demand_mode {
         DemandMode::All => Demands::All,
         DemandMode::CallGraph => match args.call_graph_mode {
@@ -44,15 +44,22 @@ fn get_demands<'a>(args: &Args) -> Demands<Cell<'a>> {
     }
 }
 
-fn show_count_metrics<'a, T, S>(result: &T)
+fn show_count_metrics<T, S>(result: &T)
 where
-    T: ResultTrait<'a, TermSet = S>,
+    T: ResultTrait<TermSet = S>,
     S: TermSetTrait,
 {
+    print!("Collecting count metrics...");
+    if result.get_cells().len() > 200000 {
+        print!(" (this might take a while)")
+    }
+    println!();
+
     let mut counts: Vec<_> = result
         .iter_solutions()
-        .map(|(_, mut set)| set.get().len())
+        .map(|(_, mut set)| set.get_len())
         .collect();
+
     if counts.is_empty() {
         println!("No metrics possible: empty result set");
         return;
@@ -68,13 +75,12 @@ where
     println!("Median: {median}");
 }
 
-fn apply_filters<'a, 'b, S>(
-    result: &'b impl ResultTrait<'a, TermSet = S>,
+fn apply_filters<'b, S>(
+    result: &'b impl ResultTrait<TermSet = S>,
     args: &'b Args,
-) -> impl ResultTrait<'a> + 'b
+) -> impl ResultTrait + 'b
 where
-    S: TermSetTrait<Term = Cell<'a>>,
-    'a: 'b,
+    S: TermSetTrait<Term = Cell>,
 {
     result.filter_result(
         |c, set, cache| {
@@ -90,13 +96,10 @@ where
     )
 }
 
-fn show_output<'a, S>(
-    result: PointsToResult<'a, S>,
-    args: &Args,
-    demand_filter: Option<&[Demand<Cell<'a>>]>,
-) where
-    S: SolverSolution<Term = Cell<'a>>,
-    S::TermSet: Debug + IntoIterator<Item = Cell<'a>> + FromIterator<Cell<'a>>,
+fn show_output<S>(result: PointsToResult<S>, args: &Args, demand_filter: Option<&[Demand<Cell>]>)
+where
+    S: SolverSolution<Term = Cell>,
+    S::TermSet: Debug + IntoIterator<Item = Cell> + FromIterator<Cell>,
 {
     if !args.dont_output {
         match demand_filter {
@@ -163,7 +166,7 @@ fn show_output<'a, S>(
                     (args.include_empty || !set.get().is_empty())
                         && cache.string_of(c).contains(cleaned_input)
                 },
-                |pointer, pointee, cache| {
+                |_pointer, pointee, cache| {
                     !args.exclude_strings || !cache.string_of(pointee).contains(STRING_FILTER)
                 },
                 vec![],
@@ -224,7 +227,7 @@ fn main() -> io::Result<()> {
                 .as_demand_driven()
                 .as_dynamic_visualizable()
         }
-        (SolverMode::DryRun, _) => StatSolver::<Cell<'_>>::new()
+        (SolverMode::DryRun, _) => StatSolver::<Cell>::new()
             .as_context_sensitive()
             .as_demand_driven()
             .as_dynamic_visualizable(),

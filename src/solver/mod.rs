@@ -1,3 +1,4 @@
+use bitvec::vec::BitVec;
 use hashbrown::{HashMap, HashSet};
 use roaring::RoaringBitmap;
 use std::fmt::Debug;
@@ -202,7 +203,7 @@ pub enum Demand<T> {
 }
 
 impl<T> Demand<T> {
-    fn map_term<U, F>(&self, mut f: F) -> Demand<U>
+    pub fn map_term<U, F>(&self, mut f: F) -> Demand<U>
     where
         F: FnMut(&T) -> U,
     {
@@ -212,6 +213,7 @@ impl<T> Demand<T> {
         }
     }
 }
+
 pub trait TermSetTrait: Clone + Default + PartialEq {
     type Term;
 
@@ -349,6 +351,86 @@ impl TermSetTrait for RoaringBitmap {
     }
 }
 
+#[derive(Clone, PartialEq)]
+pub struct VecTermSet<T> {
+    inner: Vec<T>,
+}
+
+impl<T: Clone + PartialEq> VecTermSet<T> {
+    pub fn from_vec(vec: Vec<T>) -> Self {
+        Self { inner: vec }
+    }
+}
+
+impl<T> Default for VecTermSet<T> {
+    fn default() -> Self {
+        Self {
+            inner: Default::default(),
+        }
+    }
+}
+
+impl<T: Clone + PartialEq> TermSetTrait for VecTermSet<T> {
+    type Term = T;
+
+    #[inline]
+    fn new() -> Self {
+        Self::default()
+    }
+
+    #[inline]
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    #[inline]
+    fn contains(&self, term: Self::Term) -> bool {
+        // really slow
+        self.inner.contains(&term)
+    }
+
+    #[inline]
+    fn remove(&mut self, term: Self::Term) -> bool {
+        let pos = self.iter().position(|t| t == term);
+
+        if let Some(i) = pos {
+            self.inner.remove(i);
+        }
+
+        pos.is_some()
+    }
+
+    #[inline]
+    fn insert(&mut self, _term: Self::Term) -> bool {
+        todo!()
+    }
+
+    #[inline]
+    fn union_assign(&mut self, _other: &Self) {
+        todo!()
+    }
+
+    #[inline]
+    fn intersection_assign(&mut self, _other: &Self) {
+        todo!()
+    }
+
+    #[inline]
+    fn extend<U: Iterator<Item = Self::Term>>(&mut self, _other: U) {
+        todo!()
+    }
+
+    #[inline]
+    fn difference(&self, _other: &Self) -> Self {
+        todo!()
+    }
+
+    #[inline]
+    fn iter(&self) -> impl Iterator<Item = Self::Term> {
+        self.inner.as_slice().iter().cloned()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ConstrainedTerms<T> {
     pub terms: Vec<T>,
@@ -454,6 +536,9 @@ pub trait SolverSolution {
     type TermSet: TermSetTrait<Term = Self::Term>;
 
     fn get(&self, node: &Self::Term) -> Self::TermSet;
+    fn get_len(&self, node: &Self::Term) -> usize {
+        self.get(node).len()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -908,5 +993,74 @@ impl Offsets {
 
     pub fn has_non_zero(&self) -> bool {
         self.offsets.len() > 0
+    }
+}
+
+struct OnlyOnceStack {
+    stack: Vec<IntegerTerm>,
+    already_added: BitVec,
+}
+
+impl OnlyOnceStack {
+    fn new(len: usize) -> Self {
+        Self {
+            stack: vec![],
+            already_added: BitVec::repeat(false, len),
+        }
+    }
+
+    fn from_nodes(nodes: Vec<IntegerTerm>, len: usize) -> Self {
+        let mut already_added = BitVec::repeat(false, len);
+
+        for &node in &nodes {
+            already_added.set(node as usize, true);
+        }
+
+        Self {
+            stack: nodes,
+            already_added,
+        }
+    }
+
+    fn push(&mut self, term: IntegerTerm) {
+        if !self.already_added[term as usize] {
+            self.already_added.set(term as usize, true);
+            self.stack.push(term);
+        }
+    }
+
+    fn pop(&mut self) -> Option<IntegerTerm> {
+        self.stack.pop()
+    }
+
+    fn retain<F>(&mut self, f: F)
+    where
+        F: FnMut(&IntegerTerm) -> bool,
+    {
+        self.stack.retain(f);
+    }
+
+    fn len(&self) -> usize {
+        self.stack.len()
+    }
+}
+
+impl IntoIterator for OnlyOnceStack {
+    type Item = IntegerTerm;
+
+    type IntoIter = std::vec::IntoIter<IntegerTerm>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.stack.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a OnlyOnceStack {
+    type Item = &'a IntegerTerm;
+
+    type IntoIter = core::slice::Iter<'a, IntegerTerm>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.stack.iter()
     }
 }

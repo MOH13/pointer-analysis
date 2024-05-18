@@ -1,5 +1,4 @@
 use indexmap::IndexMap;
-use std::borrow::Cow;
 use std::cell::{RefCell, RefMut};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::mem;
@@ -39,11 +38,11 @@ impl PointsToAnalysis {
         solver: &S,
         module: &'a Module,
         context_selector: C,
-        demands: Demands<Cell<'a>>,
+        demands: Demands<Cell>,
         config: &Config,
-    ) -> (S::Solution, Vec<Cell<'a>>)
+    ) -> (S::Solution, Vec<Cell>)
     where
-        S: Solver<DemandContextSensitiveInput<Cell<'a>, C>> + 'a,
+        S: Solver<DemandContextSensitiveInput<Cell, C>> + 'a,
     {
         let mut pre_analyzer = PointsToPreAnalyzer::new();
         PointerModuleVisitor::new(
@@ -130,11 +129,11 @@ impl PointsToAnalysis {
         solver: &S,
         module: &'a Module,
         context_selector: C,
-        demands: Demands<Cell<'a>>,
+        demands: Demands<Cell>,
         config: &Config,
-    ) -> PointsToResult<'a, S::Solution>
+    ) -> PointsToResult<S::Solution>
     where
-        S: Solver<DemandContextSensitiveInput<Cell<'a>, C>> + 'a,
+        S: Solver<DemandContextSensitiveInput<Cell, C>> + 'a,
     {
         let (solution, cells) =
             Self::solve_module(solver, module, context_selector, demands, config);
@@ -146,12 +145,12 @@ impl PointsToAnalysis {
         solver: &S,
         module: &'a Module,
         context_selector: C,
-        demands: Demands<Cell<'a>>,
+        demands: Demands<Cell>,
         config: &Config,
         dot_output_path: &str,
-    ) -> PointsToResult<'a, S::Solution>
+    ) -> PointsToResult<S::Solution>
     where
-        S: Solver<DemandContextSensitiveInput<Cell<'a>, C>> + 'a,
+        S: Solver<DemandContextSensitiveInput<Cell, C>> + 'a,
         S::Solution: Visualizable,
     {
         let (solution, cells) =
@@ -164,19 +163,19 @@ impl PointsToAnalysis {
 }
 
 #[derive(Debug, Clone)]
-pub struct CellCache<'a>(RefCell<HashMap<Cell<'a>, String>>);
+pub struct CellCache(RefCell<HashMap<Cell, String>>);
 
 pub struct CacheEntry<'b>(RefMut<'b, String>);
 
 #[derive(Debug, Clone)]
-pub struct PointsToResult<'a, S>(S, Vec<Cell<'a>>, CellCache<'a>);
+pub struct PointsToResult<S>(S, Vec<Cell>, CellCache);
 
-impl<'a> CellCache<'a> {
+impl<'a> CellCache {
     pub fn new() -> Self {
         Self(RefCell::new(HashMap::new()))
     }
 
-    pub fn string_of<'b>(&'b self, cell: &Cell<'a>) -> CacheEntry<'b> {
+    pub fn string_of<'b>(&'b self, cell: &Cell) -> CacheEntry<'b> {
         let borrow = self.0.borrow_mut();
         let a = RefMut::map(borrow, |m| {
             m.entry(cell.clone()).or_insert_with(|| cell.to_string())
@@ -193,38 +192,37 @@ impl<'a, 'b> Deref for CacheEntry<'b> {
     }
 }
 
-pub trait ResultTrait<'a>: Display {
-    type TermSet: TermSetTrait<Term = Cell<'a>>;
-    fn get<'b>(&'b self, cell: &Cell<'a>) -> Option<LazyTermSet<'a, 'b, Self>>
+pub trait ResultTrait: Display {
+    type TermSet: TermSetTrait<Term = Cell>;
+    fn get<'a>(&'a self, cell: &Cell) -> Option<LazyTermSet<'a, Self>>
     where
-        Self: Sized,
-        'a: 'b;
+        Self: Sized;
 
-    fn get_eager<'b>(&'b self, cell: &Cell<'a>) -> Option<Self::TermSet>
+    fn get_eager<'a>(&'a self, cell: &Cell) -> Option<Self::TermSet>
     where
-        Self: Sized,
-        'a: 'b;
+        Self: Sized;
 
-    fn iter_solutions<'b>(
-        &'b self,
-    ) -> impl Iterator<Item = (Cell<'a>, LazyTermSet<'a, 'b, Self>)> + 'b
+    fn get_len<'a>(&'a self, cell: &Cell) -> Option<usize>
     where
-        Self: Sized,
-        'a: 'b;
-    fn get_cells(&self) -> &[Cell<'a>];
-    fn get_cell_cache(&self) -> &CellCache<'a>;
+        Self: Sized;
+
+    fn iter_solutions<'a>(&'a self) -> impl Iterator<Item = (Cell, LazyTermSet<'a, Self>)>
+    where
+        Self: Sized;
+    fn get_cells(&self) -> &[Cell];
+    fn get_cell_cache(&self) -> &CellCache;
 
     fn filter_result<
-        'b,
-        F3: Fn(&Cell<'a>, &mut LazyTermSet<'a, 'b, Self>, &CellCache<'a>) -> bool,
-        F4: Fn(&Cell<'a>, &Cell<'a>, &CellCache<'a>) -> bool,
+        'a,
+        F3: Fn(&Cell, &mut LazyTermSet<'a, Self>, &CellCache) -> bool,
+        F4: Fn(&Cell, &Cell, &CellCache) -> bool,
     >(
-        &'b self,
+        &'a self,
         key_filter: F3,
         value_filter: F4,
         include_strs: Vec<String>,
         exclude_strs: Vec<String>,
-    ) -> FilteredResults<'b, F3, F4, Self>
+    ) -> FilteredResults<'a, F3, F4, Self>
     where
         Self: Sized,
     {
@@ -238,32 +236,35 @@ pub trait ResultTrait<'a>: Display {
     }
 }
 
-impl<'a, S> PointsToResult<'a, S> {
-    pub fn new(solution: S, cells: Vec<Cell<'a>>) -> Self {
+impl<S> PointsToResult<S> {
+    pub fn new(solution: S, cells: Vec<Cell>) -> Self {
         let cache = CellCache::new();
         Self(solution, cells, cache)
     }
 }
 
-pub enum LazyTermSet<'a, 'b, R: ResultTrait<'a>> {
-    FromResult(Cell<'a>, &'b R),
+pub enum LazyTermSet<'a, R: ResultTrait> {
+    FromResult(Cell, &'a R),
+    FromLen(usize, Cell, &'a R),
     FromSet(R::TermSet),
 }
 
-impl<'a, 'b, R> LazyTermSet<'a, 'b, R>
+impl<'a, R> LazyTermSet<'a, R>
 where
-    R: ResultTrait<'a>,
+    R: ResultTrait,
 {
     pub fn from_set(set: R::TermSet) -> Self {
         Self::FromSet(set)
     }
 
-    pub fn from_result(cell: Cell<'a>, result: &'b R) -> Self {
+    pub fn from_result(cell: Cell, result: &'a R) -> Self {
         Self::FromResult(cell, result)
     }
 
     pub fn get(&mut self) -> &R::TermSet {
-        if let Self::FromResult(cell, result) = &*self {
+        if let LazyTermSet::FromResult(cell, result) | LazyTermSet::FromLen(_, cell, result) =
+            &*self
+        {
             let new_set = result
                 .get_eager(&cell)
                 .expect("Result set should not be none for LazyTermSet");
@@ -271,6 +272,20 @@ where
         }
         match &*self {
             LazyTermSet::FromSet(set) => set,
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn get_len(&mut self) -> usize {
+        if let Self::FromResult(cell, result) = self {
+            let new_len = result
+                .get_len(&cell)
+                .expect("Result set should not be none for LazyTermSet");
+            *self = LazyTermSet::FromLen(new_len, cell.clone(), result);
+        }
+        match &*self {
+            LazyTermSet::FromSet(set) => set.len(),
+            LazyTermSet::FromLen(len, _, _) => *len,
             _ => unreachable!(),
         }
     }
@@ -284,40 +299,33 @@ where
     }
 }
 
-impl<'a, S> ResultTrait<'a> for PointsToResult<'a, S>
+impl<S> ResultTrait for PointsToResult<S>
 where
-    S: SolverSolution<Term = Cell<'a>>,
+    S: SolverSolution<Term = Cell>,
 {
     type TermSet = S::TermSet;
 
-    fn get<'b>(&'b self, cell: &Cell<'a>) -> Option<LazyTermSet<'a, 'b, Self>>
-    where
-        'a: 'b,
-    {
+    fn get<'a>(&'a self, cell: &Cell) -> Option<LazyTermSet<'a, Self>> {
         Some(LazyTermSet::from_result(cell.clone(), self))
     }
 
-    fn get_eager<'b>(&'b self, cell: &Cell<'a>) -> Option<Self::TermSet>
-    where
-        'a: 'b,
-    {
+    fn get_eager<'a>(&'a self, cell: &Cell) -> Option<Self::TermSet> {
         Some(self.0.get(cell))
     }
 
-    fn iter_solutions<'b>(
-        &'b self,
-    ) -> impl Iterator<Item = (Cell<'a>, LazyTermSet<'a, 'b, Self>)> + 'b
-    where
-        'a: 'b,
-    {
+    fn get_len<'a>(&'a self, cell: &Cell) -> Option<usize> {
+        Some(self.0.get_len(cell))
+    }
+
+    fn iter_solutions<'a>(&'a self) -> impl Iterator<Item = (Cell, LazyTermSet<'a, Self>)> {
         self.1.iter().map(|c| (c.clone(), self.get(c).unwrap()))
     }
 
-    fn get_cells(&self) -> &[Cell<'a>] {
+    fn get_cells(&self) -> &[Cell] {
         &self.1
     }
 
-    fn get_cell_cache(&self) -> &CellCache<'a> {
+    fn get_cell_cache(&self) -> &CellCache {
         &self.2
     }
 }
@@ -330,27 +338,20 @@ pub struct FilteredResults<'a, F1, F2, R> {
     exclude_strs: Vec<String>,
 }
 
-impl<'a, 'b, F1, F2, R> ResultTrait<'a> for FilteredResults<'b, F1, F2, R>
+impl<'a, F1, F2, R> ResultTrait for FilteredResults<'a, F1, F2, R>
 where
-    R: ResultTrait<'a>,
-    R::TermSet: TermSetTrait<Term = Cell<'a>>,
-    F1: Fn(&Cell<'a>, &mut LazyTermSet<'a, 'b, R>, &CellCache<'a>) -> bool,
-    F2: Fn(&Cell<'a>, &Cell<'a>, &CellCache<'a>) -> bool,
-    'a: 'b,
+    R: ResultTrait,
+    R::TermSet: TermSetTrait<Term = Cell>,
+    F1: Fn(&Cell, &mut LazyTermSet<'a, R>, &CellCache) -> bool,
+    F2: Fn(&Cell, &Cell, &CellCache) -> bool,
 {
-    type TermSet = HashSet<Cell<'a>>;
+    type TermSet = HashSet<Cell>;
 
-    fn get<'c>(&'c self, cell: &Cell<'a>) -> Option<LazyTermSet<'a, 'c, Self>>
-    where
-        'a: 'c,
-    {
+    fn get<'b>(&'b self, cell: &Cell) -> Option<LazyTermSet<'b, Self>> {
         self.get_eager(cell).map(LazyTermSet::from_set)
     }
 
-    fn get_eager<'c>(&'c self, cell: &Cell<'a>) -> Option<Self::TermSet>
-    where
-        'a: 'c,
-    {
+    fn get_eager<'b>(&'b self, cell: &Cell) -> Option<Self::TermSet> {
         if !self.include_strs.is_empty() || !self.exclude_strs.is_empty() {
             let cell_str = self.get_cell_cache().string_of(cell);
             if !self.include_strs.is_empty()
@@ -377,36 +378,35 @@ where
         )
     }
 
-    fn iter_solutions<'c>(
-        &'c self,
-    ) -> impl Iterator<Item = (Cell<'a>, LazyTermSet<'a, 'c, Self>)> + 'c
-    where
-        'a: 'c,
-    {
+    fn get_len<'b>(&'b self, cell: &Cell) -> Option<usize> {
+        self.get_eager(cell).map(|s| s.len())
+    }
+
+    fn iter_solutions<'b>(&'b self) -> impl Iterator<Item = (Cell, LazyTermSet<'b, Self>)> {
         self.get_cells()
             .iter()
             .filter_map(|c| self.get(c).map(|s| (c.clone(), s)))
     }
 
-    fn get_cells(&self) -> &[Cell<'a>] {
+    fn get_cells(&self) -> &[Cell] {
         self.result.get_cells()
     }
 
-    fn get_cell_cache(&self) -> &CellCache<'a> {
+    fn get_cell_cache(&self) -> &CellCache {
         self.result.get_cell_cache()
     }
 }
 
-impl<'a, S> PointsToResult<'a, S>
+impl<S> PointsToResult<S>
 where
-    S: SolverSolution<Term = Cell<'a>>,
+    S: SolverSolution<Term = Cell>,
 {
-    pub fn get_all_entries<'b>(
-        &'b self,
+    pub fn get_all_entries<'a>(
+        &'a self,
     ) -> FilteredResults<
-        'b,
-        fn(&Cell<'a>, &mut LazyTermSet<'a, 'b, Self>, &CellCache<'a>) -> bool,
-        fn(&Cell<'a>, &Cell<'a>, &CellCache<'a>) -> bool,
+        'a,
+        fn(&Cell, &mut LazyTermSet<'a, Self>, &CellCache) -> bool,
+        fn(&Cell, &Cell, &CellCache) -> bool,
         Self,
     > {
         FilteredResults {
@@ -423,25 +423,23 @@ where
     }
 }
 
-impl<'a, S> Display for PointsToResult<'a, S>
+impl<S> Display for PointsToResult<S>
 where
-    S: SolverSolution<Term = Cell<'a>>,
+    S: SolverSolution<Term = Cell>,
 {
-    fn fmt<'b, 'c>(&'b self, f: &'c mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let filtered = self.get_all_entries();
         filtered.fmt(f)?;
-        // let filtered = self.test();
-        // writeln!(f, "{filtered}")?;
         Ok(())
     }
 }
 
-impl<'a, 'b, F1, F2, R> Display for FilteredResults<'b, F1, F2, R>
+impl<'b, F1, F2, R> Display for FilteredResults<'b, F1, F2, R>
 where
-    Self: ResultTrait<'a>,
-    <Self as ResultTrait<'a>>::TermSet: Debug,
+    Self: ResultTrait,
+    <Self as ResultTrait>::TermSet: Debug,
 {
-    fn fmt<'d, 'c>(&'d self, f: &'c mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         for (cell, set) in self.iter_solutions() {
             let set = set.into_inner();
             writeln!(f, "[[{cell}]] = {set:#?}")?;
@@ -451,17 +449,17 @@ where
 }
 
 #[derive(Clone, Hash, PartialEq, Eq)]
-pub enum Cell<'a> {
-    Var(VarIdent<'a>),
-    Return(VarIdent<'a>),
+pub enum Cell {
+    Var(VarIdent),
+    Return(VarIdent),
     // Since LLVM is in SSA, we can use the name of the
     // allocation register to refer to the allocation site
-    Stack(VarIdent<'a>),
-    Heap(VarIdent<'a>),
-    Global(VarIdent<'a>),
+    Stack(VarIdent),
+    Heap(VarIdent),
+    Global(VarIdent),
 }
 
-impl<'a> Display for Cell<'a> {
+impl Display for Cell {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             Self::Var(ident) => write!(f, "{ident}"),
@@ -473,7 +471,7 @@ impl<'a> Display for Cell<'a> {
     }
 }
 
-impl<'a> FromStr for Cell<'a> {
+impl FromStr for Cell {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -491,26 +489,26 @@ impl<'a> FromStr for Cell<'a> {
     }
 }
 
-impl<'a> Debug for Cell<'a> {
+impl<'a> Debug for Cell {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         <Self as Display>::fmt(self, f)
     }
 }
 
 #[derive(Default)]
-struct PointsToPreAnalyzerFunctionState<'a> {
-    dests_already_added: HashSet<VarIdent<'a>>,
-    return_cells: Vec<Cell<'a>>,
-    parameter_cells: Vec<Cell<'a>>,
-    cells: Vec<Cell<'a>>,
-    term_types: Vec<(Cell<'a>, TermType)>,
+struct PointsToPreAnalyzerFunctionState {
+    dests_already_added: HashSet<VarIdent>,
+    return_cells: Vec<Cell>,
+    parameter_cells: Vec<Cell>,
+    cells: Vec<Cell>,
+    term_types: Vec<(Cell, TermType)>,
 }
 
-impl<'a> PointsToPreAnalyzerFunctionState<'a> {
+impl PointsToPreAnalyzerFunctionState {
     fn combine_with_constraints(
         self,
-        constraints: Vec<Constraint<Cell<'a>>>,
-    ) -> (Vec<Cell<'a>>, Vec<Cell<'a>>, ConstrainedTerms<Cell<'a>>) {
+        constraints: Vec<Constraint<Cell>>,
+    ) -> (Vec<Cell>, Vec<Cell>, ConstrainedTerms<Cell>) {
         (
             self.return_cells,
             self.parameter_cells,
@@ -524,15 +522,15 @@ impl<'a> PointsToPreAnalyzerFunctionState<'a> {
 }
 
 struct PointsToPreAnalyzer<'a> {
-    functions: IndexMap<Option<&'a str>, PointsToPreAnalyzerFunctionState<'a>>,
+    functions: IndexMap<Option<&'a str>, PointsToPreAnalyzerFunctionState>,
     num_cells_per_malloc: usize,
 }
 
-fn get_and_push_cells<'a>(
-    base_ident: VarIdent<'a>,
+fn get_and_push_cells(
+    base_ident: VarIdent,
     struct_type: Option<&StructType>,
-    ident_to_cell: fn(VarIdent<'a>) -> Cell<'a>,
-    cells: &mut Vec<Cell<'a>>,
+    ident_to_cell: fn(VarIdent) -> Cell,
+    cells: &mut Vec<Cell>,
 ) -> usize {
     match struct_type {
         Some(StructType { fields, .. }) => {
@@ -559,11 +557,11 @@ fn get_and_push_cells<'a>(
     }
 }
 
-fn push_term_types<'a>(
-    base_ident: VarIdent<'a>,
+fn push_term_types(
+    base_ident: VarIdent,
     struct_type: Option<&StructType>,
-    ident_to_cell: fn(VarIdent<'a>) -> Cell<'a>,
-    term_types: &mut Vec<(Cell<'a>, TermType)>,
+    ident_to_cell: fn(VarIdent) -> Cell,
+    term_types: &mut Vec<(Cell, TermType)>,
     first_offset: Option<usize>,
 ) {
     match struct_type {
@@ -616,9 +614,9 @@ impl<'a> PointsToPreAnalyzer<'a> {
 
     fn add_cells_and_term_types(
         &mut self,
-        base_ident: VarIdent<'a>,
+        base_ident: VarIdent,
         struct_type: Option<&StructType>,
-        ident_to_cell: fn(VarIdent<'a>) -> Cell<'a>,
+        ident_to_cell: fn(VarIdent) -> Cell,
         fun_name: Option<&'a str>,
     ) {
         let function_state = self.functions.entry(fun_name).or_default();
@@ -660,9 +658,9 @@ impl<'a> PointerModuleObserver<'a> for PointsToPreAnalyzer<'a> {
     fn handle_ptr_function(
         &mut self,
         fun_name: &'a str,
-        ident: VarIdent<'a>,
+        ident: VarIdent,
         type_index: u32,
-        parameters: Vec<VarIdent<'a>>,
+        parameters: Vec<VarIdent>,
         return_struct_type: Option<Rc<StructType>>,
     ) {
         let function_state = self.functions.entry(Some(fun_name)).or_default();
@@ -693,8 +691,8 @@ impl<'a> PointerModuleObserver<'a> for PointsToPreAnalyzer<'a> {
 
     fn handle_ptr_global(
         &mut self,
-        ident: VarIdent<'a>,
-        _init_ref: Option<VarIdent<'a>>,
+        ident: VarIdent,
+        _init_ref: Option<VarIdent>,
         struct_type: Option<Rc<StructType>>,
     ) {
         let global_state = self.functions.entry(None).or_default();
@@ -703,11 +701,7 @@ impl<'a> PointerModuleObserver<'a> for PointsToPreAnalyzer<'a> {
         self.add_cells_and_term_types(ident, struct_type.as_deref(), Cell::Global, None);
     }
 
-    fn handle_ptr_instruction(
-        &mut self,
-        instr: PointerInstruction<'a>,
-        context: PointerContext<'a>,
-    ) {
+    fn handle_ptr_instruction(&mut self, instr: PointerInstruction, context: PointerContext<'a>) {
         let function_state = self.functions.entry(context.fun_name).or_default();
 
         match instr {
@@ -780,7 +774,7 @@ impl<'a> PointerModuleObserver<'a> for PointsToPreAnalyzer<'a> {
     }
 }
 
-fn first_ident<'a>(base_ident: VarIdent<'a>, struct_type: Option<&StructType>) -> VarIdent<'a> {
+fn first_ident<'a>(base_ident: VarIdent, struct_type: Option<&StructType>) -> VarIdent {
     if let Some(st) = struct_type {
         let offset_ident = VarIdent::Offset {
             base: Rc::new(base_ident),
@@ -795,17 +789,17 @@ fn first_ident<'a>(base_ident: VarIdent<'a>, struct_type: Option<&StructType>) -
 /// Visits a module, generating constraints.
 struct ConstraintGenerator<'a> {
     call_site_counter: u32,
-    constraints: HashMap<Option<&'a str>, Vec<Constraint<Cell<'a>>>>,
-    return_struct_types: HashMap<VarIdent<'a>, Option<Rc<StructType>>>,
+    constraints: HashMap<Option<&'a str>, Vec<Constraint<Cell>>>,
+    return_struct_types: HashMap<VarIdent, Option<Rc<StructType>>>,
 }
 
-fn do_assignment<'a>(
-    dest: VarIdent<'a>,
-    dest_cell_type: fn(VarIdent<'a>) -> Cell<'a>,
-    value: VarIdent<'a>,
-    value_cell_type: fn(VarIdent<'a>) -> Cell<'a>,
+fn do_assignment(
+    dest: VarIdent,
+    dest_cell_type: fn(VarIdent) -> Cell,
+    value: VarIdent,
+    value_cell_type: fn(VarIdent) -> Cell,
     struct_type: Option<&StructType>,
-    constraints: &mut Vec<Constraint<Cell<'a>>>,
+    constraints: &mut Vec<Constraint<Cell>>,
 ) {
     match struct_type {
         Some(_) => {
@@ -848,9 +842,9 @@ impl<'a> PointerModuleObserver<'a> for ConstraintGenerator<'a> {
     fn handle_ptr_function(
         &mut self,
         fun_name: &'a str,
-        ident: VarIdent<'a>,
+        ident: VarIdent,
         _type_index: u32,
-        _parameters: Vec<VarIdent<'a>>,
+        _parameters: Vec<VarIdent>,
         return_struct_type: Option<Rc<StructType>>,
     ) {
         let function_constraints = self.constraints.entry(Some(fun_name)).or_default();
@@ -865,8 +859,8 @@ impl<'a> PointerModuleObserver<'a> for ConstraintGenerator<'a> {
 
     fn handle_ptr_global(
         &mut self,
-        ident: VarIdent<'a>,
-        init_ref: Option<VarIdent<'a>>,
+        ident: VarIdent,
+        init_ref: Option<VarIdent>,
         struct_type: Option<Rc<StructType>>,
     ) {
         let global_constraints = self.constraints.entry(None).or_default();
@@ -888,11 +882,7 @@ impl<'a> PointerModuleObserver<'a> for ConstraintGenerator<'a> {
         }
     }
 
-    fn handle_ptr_instruction(
-        &mut self,
-        instr: PointerInstruction<'a>,
-        context: PointerContext<'a>,
-    ) {
+    fn handle_ptr_instruction(&mut self, instr: PointerInstruction, context: PointerContext<'a>) {
         let function_constraints = self.constraints.entry(context.fun_name).or_default();
 
         match instr {
@@ -1109,7 +1099,7 @@ impl<'a> PointerModuleObserver<'a> for ConstraintGenerator<'a> {
                     .fun_name
                     .expect("return instructions should only be generated inside functions");
                 let function = VarIdent::Global {
-                    name: Cow::Owned(String::from(fun_name)),
+                    name: String::from(fun_name).into(),
                 };
 
                 let return_struct_type = self
@@ -1132,7 +1122,7 @@ impl<'a> PointerModuleObserver<'a> for ConstraintGenerator<'a> {
     }
 }
 
-pub fn cell_is_in_function<'a>(cell: &Cell<'a>, function: &str) -> bool {
+pub fn cell_is_in_function(cell: &Cell, function: &str) -> bool {
     match cell {
         Cell::Var(ident) | Cell::Return(ident) | Cell::Stack(ident) | Cell::Heap(ident) => {
             ident_is_in_function(ident, function)
@@ -1141,9 +1131,9 @@ pub fn cell_is_in_function<'a>(cell: &Cell<'a>, function: &str) -> bool {
     }
 }
 
-fn ident_is_in_function<'a>(ident: &VarIdent<'a>, function: &str) -> bool {
+fn ident_is_in_function(ident: &VarIdent, function: &str) -> bool {
     match ident {
-        VarIdent::Local { fun_name, .. } => fun_name == function,
+        VarIdent::Local { fun_name, .. } => fun_name.as_ref() == function,
         VarIdent::Offset { base, .. } => ident_is_in_function(base.as_ref(), function),
         VarIdent::Global { .. } => false,
         VarIdent::Fresh { .. } => false,

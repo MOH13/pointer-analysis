@@ -16,8 +16,8 @@ use super::context::{ContextState, TemplateTerm};
 use super::shared_bitvec::SharedBitVec;
 use super::{
     edges_between, try_offset_term, CallSite, Constraint, ContextSelector, Demand,
-    DemandContextSensitiveInput, IntegerTerm, Offsets, Solver, SolverExt, SolverSolution,
-    TermSetTrait, TermType,
+    DemandContextSensitiveInput, IntegerTerm, Offsets, OnlyOnceStack, Solver, SolverExt,
+    SolverSolution, TermSetTrait, TermType,
 };
 use crate::solver::Demands;
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
@@ -134,6 +134,14 @@ where
             println!("Iteration {iters}");
         }
 
+        println!(
+            "SCC count: {}",
+            self.parents
+                .iter()
+                .enumerate()
+                .filter(|(child, parent)| *child == **parent as usize)
+                .count()
+        );
         println!("Iterations: {iters}");
     }
 
@@ -186,8 +194,8 @@ where
                     }
 
                     for &w in &state.edges.rev_subset[v as usize] {
-                        if state.p_old_points_to[w as usize].len() > 0 {
-                            let p_pt_old = &state.p_old_points_to[w as usize];
+                        if state.p_old[w as usize].len() > 0 {
+                            let p_pt_old = &state.p_old[w as usize];
                             let p_pt_old_vec =
                                 Lazy::new(|| p_pt_old.iter().collect::<Vec<IntegerTerm>>());
                             for offset in state.edges.subset[w as usize][&v].iter() {
@@ -225,7 +233,7 @@ where
             );
 
             let mut pb_starting_nodes = vec![];
-            let mut local_new_pb_queries = vec![];
+            let mut local_new_pb_queries = OnlyOnceStack::new(self.term_count());
 
             for q in self.new_pointed_by_queries.drain(..) {
                 for q2 in offsetable_terms(q, &self.context_state, &self.abstract_rev_offsets) {
@@ -260,6 +268,7 @@ where
                     if state.visited_pointed_by.test(v as usize) {
                         return;
                     }
+                    // println!("{}, {}", to_visit.len(), state.p_old.len());
                     state.visited_pointed_by.set(v as usize);
                     local_new_pb_queries.push(v);
 
@@ -336,7 +345,7 @@ where
             changed = true;
             let p_dif = self.sols[v as usize].weak_difference(&self.p_old[v as usize]);
             let p_dif_vec = Lazy::new(|| p_dif.iter().collect::<Vec<IntegerTerm>>());
-            self.p_old[v as usize].clone_from(&self.sols[v as usize]);
+            self.p_old[v as usize].union_assign(&p_dif);
 
             for (&w, offsets) in &self.edges.subset[v as usize] {
                 let mut should_set_new_incoming = false;
@@ -615,9 +624,12 @@ where
         mut visit_handler: F,
     ) -> Vec<IntegerTerm>
     where
-        F: FnMut(IntegerTerm, &mut SccVisitState<T, S, C>, &mut Vec<IntegerTerm>),
+        F: FnMut(IntegerTerm, &mut SccVisitState<T, S, C>, &mut OnlyOnceStack),
     {
         let node_count = self.term_count();
+
+        let to_visit = OnlyOnceStack::from_nodes(initial_nodes, node_count);
+
         let mut internal_state = SccInternalState {
             direction,
             visit_weighted,
@@ -627,7 +639,7 @@ where
             r: vec![None; node_count],
             c: bitvec![0; node_count],
             s: vec![],
-            to_visit: initial_nodes,
+            to_visit,
             top_order: vec![],
         };
 
@@ -635,7 +647,7 @@ where
             sols: &mut self.sols,
             term_types: &self.term_types,
             abstract_rev_offsets: &self.abstract_rev_offsets,
-            p_old_points_to: &mut self.p_old,
+            p_old: &mut self.p_old,
             context_state: &self.context_state,
             edges: &self.edges,
             points_to_queries: &mut self.points_to_queries,
@@ -660,16 +672,16 @@ where
         let mut components: HashMap<IntegerTerm, (IntegerTerm, u32)> = HashMap::new();
         for v in 0..internal_state.node_count as u32 {
             if let Some(r_v) = internal_state.r[v as usize] {
-                let edge_count = self.edges.subset[v as usize].len() as u32;
-                if edge_count == 0 {
+                let sol_len = self.sols[v as usize].len() as u32;
+                if self.edges.subset[v as usize].len() == 0 {
                     continue;
                 }
                 nodes.push((v, r_v));
-                if let Err(mut cur) = components.try_insert(r_v, (v, edge_count)) {
-                    let (cur_best, best_edge_count) = cur.entry.get_mut();
-                    if edge_count > *best_edge_count {
+                if let Err(mut cur) = components.try_insert(r_v, (v, sol_len)) {
+                    let (cur_best, best_sol_len) = cur.entry.get_mut();
+                    if sol_len > *best_sol_len {
                         *cur_best = v;
-                        *best_edge_count = edge_count;
+                        *best_sol_len = sol_len;
                     }
                 }
             }
@@ -699,15 +711,17 @@ where
             debug_assert_ne!(0, offsets.len());
 
             let other = if other == child { parent } else { other };
+
+            let other_term_set = &mut self.sols[other as usize];
             for o in offsets.iter() {
                 if o == 0 {
-                    self.sols[other as usize].union_assign(&p_old);
+                    other_term_set.union_assign(&p_old);
                 } else {
                     let to_add = p_old_vec
                         .iter()
                         .filter_map(|&t| try_offset_term(t, self.term_types[t as usize], o));
                     for t in to_add {
-                        self.sols[other as usize].insert(t);
+                        other_term_set.insert(t);
                         if self.pointed_by_queries.contains(t) {
                             self.new_incoming.push(other);
                         } else {
@@ -1037,6 +1051,49 @@ where
     }
 }
 
+impl<T, S, C> TidalPropagationSolverState<T, S, C>
+where
+    T: Hash + Eq + Clone + Debug,
+    S: TermSetTrait<Term = IntegerTerm> + Debug,
+    C: ContextSelector + Clone,
+{
+    fn get_stack(&self, term: &T) -> OnlyOnceStack {
+        let (fun_index, relative_index) = self
+            .context_state
+            .get_function_and_relative_index_from_term(term);
+
+        let mut stack = OnlyOnceStack::new(self.context_state.num_abstract_terms());
+
+        match fun_index {
+            Some(i) => {
+                let iter = self.context_state.instantiated_contexts[i as usize]
+                    .iter()
+                    .flat_map(|(_, start_index)| {
+                        let concrete_index = start_index + relative_index;
+                        self.sols
+                            [get_representative_no_mutation(&self.parents, concrete_index) as usize]
+                            .iter()
+                    })
+                    .map(|concrete_index| self.context_state.concrete_to_abstract(concrete_index));
+                for term in iter {
+                    stack.push(term);
+                }
+            }
+            None => {
+                let iter = self.sols
+                    [get_representative_no_mutation(&self.parents, relative_index) as usize]
+                    .iter()
+                    .map(|concrete_index| self.context_state.concrete_to_abstract(concrete_index));
+                for term in iter {
+                    stack.push(term);
+                }
+            }
+        }
+
+        stack
+    }
+}
+
 impl<T, S, C> SolverSolution for TidalPropagationSolverState<T, S, C>
 where
     T: Hash + Eq + Clone + Debug,
@@ -1047,27 +1104,19 @@ where
     type TermSet = HashSet<T>;
 
     fn get(&self, term: &T) -> Self::TermSet {
-        let (fun_index, relative_index) = self
-            .context_state
-            .get_function_and_relative_index_from_term(term);
+        let stack = self.get_stack(term);
 
-        match fun_index {
-            Some(i) => self.context_state.instantiated_contexts[i as usize]
-                .iter()
-                .flat_map(|(_, start_index)| {
-                    let concrete_index = start_index + relative_index;
-                    self.sols
-                        [get_representative_no_mutation(&self.parents, concrete_index) as usize]
-                        .iter()
-                })
-                .map(|concrete_index| self.context_state.concrete_to_input(concrete_index))
-                .collect(),
-            None => self.sols
-                [get_representative_no_mutation(&self.parents, relative_index) as usize]
-                .iter()
-                .map(|concrete_index| self.context_state.concrete_to_input(concrete_index))
-                .collect(),
-        }
+        HashSet::from_iter(
+            stack
+                .into_iter()
+                .map(|term| self.context_state.abstract_to_input(term)),
+        )
+    }
+
+    fn get_len(&self, term: &T) -> usize {
+        let stack = self.get_stack(term);
+
+        stack.len()
     }
 }
 
@@ -1167,7 +1216,7 @@ fn visit<'a, F, T, S, C>(
     visit_handler: &mut F,
     v: IntegerTerm,
 ) where
-    for<'b> F: FnMut(IntegerTerm, &mut SccVisitState<'b, T, S, C>, &mut Vec<IntegerTerm>),
+    for<'b> F: FnMut(IntegerTerm, &mut SccVisitState<'b, T, S, C>, &mut OnlyOnceStack),
     C: ContextSelector,
 {
     if internal.d[v as usize] != 0 {
@@ -1255,7 +1304,7 @@ struct SccInternalState {
     r: Vec<Option<IntegerTerm>>,
     c: BitVec,
     s: Vec<IntegerTerm>,
-    to_visit: Vec<IntegerTerm>,
+    to_visit: OnlyOnceStack,
     top_order: Vec<IntegerTerm>,
 }
 
@@ -1263,7 +1312,7 @@ struct SccVisitState<'a, T, S, C: ContextSelector> {
     sols: &'a mut [S],
     term_types: &'a [TermType],
     abstract_rev_offsets: &'a [SmallVec<[u32; 2]>],
-    p_old_points_to: &'a [S],
+    p_old: &'a [S],
     context_state: &'a ContextState<T, C>,
     edges: &'a Edges<C>,
     points_to_queries: &'a mut uniset::BitSet,
