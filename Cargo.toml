@@ -43,4 +43,4 @@ name = "real_world"
 harness = false
 
 [profile.release]
-debug = true
+# debug = true

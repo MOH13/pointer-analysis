@@ -10,6 +10,9 @@ heaptrack.*
 perf.data
 perf.data.old
 
+# Created by run-benches.sh
+stderr.txt
+
 # Benchmarks
 /benchmarks/*/**
 !/benchmarks/versions.md

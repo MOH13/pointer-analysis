@@ -85,10 +85,10 @@ where
             changed = self.wave_propagate_iteration();
 
             changed |= self.add_edges_after_wave_prop(&mut nodes_with_new_outgoing);
-            println!("Iteration {iters}");
+            eprintln!("Iteration {iters}");
         }
 
-        println!(
+        eprintln!(
             "SCC count: {}",
             self.parents
                 .iter()
@@ -96,7 +96,7 @@ where
                 .filter(|(child, parent)| *child == **parent as usize)
                 .count()
         );
-        println!("Iterations: {}", iters);
+        eprintln!("Iterations: {}", iters);
     }
 
     fn wave_propagate_iteration(&mut self) -> bool {

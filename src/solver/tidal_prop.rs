@@ -131,10 +131,10 @@ where
             self.query_propagation();
             changed = self.term_propagation();
             changed |= self.add_edges_after_wave_prop();
-            println!("Iteration {iters}");
+            eprintln!("Iteration {iters}");
         }
 
-        println!(
+        eprintln!(
             "SCC count: {}",
             self.parents
                 .iter()
@@ -142,7 +142,7 @@ where
                 .filter(|(child, parent)| *child == **parent as usize)
                 .count()
         );
-        println!("Iterations: {iters}");
+        eprintln!("Iterations: {iters}");
     }
 
     fn collapse_cycles(&mut self) {
@@ -323,7 +323,7 @@ where
             }
             iters += 1;
         }
-        println!("{iters} query iterations");
+        eprintln!("{iters} query iterations");
     }
 
     fn term_propagation(&mut self) -> bool {

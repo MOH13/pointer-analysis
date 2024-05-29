@@ -467,8 +467,8 @@ where
                 }
             }
         }
-        println!("points to queries: {}", self.points_to_queries.count_ones());
-        println!(
+        eprintln!("points to queries: {}", self.points_to_queries.count_ones());
+        eprintln!(
             "pointed by queries: {:?}",
             self.pointed_by_queries.count_ones()
         );

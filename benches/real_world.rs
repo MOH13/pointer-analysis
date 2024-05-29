@@ -1,20 +1,24 @@
 use llvm_ir::Module;
 use pointer_analysis::analysis::{Cell, Config, PointsToAnalysis};
 use pointer_analysis::solver::{
-    BasicHashSolver, BasicRoaringSolver, BasicSharedBitVecSolver, CallStringSelector,
-    ContextInsensitiveSelector, ContextInsensitiveSolver, ContextSelector, ContextSensitiveSolver,
-    Demands, HashContextWavePropagationSolver, RoaringContextWavePropagationSolver,
-    SharedBitVecContextWavePropagationSolver, Solver,
+    BasicDemandSolver, BasicHashSolver, ContextInsensitiveSelector, ContextInsensitiveSolver,
+    ContextSelector, DemandContextSensitiveInput, Demands, RoaringContextWavePropagationSolver,
+    RoaringTidalPropagationSolver, SharedBitVecContextWavePropagationSolver,
+    SharedBitVecTidalPropagationSolver, Solver, SolverExt,
 };
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
-fn bench_template<S, C>(name: &str, solver: S, context_selector: C, c: &mut Criterion)
-where
-    S: ContextSensitiveSolver<Cell, C>,
+fn bench_template<S, C>(
+    name: &str,
+    solver: S,
+    context_selector: C,
+    demands: Demands<Cell>,
+    c: &mut Criterion,
+) where
+    S: Solver<DemandContextSensitiveInput<Cell, C>>,
     C: ContextSelector + Clone,
 {
-    let solver = solver.as_demand_driven();
     for entry in glob::glob("benchmarks/*/bench.bc").unwrap() {
         let entry = entry.expect("Error in path");
         let bench_name = format!(
@@ -33,7 +37,7 @@ where
                     &solver,
                     &module,
                     context_selector.clone(),
-                    Demands::All,
+                    demands.clone(),
                     &Config::default(),
                 ))
             });
@@ -41,64 +45,156 @@ where
     }
 }
 
-fn hash(c: &mut Criterion) {
-    let solver = BasicHashSolver::new().as_context_sensitive().as_generic();
-    bench_template("HashWorklist", solver, ContextInsensitiveSelector, c);
-}
-
-fn roaring(c: &mut Criterion) {
-    let solver = BasicRoaringSolver::new()
+fn basic(c: &mut Criterion) {
+    let solver = BasicHashSolver::new()
         .as_context_sensitive()
-        .as_generic();
-    bench_template("RoaringWorklist", solver, ContextInsensitiveSelector, c);
-}
-
-fn shared_bitvec(c: &mut Criterion) {
-    let solver = BasicSharedBitVecSolver::new()
-        .as_context_sensitive()
-        .as_generic();
+        .as_generic()
+        .as_demand_driven();
     bench_template(
-        "SharedBitVecWorklist",
+        "HashWorklist",
         solver,
         ContextInsensitiveSelector,
+        Demands::All,
         c,
     );
 }
 
-fn hash_wave_prop(c: &mut Criterion) {
-    let solver = HashContextWavePropagationSolver::new();
-    bench_template("HashWaveProp", solver, ContextInsensitiveSelector, c);
-}
-
 fn roaring_wave_prop(c: &mut Criterion) {
-    let solver = RoaringContextWavePropagationSolver::new();
-    bench_template("RoaringWaveProp", solver, ContextInsensitiveSelector, c);
+    let solver = RoaringContextWavePropagationSolver::new().as_demand_driven();
+    bench_template(
+        "RoaringWaveProp",
+        solver,
+        ContextInsensitiveSelector,
+        Demands::All,
+        c,
+    );
 }
 
 fn shared_bitvec_wave_prop(c: &mut Criterion) {
-    let solver = SharedBitVecContextWavePropagationSolver::new();
+    let solver = SharedBitVecContextWavePropagationSolver::new().as_demand_driven();
     bench_template(
         "SharedBitVecWaveProp",
         solver,
         ContextInsensitiveSelector,
+        Demands::All,
         c,
     );
 }
 
-fn context(c: &mut Criterion) {
-    let solver = SharedBitVecContextWavePropagationSolver::new();
-    bench_template("ContextTest", solver, CallStringSelector::<1>::new(), c);
+fn basic_demand(c: &mut Criterion) {
+    let solver = BasicDemandSolver::new();
+    bench_template(
+        "BasicDemand",
+        solver,
+        ContextInsensitiveSelector,
+        Demands::All,
+        c,
+    );
+}
+
+fn basic_demand_call_graph_pointed_by(c: &mut Criterion) {
+    let solver = BasicDemandSolver::new();
+    bench_template(
+        "BasicDemandCallGraphPointedBy",
+        solver,
+        ContextInsensitiveSelector,
+        Demands::CallGraphPointedBy,
+        c,
+    );
+}
+
+fn basic_demand_call_graph_points_to(c: &mut Criterion) {
+    let solver = BasicDemandSolver::new();
+    bench_template(
+        "BasicDemandCallGraphPointsTo",
+        solver,
+        ContextInsensitiveSelector,
+        Demands::CallGraphPointsTo,
+        c,
+    );
+}
+
+fn roaring_tidal_prop(c: &mut Criterion) {
+    let solver = RoaringTidalPropagationSolver::new();
+    bench_template(
+        "RoaringTidalProp",
+        solver,
+        ContextInsensitiveSelector,
+        Demands::All,
+        c,
+    );
+}
+
+fn shared_bitvec_tidal_prop(c: &mut Criterion) {
+    let solver = SharedBitVecTidalPropagationSolver::new();
+    bench_template(
+        "SharedBitVecTidalProp",
+        solver,
+        ContextInsensitiveSelector,
+        Demands::All,
+        c,
+    );
+}
+
+fn roaring_tidal_prop_call_graph_pointed_by(c: &mut Criterion) {
+    let solver = RoaringTidalPropagationSolver::new();
+    bench_template(
+        "RoaringTidalPropCallGraphPointedBy",
+        solver,
+        ContextInsensitiveSelector,
+        Demands::CallGraphPointedBy,
+        c,
+    );
+}
+
+fn shared_bitvec_tidal_prop_call_graph_pointed_by(c: &mut Criterion) {
+    let solver = SharedBitVecTidalPropagationSolver::new();
+    bench_template(
+        "SharedBitVecTidalPropCallGraphPointedBy",
+        solver,
+        ContextInsensitiveSelector,
+        Demands::CallGraphPointedBy,
+        c,
+    );
+}
+
+fn roaring_tidal_prop_call_graph_points_to(c: &mut Criterion) {
+    let solver = RoaringTidalPropagationSolver::new();
+    bench_template(
+        "RoaringTidalPropCallGraphPointsTo",
+        solver,
+        ContextInsensitiveSelector,
+        Demands::CallGraphPointsTo,
+        c,
+    );
+}
+
+fn shared_bitvec_tidal_prop_call_graph_points_to(c: &mut Criterion) {
+    let solver = SharedBitVecTidalPropagationSolver::new();
+    bench_template(
+        "SharedBitVecTidalPropCallGraphPointsTo",
+        solver,
+        ContextInsensitiveSelector,
+        Demands::CallGraphPointsTo,
+        c,
+    );
 }
 
 criterion_group! {
     name = benches;
     config = Criterion::default().sample_size(10);
-    targets = hash,
-    roaring,
-    shared_bitvec,
-    hash_wave_prop,
+    targets =
+    basic,
     roaring_wave_prop,
     shared_bitvec_wave_prop,
-    context,
+    basic_demand,
+    basic_demand_call_graph_pointed_by,
+    basic_demand_call_graph_points_to,
+    roaring_tidal_prop,
+    shared_bitvec_tidal_prop,
+    roaring_tidal_prop_call_graph_pointed_by,
+    shared_bitvec_tidal_prop_call_graph_pointed_by,
+    roaring_tidal_prop_call_graph_points_to,
+    shared_bitvec_tidal_prop_call_graph_points_to,
 }
 criterion_main!(benches);
