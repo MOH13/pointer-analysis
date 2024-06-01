@@ -8,6 +8,16 @@ $ make
 $ extract-bc -o bench.bc src/.libs/curl
 ```
 
+## Cpython
+
+Got version `https://github.com/python/cpython/releases/tag/v3.13.0b1`
+
+```sh
+$ CC=wllvm CFLAGS="-O0 -fno-discard-value-names" ./configure
+$ make
+$ extract-bc -o bench.bc ./python
+```
+
 ## Emacs
 
 Got version `https://github.com/emacs-mirror/emacs/releases/tag/emacs-29.3`.

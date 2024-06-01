@@ -21,6 +21,10 @@ stderr.txt
 !/benchmarks/curl/COPYING
 !/benchmarks/curl/bench.bc
 
+## Cpython
+!/benchmarks/cpython/LICENSE
+!/benchmarks/cpython/bench.bc
+
 ## Emacs
 !/benchmarks/emacs/COPYING
 !/benchmarks/emacs/bench.bc

@@ -5,6 +5,7 @@ use hashbrown::HashSet;
 use llvm_ir::Module;
 use pointer_analysis::analysis::{Cell, Config, PointsToAnalysis, PointsToResult, ResultTrait};
 use pointer_analysis::cli::{Args, CallGraphMode, CountMode, DemandMode, SolverMode, TermSet};
+use pointer_analysis::module_visitor::VarIdent;
 use pointer_analysis::solver::{
     BasicDemandSolver, BasicHashSolver, BasicRoaringSolver, Demands, HashTidalPropagationSolver,
     RoaringTidalPropagationSolver, SharedBitVecTidalPropagationSolver, StatSolver,
@@ -15,9 +16,11 @@ use pointer_analysis::solver::{
     SharedBitVecContextWavePropagationSolver, Solver, SolverExt, SolverSolution, TermSetTrait,
 };
 use pointer_analysis::visualizer::{AsDynamicVisualizableExt, DynamicVisualizableSolver};
+use serde::Serialize;
 use std::fmt::Debug;
 use std::io;
 use std::io::Write;
+use std::time::{Duration, Instant};
 
 const STRING_FILTER: &'static str = ".str.";
 
@@ -177,6 +180,68 @@ where
     }
 }
 
+#[derive(Serialize)]
+struct JsonOutput {
+    module_parse_time_ms: u64,
+    pre_analysis_time_ms: u64,
+    constraint_gen_time_ms: u64,
+    solver_time_ms: u64,
+    num_called_functions: u64,
+    num_called_non_trivial_functions: u64,
+    mean_call_edges: f64,
+    mean_non_trivial_call_edges: f64,
+}
+
+impl JsonOutput {
+    pub fn from_result<S>(result: PointsToResult<S>, module_parse_time: Duration) -> Self
+    where
+        S: SolverSolution<Term = Cell>,
+    {
+        eprintln!("Counting call edges...");
+        let mut total_call_edges = 0;
+        let mut total_non_trivial_call_edges = 0;
+        let num_called_functions = result.called_functions.len() as u64;
+        let mut num_called_non_trivial_functions = 0;
+        for function in &result.called_functions {
+            let num_call_edges = result
+                .get(&function)
+                .expect("Function not found")
+                .get()
+                .iter()
+                .filter(|c| matches!(c, Cell::Return(_)))
+                .count();
+            total_call_edges += num_call_edges;
+            if !matches!(function, Cell::Var(VarIdent::Global { .. })) {
+                num_called_non_trivial_functions += 1;
+                total_non_trivial_call_edges += num_call_edges;
+            }
+        }
+        let mean_call_edges = if num_called_functions == 0 {
+            eprintln!("Warning: no functions called");
+            0f64
+        } else {
+            total_call_edges as f64 / num_called_functions as f64
+        };
+        let mean_non_trivial_call_edges = if num_called_non_trivial_functions == 0 {
+            eprintln!("Warning: no non-trivial functions called");
+            0f64
+        } else {
+            total_non_trivial_call_edges as f64 / num_called_non_trivial_functions as f64
+        };
+
+        Self {
+            module_parse_time_ms: module_parse_time.as_millis() as u64,
+            pre_analysis_time_ms: result.pre_analysis_time.as_millis() as u64,
+            constraint_gen_time_ms: result.constraint_gen_time.as_millis() as u64,
+            solver_time_ms: result.solver_time.as_millis() as u64,
+            num_called_functions,
+            num_called_non_trivial_functions,
+            mean_call_edges,
+            mean_non_trivial_call_edges,
+        }
+    }
+}
+
 fn main() -> io::Result<()> {
     let args = Args::parse();
 
@@ -190,7 +255,9 @@ fn main() -> io::Result<()> {
     let demands = get_demands(&args);
 
     let file_path = args.file_path.clone();
+    let module_parse_start = Instant::now();
     let module = Module::from_bc_path(&file_path).expect("Error parsing bc file");
+    let module_parse_time = module_parse_start.elapsed();
 
     let context_selector = CallStringSelector::<2>::with_call_string_length(args.call_string);
     let config = Config {
@@ -290,6 +357,16 @@ fn main() -> io::Result<()> {
         ),
         None => PointsToAnalysis::run(&solver, &module, context_selector, demands.clone(), &config),
     };
+
+    if args.json_output {
+        let json_output = JsonOutput::from_result(result, module_parse_time);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json_output).expect("Could not serialize")
+        );
+        return Ok(());
+    }
+
     let demand_filter = if args.full_query_output {
         None
     } else {

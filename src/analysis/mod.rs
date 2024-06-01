@@ -5,6 +5,7 @@ use std::mem;
 use std::ops::Deref;
 use std::rc::Rc;
 use std::str::FromStr;
+use std::time::{Duration, Instant};
 
 use hashbrown::{HashMap, HashSet};
 use llvm_ir::Module;
@@ -40,10 +41,12 @@ impl PointsToAnalysis {
         context_selector: C,
         demands: Demands<Cell>,
         config: &Config,
-    ) -> (S::Solution, Vec<Cell>)
+    ) -> PointsToResult<S::Solution>
     where
         S: Solver<DemandContextSensitiveInput<Cell, C>> + 'a,
     {
+        let pre_analysis_start = Instant::now();
+
         let mut pre_analyzer = PointsToPreAnalyzer::new();
         PointerModuleVisitor::new(
             &mut pre_analyzer,
@@ -51,6 +54,7 @@ impl PointsToAnalysis {
             &config.realloc_wrappers,
         )
         .visit_module(module);
+
         let cells_copy = pre_analyzer
             .functions
             .iter()
@@ -63,6 +67,9 @@ impl PointsToAnalysis {
             })
             .cloned()
             .collect();
+
+        let pre_analysis_time = pre_analysis_start.elapsed();
+        let constraint_gen_start = Instant::now();
 
         let mut constraint_generator = ConstraintGenerator::new();
         PointerModuleVisitor::new(
@@ -119,9 +126,33 @@ impl PointsToAnalysis {
             },
         };
 
+        let constraint_gen_time = constraint_gen_start.elapsed();
+
+        // Find called funcitons
+        let mut called_functions = HashSet::new();
+        for function in &input.input.functions {
+            for constraint in &function.constrained_terms.constraints {
+                if let Constraint::CallDummy { cond_node, .. } = constraint {
+                    called_functions.insert(cond_node.clone());
+                }
+            }
+        }
+
+        let solver_start = Instant::now();
+
         let solution = solver.solve(input);
 
-        (solution, cells_copy)
+        let solver_time = solver_start.elapsed();
+
+        PointsToResult {
+            solution,
+            cells: cells_copy,
+            called_functions,
+            cell_cache: CellCache::new(),
+            pre_analysis_time,
+            constraint_gen_time,
+            solver_time,
+        }
     }
 
     /// Runs the points-to analysis on LLVM module `module` using `solver`.
@@ -135,10 +166,7 @@ impl PointsToAnalysis {
     where
         S: Solver<DemandContextSensitiveInput<Cell, C>> + 'a,
     {
-        let (solution, cells) =
-            Self::solve_module(solver, module, context_selector, demands, config);
-
-        PointsToResult::new(solution, cells)
+        Self::solve_module(solver, module, context_selector, demands, config)
     }
 
     pub fn run_and_visualize<'a, S, C>(
@@ -153,12 +181,11 @@ impl PointsToAnalysis {
         S: Solver<DemandContextSensitiveInput<Cell, C>> + 'a,
         S::Solution: Visualizable,
     {
-        let (solution, cells) =
-            Self::solve_module(solver, module, context_selector, demands, config);
-        if let Err(e) = solution.visualize(dot_output_path) {
+        let res = Self::solve_module(solver, module, context_selector, demands, config);
+        if let Err(e) = res.solution.visualize(dot_output_path) {
             error!("Error visualizing graph: {e}");
         }
-        PointsToResult::new(solution, cells)
+        res
     }
 }
 
@@ -168,7 +195,15 @@ pub struct CellCache(RefCell<HashMap<Cell, String>>);
 pub struct CacheEntry<'b>(RefMut<'b, String>);
 
 #[derive(Debug, Clone)]
-pub struct PointsToResult<S>(S, Vec<Cell>, CellCache);
+pub struct PointsToResult<S> {
+    pub solution: S,
+    pub cells: Vec<Cell>,
+    pub cell_cache: CellCache,
+    pub called_functions: HashSet<Cell>,
+    pub pre_analysis_time: Duration,
+    pub constraint_gen_time: Duration,
+    pub solver_time: Duration,
+}
 
 impl<'a> CellCache {
     pub fn new() -> Self {
@@ -233,13 +268,6 @@ pub trait ResultTrait: Display {
             include_strs,
             exclude_strs,
         }
-    }
-}
-
-impl<S> PointsToResult<S> {
-    pub fn new(solution: S, cells: Vec<Cell>) -> Self {
-        let cache = CellCache::new();
-        Self(solution, cells, cache)
     }
 }
 
@@ -310,23 +338,23 @@ where
     }
 
     fn get_eager<'a>(&'a self, cell: &Cell) -> Option<Self::TermSet> {
-        Some(self.0.get(cell))
+        Some(self.solution.get(cell))
     }
 
     fn get_len<'a>(&'a self, cell: &Cell) -> Option<usize> {
-        Some(self.0.get_len(cell))
+        Some(self.solution.get_len(cell))
     }
 
     fn iter_solutions<'a>(&'a self) -> impl Iterator<Item = (Cell, LazyTermSet<'a, Self>)> {
-        self.1.iter().map(|c| (c.clone(), self.get(c).unwrap()))
+        self.cells.iter().map(|c| (c.clone(), self.get(c).unwrap()))
     }
 
     fn get_cells(&self) -> &[Cell] {
-        &self.1
+        &self.cells
     }
 
     fn get_cell_cache(&self) -> &CellCache {
-        &self.2
+        &self.cell_cache
     }
 }
 
@@ -419,7 +447,7 @@ where
     }
 
     pub fn into_solution(self) -> S {
-        self.0
+        self.solution
     }
 }
 

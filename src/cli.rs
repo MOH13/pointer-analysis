@@ -64,6 +64,9 @@ pub struct Args {
     ///
     #[arg(short, long, default_value_t = false)]
     pub full_query_output: bool,
+    /// JSON output, ignores all other output options
+    #[arg(short, long = "json", default_value_t = false)]
+    pub json_output: bool,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]

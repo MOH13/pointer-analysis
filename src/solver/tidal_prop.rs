@@ -1041,8 +1041,8 @@ where
             }
         }
 
-        println!("points to queries: {}", points_to_queries.iter().count());
-        println!(
+        eprintln!("points to queries: {}", points_to_queries.iter().count());
+        eprintln!(
             "pointed by queries: {:?}",
             state.pointed_by_queries.termset.len()
         );
