@@ -10,7 +10,7 @@ cargo build --release > /dev/null 2>&1
 
 declare -a benches
 benches=(benchmarks/*/bench.bc)
-# benches=(benchmarks/curl/bench.bc benchmarks/make/bench.bc benchmarks/htop/bench.bc)
+# benches=(benchmarks/curl/bench.bc benchmarks/make/bench.bc benchmarks/vim/bench.bc)
 
 echo "{"
 for bench in "${benches[@]}"; do
@@ -27,12 +27,14 @@ for bench in "${benches[@]}"; do
     echo "$(run "-s tidal" $bench)"
     echo "    ],"
 
-    echoerr "Tidal Propagation (Roaring)"
-    echo "    \"tidal_roaring\": ["
-    echo "$(run "-s tidal -t roaring" $bench),"
-    echo "$(run "-s tidal -t roaring" $bench),"
-    echo "$(run "-s tidal -t roaring" $bench)"
-    echo "    ],"
+    if [ "$name" != "cpython" ]; then
+        echoerr "Tidal Propagation (Roaring call graph)"
+        echo "    \"tidal_roaring\": ["
+        echo "$(run "-s tidal -t roaring -d call-graph" $bench),"
+        echo "$(run "-s tidal -t roaring -d call-graph" $bench),"
+        echo "$(run "-s tidal -t roaring -d call-graph" $bench)"
+        echo "    ],"
+    fi
 
     echoerr "Tidal Propagation (Call graph)"
     echo "    \"tidal_call_graph\": ["
@@ -48,11 +50,14 @@ for bench in "${benches[@]}"; do
     echo "$(run "-s wave" $bench)"
     echo "    ],"
 
-    echoerr "Wave Propagation (Roaring)"
-    echo "    \"wave_roaring\": ["
-    echo "$(run "-s wave -t roaring" $bench),"
-    echo "$(run "-s wave -t roaring" $bench),"
-    echo "$(run "-s wave -t roaring" $bench)"
+    if [ "$name" != "cpython" ]; then
+        echoerr "Wave Propagation (Roaring)"
+        echo "    \"wave_roaring\": ["
+        echo "$(run "-s wave -t roaring" $bench),"
+        echo "$(run "-s wave -t roaring" $bench),"
+        echo "$(run "-s wave -t roaring" $bench)"
+    fi
+
 
     if [ "$name" = "curl" ] || [ "$name" = "make" ] || [ "$name" = "htop" ]; then
         echo "    ],"

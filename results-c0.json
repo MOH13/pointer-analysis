@@ -1,0 +1,1102 @@
+{
+  "cpython": {
+    "tidal_shared": [
+      {
+        "module_parse_time_ms": 2929,
+        "pre_analysis_time_ms": 1315,
+        "constraint_gen_time_ms": 1231,
+        "solver_time_ms": 217116,
+        "num_called_functions": 15387,
+        "num_called_non_trivial_functions": 5724,
+        "mean_call_edges": 144.77260024696173,
+        "mean_non_trivial_call_edges": 387.4830538085255
+      },
+      {
+        "module_parse_time_ms": 2715,
+        "pre_analysis_time_ms": 1308,
+        "constraint_gen_time_ms": 1285,
+        "solver_time_ms": 221499,
+        "num_called_functions": 15387,
+        "num_called_non_trivial_functions": 5724,
+        "mean_call_edges": 144.77260024696173,
+        "mean_non_trivial_call_edges": 387.4830538085255
+      },
+      {
+        "module_parse_time_ms": 2760,
+        "pre_analysis_time_ms": 1316,
+        "constraint_gen_time_ms": 1251,
+        "solver_time_ms": 215695,
+        "num_called_functions": 15387,
+        "num_called_non_trivial_functions": 5724,
+        "mean_call_edges": 144.77260024696173,
+        "mean_non_trivial_call_edges": 387.4830538085255
+      }
+    ],
+    "tidal_call_graph": [
+      {
+        "module_parse_time_ms": 2768,
+        "pre_analysis_time_ms": 1334,
+        "constraint_gen_time_ms": 1260,
+        "solver_time_ms": 80149,
+        "num_called_functions": 15387,
+        "num_called_non_trivial_functions": 5724,
+        "mean_call_edges": 144.77260024696173,
+        "mean_non_trivial_call_edges": 387.4830538085255
+      },
+      {
+        "module_parse_time_ms": 2691,
+        "pre_analysis_time_ms": 1294,
+        "constraint_gen_time_ms": 1258,
+        "solver_time_ms": 82012,
+        "num_called_functions": 15387,
+        "num_called_non_trivial_functions": 5724,
+        "mean_call_edges": 144.77260024696173,
+        "mean_non_trivial_call_edges": 387.4830538085255
+      },
+      {
+        "module_parse_time_ms": 2792,
+        "pre_analysis_time_ms": 1278,
+        "constraint_gen_time_ms": 1254,
+        "solver_time_ms": 80298,
+        "num_called_functions": 15387,
+        "num_called_non_trivial_functions": 5724,
+        "mean_call_edges": 144.77260024696173,
+        "mean_non_trivial_call_edges": 387.4830538085255
+      }
+    ],
+    "wave_shared": [
+      {
+        "module_parse_time_ms": 2882,
+        "pre_analysis_time_ms": 1643,
+        "constraint_gen_time_ms": 1561,
+        "solver_time_ms": 126886,
+        "num_called_functions": 15387,
+        "num_called_non_trivial_functions": 5724,
+        "mean_call_edges": 144.77260024696173,
+        "mean_non_trivial_call_edges": 387.4830538085255
+      },
+      {
+        "module_parse_time_ms": 2678,
+        "pre_analysis_time_ms": 1343,
+        "constraint_gen_time_ms": 1219,
+        "solver_time_ms": 128463,
+        "num_called_functions": 15387,
+        "num_called_non_trivial_functions": 5724,
+        "mean_call_edges": 144.77260024696173,
+        "mean_non_trivial_call_edges": 387.4830538085255
+      },
+      {
+        "module_parse_time_ms": 2789,
+        "pre_analysis_time_ms": 1337,
+        "constraint_gen_time_ms": 1218,
+        "solver_time_ms": 128525,
+        "num_called_functions": 15387,
+        "num_called_non_trivial_functions": 5724,
+        "mean_call_edges": 144.77260024696173,
+        "mean_non_trivial_call_edges": 387.4830538085255
+      }
+    ]
+  },
+  "curl": {
+    "tidal_shared": [
+      {
+        "module_parse_time_ms": 39,
+        "pre_analysis_time_ms": 8,
+        "constraint_gen_time_ms": 7,
+        "solver_time_ms": 40,
+        "num_called_functions": 303,
+        "num_called_non_trivial_functions": 2,
+        "mean_call_edges": 1.0198019801980198,
+        "mean_non_trivial_call_edges": 4.0
+      },
+      {
+        "module_parse_time_ms": 33,
+        "pre_analysis_time_ms": 8,
+        "constraint_gen_time_ms": 8,
+        "solver_time_ms": 41,
+        "num_called_functions": 303,
+        "num_called_non_trivial_functions": 2,
+        "mean_call_edges": 1.0198019801980198,
+        "mean_non_trivial_call_edges": 4.0
+      },
+      {
+        "module_parse_time_ms": 33,
+        "pre_analysis_time_ms": 9,
+        "constraint_gen_time_ms": 8,
+        "solver_time_ms": 40,
+        "num_called_functions": 303,
+        "num_called_non_trivial_functions": 2,
+        "mean_call_edges": 1.0198019801980198,
+        "mean_non_trivial_call_edges": 4.0
+      }
+    ],
+    "tidal_roaring": [
+      {
+        "module_parse_time_ms": 33,
+        "pre_analysis_time_ms": 9,
+        "constraint_gen_time_ms": 9,
+        "solver_time_ms": 50,
+        "num_called_functions": 303,
+        "num_called_non_trivial_functions": 2,
+        "mean_call_edges": 1.0198019801980198,
+        "mean_non_trivial_call_edges": 4.0
+      },
+      {
+        "module_parse_time_ms": 33,
+        "pre_analysis_time_ms": 9,
+        "constraint_gen_time_ms": 9,
+        "solver_time_ms": 49,
+        "num_called_functions": 303,
+        "num_called_non_trivial_functions": 2,
+        "mean_call_edges": 1.0198019801980198,
+        "mean_non_trivial_call_edges": 4.0
+      },
+      {
+        "module_parse_time_ms": 33,
+        "pre_analysis_time_ms": 9,
+        "constraint_gen_time_ms": 8,
+        "solver_time_ms": 50,
+        "num_called_functions": 303,
+        "num_called_non_trivial_functions": 2,
+        "mean_call_edges": 1.0198019801980198,
+        "mean_non_trivial_call_edges": 4.0
+      }
+    ],
+    "tidal_call_graph": [
+      {
+        "module_parse_time_ms": 34,
+        "pre_analysis_time_ms": 8,
+        "constraint_gen_time_ms": 8,
+        "solver_time_ms": 24,
+        "num_called_functions": 303,
+        "num_called_non_trivial_functions": 2,
+        "mean_call_edges": 1.0198019801980198,
+        "mean_non_trivial_call_edges": 4.0
+      },
+      {
+        "module_parse_time_ms": 32,
+        "pre_analysis_time_ms": 9,
+        "constraint_gen_time_ms": 8,
+        "solver_time_ms": 23,
+        "num_called_functions": 303,
+        "num_called_non_trivial_functions": 2,
+        "mean_call_edges": 1.0198019801980198,
+        "mean_non_trivial_call_edges": 4.0
+      },
+      {
+        "module_parse_time_ms": 34,
+        "pre_analysis_time_ms": 8,
+        "constraint_gen_time_ms": 9,
+        "solver_time_ms": 23,
+        "num_called_functions": 303,
+        "num_called_non_trivial_functions": 2,
+        "mean_call_edges": 1.0198019801980198,
+        "mean_non_trivial_call_edges": 4.0
+      }
+    ],
+    "wave_shared": [
+      {
+        "module_parse_time_ms": 34,
+        "pre_analysis_time_ms": 8,
+        "constraint_gen_time_ms": 8,
+        "solver_time_ms": 23,
+        "num_called_functions": 303,
+        "num_called_non_trivial_functions": 2,
+        "mean_call_edges": 1.0198019801980198,
+        "mean_non_trivial_call_edges": 4.0
+      },
+      {
+        "module_parse_time_ms": 35,
+        "pre_analysis_time_ms": 9,
+        "constraint_gen_time_ms": 8,
+        "solver_time_ms": 23,
+        "num_called_functions": 303,
+        "num_called_non_trivial_functions": 2,
+        "mean_call_edges": 1.0198019801980198,
+        "mean_non_trivial_call_edges": 4.0
+      },
+      {
+        "module_parse_time_ms": 34,
+        "pre_analysis_time_ms": 9,
+        "constraint_gen_time_ms": 8,
+        "solver_time_ms": 22,
+        "num_called_functions": 303,
+        "num_called_non_trivial_functions": 2,
+        "mean_call_edges": 1.0198019801980198,
+        "mean_non_trivial_call_edges": 4.0
+      }
+    ],
+    "wave_roaring": [
+      {
+        "module_parse_time_ms": 31,
+        "pre_analysis_time_ms": 8,
+        "constraint_gen_time_ms": 8,
+        "solver_time_ms": 30,
+        "num_called_functions": 303,
+        "num_called_non_trivial_functions": 2,
+        "mean_call_edges": 1.0198019801980198,
+        "mean_non_trivial_call_edges": 4.0
+      },
+      {
+        "module_parse_time_ms": 45,
+        "pre_analysis_time_ms": 12,
+        "constraint_gen_time_ms": 11,
+        "solver_time_ms": 36,
+        "num_called_functions": 303,
+        "num_called_non_trivial_functions": 2,
+        "mean_call_edges": 1.0198019801980198,
+        "mean_non_trivial_call_edges": 4.0
+      },
+      {
+        "module_parse_time_ms": 34,
+        "pre_analysis_time_ms": 8,
+        "constraint_gen_time_ms": 8,
+        "solver_time_ms": 28,
+        "num_called_functions": 303,
+        "num_called_non_trivial_functions": 2,
+        "mean_call_edges": 1.0198019801980198,
+        "mean_non_trivial_call_edges": 4.0
+      }
+    ],
+    "demand_hash": [
+      {
+        "module_parse_time_ms": 32,
+        "pre_analysis_time_ms": 9,
+        "constraint_gen_time_ms": 9,
+        "solver_time_ms": 20,
+        "num_called_functions": 303,
+        "num_called_non_trivial_functions": 2,
+        "mean_call_edges": 1.0198019801980198,
+        "mean_non_trivial_call_edges": 4.0
+      },
+      {
+        "module_parse_time_ms": 32,
+        "pre_analysis_time_ms": 9,
+        "constraint_gen_time_ms": 9,
+        "solver_time_ms": 15,
+        "num_called_functions": 303,
+        "num_called_non_trivial_functions": 2,
+        "mean_call_edges": 1.0198019801980198,
+        "mean_non_trivial_call_edges": 4.0
+      },
+      {
+        "module_parse_time_ms": 31,
+        "pre_analysis_time_ms": 8,
+        "constraint_gen_time_ms": 8,
+        "solver_time_ms": 15,
+        "num_called_functions": 303,
+        "num_called_non_trivial_functions": 2,
+        "mean_call_edges": 1.0198019801980198,
+        "mean_non_trivial_call_edges": 4.0
+      }
+    ],
+    "demand_call_graph": [
+      {
+        "module_parse_time_ms": 32,
+        "pre_analysis_time_ms": 8,
+        "constraint_gen_time_ms": 8,
+        "solver_time_ms": 21,
+        "num_called_functions": 303,
+        "num_called_non_trivial_functions": 2,
+        "mean_call_edges": 1.0198019801980198,
+        "mean_non_trivial_call_edges": 4.0
+      },
+      {
+        "module_parse_time_ms": 33,
+        "pre_analysis_time_ms": 8,
+        "constraint_gen_time_ms": 7,
+        "solver_time_ms": 21,
+        "num_called_functions": 303,
+        "num_called_non_trivial_functions": 2,
+        "mean_call_edges": 1.0198019801980198,
+        "mean_non_trivial_call_edges": 4.0
+      },
+      {
+        "module_parse_time_ms": 32,
+        "pre_analysis_time_ms": 8,
+        "constraint_gen_time_ms": 8,
+        "solver_time_ms": 20,
+        "num_called_functions": 303,
+        "num_called_non_trivial_functions": 2,
+        "mean_call_edges": 1.0198019801980198,
+        "mean_non_trivial_call_edges": 4.0
+      }
+    ]
+  },
+  "emacs": {
+    "tidal_shared": [
+      {
+        "module_parse_time_ms": 702,
+        "pre_analysis_time_ms": 181,
+        "constraint_gen_time_ms": 190,
+        "solver_time_ms": 37248,
+        "num_called_functions": 8743,
+        "num_called_non_trivial_functions": 718,
+        "mean_call_edges": 22.496854626558388,
+        "mean_non_trivial_call_edges": 262.7646239554318
+      },
+      {
+        "module_parse_time_ms": 663,
+        "pre_analysis_time_ms": 180,
+        "constraint_gen_time_ms": 195,
+        "solver_time_ms": 36345,
+        "num_called_functions": 8743,
+        "num_called_non_trivial_functions": 718,
+        "mean_call_edges": 22.496854626558388,
+        "mean_non_trivial_call_edges": 262.7646239554318
+      },
+      {
+        "module_parse_time_ms": 666,
+        "pre_analysis_time_ms": 179,
+        "constraint_gen_time_ms": 191,
+        "solver_time_ms": 36490,
+        "num_called_functions": 8743,
+        "num_called_non_trivial_functions": 718,
+        "mean_call_edges": 22.496854626558388,
+        "mean_non_trivial_call_edges": 262.7646239554318
+      }
+    ],
+    "tidal_roaring": [
+      {
+        "module_parse_time_ms": 656,
+        "pre_analysis_time_ms": 177,
+        "constraint_gen_time_ms": 187,
+        "solver_time_ms": 129244,
+        "num_called_functions": 8743,
+        "num_called_non_trivial_functions": 718,
+        "mean_call_edges": 22.496854626558388,
+        "mean_non_trivial_call_edges": 262.7646239554318
+      },
+      {
+        "module_parse_time_ms": 675,
+        "pre_analysis_time_ms": 181,
+        "constraint_gen_time_ms": 190,
+        "solver_time_ms": 129829,
+        "num_called_functions": 8743,
+        "num_called_non_trivial_functions": 718,
+        "mean_call_edges": 22.496854626558388,
+        "mean_non_trivial_call_edges": 262.7646239554318
+      },
+      {
+        "module_parse_time_ms": 664,
+        "pre_analysis_time_ms": 213,
+        "constraint_gen_time_ms": 188,
+        "solver_time_ms": 131360,
+        "num_called_functions": 8743,
+        "num_called_non_trivial_functions": 718,
+        "mean_call_edges": 22.496854626558388,
+        "mean_non_trivial_call_edges": 262.7646239554318
+      }
+    ],
+    "tidal_call_graph": [
+      {
+        "module_parse_time_ms": 779,
+        "pre_analysis_time_ms": 186,
+        "constraint_gen_time_ms": 197,
+        "solver_time_ms": 25414,
+        "num_called_functions": 8743,
+        "num_called_non_trivial_functions": 718,
+        "mean_call_edges": 22.496854626558388,
+        "mean_non_trivial_call_edges": 262.7646239554318
+      },
+      {
+        "module_parse_time_ms": 659,
+        "pre_analysis_time_ms": 177,
+        "constraint_gen_time_ms": 188,
+        "solver_time_ms": 24726,
+        "num_called_functions": 8743,
+        "num_called_non_trivial_functions": 718,
+        "mean_call_edges": 22.496854626558388,
+        "mean_non_trivial_call_edges": 262.7646239554318
+      },
+      {
+        "module_parse_time_ms": 668,
+        "pre_analysis_time_ms": 178,
+        "constraint_gen_time_ms": 191,
+        "solver_time_ms": 24564,
+        "num_called_functions": 8743,
+        "num_called_non_trivial_functions": 718,
+        "mean_call_edges": 22.496854626558388,
+        "mean_non_trivial_call_edges": 262.7646239554318
+      }
+    ],
+    "wave_shared": [
+      {
+        "module_parse_time_ms": 671,
+        "pre_analysis_time_ms": 179,
+        "constraint_gen_time_ms": 200,
+        "solver_time_ms": 41420,
+        "num_called_functions": 8743,
+        "num_called_non_trivial_functions": 718,
+        "mean_call_edges": 22.496854626558388,
+        "mean_non_trivial_call_edges": 262.7646239554318
+      },
+      {
+        "module_parse_time_ms": 672,
+        "pre_analysis_time_ms": 186,
+        "constraint_gen_time_ms": 192,
+        "solver_time_ms": 39570,
+        "num_called_functions": 8743,
+        "num_called_non_trivial_functions": 718,
+        "mean_call_edges": 22.496854626558388,
+        "mean_non_trivial_call_edges": 262.7646239554318
+      },
+      {
+        "module_parse_time_ms": 674,
+        "pre_analysis_time_ms": 181,
+        "constraint_gen_time_ms": 188,
+        "solver_time_ms": 39042,
+        "num_called_functions": 8743,
+        "num_called_non_trivial_functions": 718,
+        "mean_call_edges": 22.496854626558388,
+        "mean_non_trivial_call_edges": 262.7646239554318
+      }
+    ],
+    "wave_roaring": [
+      {
+        "module_parse_time_ms": 718,
+        "pre_analysis_time_ms": 179,
+        "constraint_gen_time_ms": 189,
+        "solver_time_ms": 124565,
+        "num_called_functions": 8743,
+        "num_called_non_trivial_functions": 718,
+        "mean_call_edges": 22.496854626558388,
+        "mean_non_trivial_call_edges": 262.7646239554318
+      },
+      {
+        "module_parse_time_ms": 697,
+        "pre_analysis_time_ms": 184,
+        "constraint_gen_time_ms": 193,
+        "solver_time_ms": 127024,
+        "num_called_functions": 8743,
+        "num_called_non_trivial_functions": 718,
+        "mean_call_edges": 22.496854626558388,
+        "mean_non_trivial_call_edges": 262.7646239554318
+      },
+      {
+        "module_parse_time_ms": 682,
+        "pre_analysis_time_ms": 179,
+        "constraint_gen_time_ms": 191,
+        "solver_time_ms": 130254,
+        "num_called_functions": 8743,
+        "num_called_non_trivial_functions": 718,
+        "mean_call_edges": 22.496854626558388,
+        "mean_non_trivial_call_edges": 262.7646239554318
+      }
+    ]
+  },
+  "htop": {
+    "tidal_shared": [
+      {
+        "module_parse_time_ms": 57,
+        "pre_analysis_time_ms": 16,
+        "constraint_gen_time_ms": 18,
+        "solver_time_ms": 303,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 12.057297297297298,
+        "mean_non_trivial_call_edges": 83.48387096774194
+      },
+      {
+        "module_parse_time_ms": 52,
+        "pre_analysis_time_ms": 16,
+        "constraint_gen_time_ms": 18,
+        "solver_time_ms": 369,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 12.057297297297298,
+        "mean_non_trivial_call_edges": 83.48387096774194
+      },
+      {
+        "module_parse_time_ms": 51,
+        "pre_analysis_time_ms": 16,
+        "constraint_gen_time_ms": 17,
+        "solver_time_ms": 289,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 12.057297297297298,
+        "mean_non_trivial_call_edges": 83.48387096774194
+      }
+    ],
+    "tidal_roaring": [
+      {
+        "module_parse_time_ms": 63,
+        "pre_analysis_time_ms": 17,
+        "constraint_gen_time_ms": 18,
+        "solver_time_ms": 842,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 12.057297297297298,
+        "mean_non_trivial_call_edges": 83.48387096774194
+      },
+      {
+        "module_parse_time_ms": 59,
+        "pre_analysis_time_ms": 17,
+        "constraint_gen_time_ms": 19,
+        "solver_time_ms": 951,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 12.057297297297298,
+        "mean_non_trivial_call_edges": 83.48387096774194
+      },
+      {
+        "module_parse_time_ms": 70,
+        "pre_analysis_time_ms": 20,
+        "constraint_gen_time_ms": 21,
+        "solver_time_ms": 988,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 12.057297297297298,
+        "mean_non_trivial_call_edges": 83.48387096774194
+      }
+    ],
+    "tidal_call_graph": [
+      {
+        "module_parse_time_ms": 66,
+        "pre_analysis_time_ms": 18,
+        "constraint_gen_time_ms": 19,
+        "solver_time_ms": 377,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 12.057297297297298,
+        "mean_non_trivial_call_edges": 83.48387096774194
+      },
+      {
+        "module_parse_time_ms": 56,
+        "pre_analysis_time_ms": 17,
+        "constraint_gen_time_ms": 18,
+        "solver_time_ms": 333,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 12.057297297297298,
+        "mean_non_trivial_call_edges": 83.48387096774194
+      },
+      {
+        "module_parse_time_ms": 59,
+        "pre_analysis_time_ms": 17,
+        "constraint_gen_time_ms": 18,
+        "solver_time_ms": 291,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 12.057297297297298,
+        "mean_non_trivial_call_edges": 83.48387096774194
+      }
+    ],
+    "wave_shared": [
+      {
+        "module_parse_time_ms": 54,
+        "pre_analysis_time_ms": 16,
+        "constraint_gen_time_ms": 17,
+        "solver_time_ms": 258,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 12.057297297297298,
+        "mean_non_trivial_call_edges": 83.48387096774194
+      },
+      {
+        "module_parse_time_ms": 52,
+        "pre_analysis_time_ms": 16,
+        "constraint_gen_time_ms": 17,
+        "solver_time_ms": 260,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 12.057297297297298,
+        "mean_non_trivial_call_edges": 83.48387096774194
+      },
+      {
+        "module_parse_time_ms": 54,
+        "pre_analysis_time_ms": 16,
+        "constraint_gen_time_ms": 17,
+        "solver_time_ms": 283,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 12.057297297297298,
+        "mean_non_trivial_call_edges": 83.48387096774194
+      }
+    ],
+    "wave_roaring": [
+      {
+        "module_parse_time_ms": 56,
+        "pre_analysis_time_ms": 16,
+        "constraint_gen_time_ms": 17,
+        "solver_time_ms": 893,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 12.057297297297298,
+        "mean_non_trivial_call_edges": 83.48387096774194
+      },
+      {
+        "module_parse_time_ms": 53,
+        "pre_analysis_time_ms": 16,
+        "constraint_gen_time_ms": 18,
+        "solver_time_ms": 876,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 12.057297297297298,
+        "mean_non_trivial_call_edges": 83.48387096774194
+      },
+      {
+        "module_parse_time_ms": 57,
+        "pre_analysis_time_ms": 16,
+        "constraint_gen_time_ms": 18,
+        "solver_time_ms": 888,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 12.057297297297298,
+        "mean_non_trivial_call_edges": 83.48387096774194
+      }
+    ],
+    "demand_hash": [
+      {
+        "module_parse_time_ms": 54,
+        "pre_analysis_time_ms": 16,
+        "constraint_gen_time_ms": 18,
+        "solver_time_ms": 10522,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 12.057297297297298,
+        "mean_non_trivial_call_edges": 83.48387096774194
+      },
+      {
+        "module_parse_time_ms": 56,
+        "pre_analysis_time_ms": 17,
+        "constraint_gen_time_ms": 18,
+        "solver_time_ms": 10967,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 12.057297297297298,
+        "mean_non_trivial_call_edges": 83.48387096774194
+      },
+      {
+        "module_parse_time_ms": 53,
+        "pre_analysis_time_ms": 16,
+        "constraint_gen_time_ms": 18,
+        "solver_time_ms": 10499,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 12.057297297297298,
+        "mean_non_trivial_call_edges": 83.48387096774194
+      }
+    ],
+    "demand_call_graph": [
+      {
+        "module_parse_time_ms": 68,
+        "pre_analysis_time_ms": 18,
+        "constraint_gen_time_ms": 18,
+        "solver_time_ms": 8003,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 12.057297297297298,
+        "mean_non_trivial_call_edges": 83.48387096774194
+      },
+      {
+        "module_parse_time_ms": 58,
+        "pre_analysis_time_ms": 17,
+        "constraint_gen_time_ms": 18,
+        "solver_time_ms": 7967,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 12.057297297297298,
+        "mean_non_trivial_call_edges": 83.48387096774194
+      },
+      {
+        "module_parse_time_ms": 56,
+        "pre_analysis_time_ms": 17,
+        "constraint_gen_time_ms": 18,
+        "solver_time_ms": 7929,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 12.057297297297298,
+        "mean_non_trivial_call_edges": 83.48387096774194
+      }
+    ]
+  },
+  "make": {
+    "tidal_shared": [
+      {
+        "module_parse_time_ms": 51,
+        "pre_analysis_time_ms": 13,
+        "constraint_gen_time_ms": 13,
+        "solver_time_ms": 158,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.672686230248307,
+        "mean_non_trivial_call_edges": 30.8
+      },
+      {
+        "module_parse_time_ms": 50,
+        "pre_analysis_time_ms": 12,
+        "constraint_gen_time_ms": 13,
+        "solver_time_ms": 167,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.672686230248307,
+        "mean_non_trivial_call_edges": 30.8
+      },
+      {
+        "module_parse_time_ms": 45,
+        "pre_analysis_time_ms": 12,
+        "constraint_gen_time_ms": 12,
+        "solver_time_ms": 158,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.672686230248307,
+        "mean_non_trivial_call_edges": 30.8
+      }
+    ],
+    "tidal_roaring": [
+      {
+        "module_parse_time_ms": 48,
+        "pre_analysis_time_ms": 12,
+        "constraint_gen_time_ms": 11,
+        "solver_time_ms": 217,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.672686230248307,
+        "mean_non_trivial_call_edges": 30.8
+      },
+      {
+        "module_parse_time_ms": 47,
+        "pre_analysis_time_ms": 12,
+        "constraint_gen_time_ms": 13,
+        "solver_time_ms": 211,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.672686230248307,
+        "mean_non_trivial_call_edges": 30.8
+      },
+      {
+        "module_parse_time_ms": 46,
+        "pre_analysis_time_ms": 13,
+        "constraint_gen_time_ms": 13,
+        "solver_time_ms": 216,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.672686230248307,
+        "mean_non_trivial_call_edges": 30.8
+      }
+    ],
+    "tidal_call_graph": [
+      {
+        "module_parse_time_ms": 49,
+        "pre_analysis_time_ms": 12,
+        "constraint_gen_time_ms": 12,
+        "solver_time_ms": 194,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.672686230248307,
+        "mean_non_trivial_call_edges": 30.8
+      },
+      {
+        "module_parse_time_ms": 53,
+        "pre_analysis_time_ms": 13,
+        "constraint_gen_time_ms": 12,
+        "solver_time_ms": 184,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.672686230248307,
+        "mean_non_trivial_call_edges": 30.8
+      },
+      {
+        "module_parse_time_ms": 47,
+        "pre_analysis_time_ms": 13,
+        "constraint_gen_time_ms": 13,
+        "solver_time_ms": 188,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.672686230248307,
+        "mean_non_trivial_call_edges": 30.8
+      }
+    ],
+    "wave_shared": [
+      {
+        "module_parse_time_ms": 46,
+        "pre_analysis_time_ms": 12,
+        "constraint_gen_time_ms": 13,
+        "solver_time_ms": 122,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.672686230248307,
+        "mean_non_trivial_call_edges": 30.8
+      },
+      {
+        "module_parse_time_ms": 48,
+        "pre_analysis_time_ms": 12,
+        "constraint_gen_time_ms": 12,
+        "solver_time_ms": 127,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.672686230248307,
+        "mean_non_trivial_call_edges": 30.8
+      },
+      {
+        "module_parse_time_ms": 46,
+        "pre_analysis_time_ms": 13,
+        "constraint_gen_time_ms": 13,
+        "solver_time_ms": 135,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.672686230248307,
+        "mean_non_trivial_call_edges": 30.8
+      }
+    ],
+    "wave_roaring": [
+      {
+        "module_parse_time_ms": 46,
+        "pre_analysis_time_ms": 12,
+        "constraint_gen_time_ms": 12,
+        "solver_time_ms": 167,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.672686230248307,
+        "mean_non_trivial_call_edges": 30.8
+      },
+      {
+        "module_parse_time_ms": 45,
+        "pre_analysis_time_ms": 12,
+        "constraint_gen_time_ms": 12,
+        "solver_time_ms": 161,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.672686230248307,
+        "mean_non_trivial_call_edges": 30.8
+      },
+      {
+        "module_parse_time_ms": 45,
+        "pre_analysis_time_ms": 12,
+        "constraint_gen_time_ms": 11,
+        "solver_time_ms": 161,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.672686230248307,
+        "mean_non_trivial_call_edges": 30.8
+      }
+    ],
+    "demand_hash": [
+      {
+        "module_parse_time_ms": 47,
+        "pre_analysis_time_ms": 12,
+        "constraint_gen_time_ms": 11,
+        "solver_time_ms": 696,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.672686230248307,
+        "mean_non_trivial_call_edges": 30.8
+      },
+      {
+        "module_parse_time_ms": 45,
+        "pre_analysis_time_ms": 12,
+        "constraint_gen_time_ms": 12,
+        "solver_time_ms": 704,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.672686230248307,
+        "mean_non_trivial_call_edges": 30.8
+      },
+      {
+        "module_parse_time_ms": 46,
+        "pre_analysis_time_ms": 12,
+        "constraint_gen_time_ms": 12,
+        "solver_time_ms": 696,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.672686230248307,
+        "mean_non_trivial_call_edges": 30.8
+      }
+    ],
+    "demand_call_graph": [
+      {
+        "module_parse_time_ms": 45,
+        "pre_analysis_time_ms": 12,
+        "constraint_gen_time_ms": 12,
+        "solver_time_ms": 565,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.672686230248307,
+        "mean_non_trivial_call_edges": 30.8
+      },
+      {
+        "module_parse_time_ms": 48,
+        "pre_analysis_time_ms": 13,
+        "constraint_gen_time_ms": 13,
+        "solver_time_ms": 556,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.672686230248307,
+        "mean_non_trivial_call_edges": 30.8
+      },
+      {
+        "module_parse_time_ms": 45,
+        "pre_analysis_time_ms": 13,
+        "constraint_gen_time_ms": 13,
+        "solver_time_ms": 563,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.672686230248307,
+        "mean_non_trivial_call_edges": 30.8
+      }
+    ]
+  },
+  "vim": {
+    "tidal_shared": [
+      {
+        "module_parse_time_ms": 864,
+        "pre_analysis_time_ms": 208,
+        "constraint_gen_time_ms": 210,
+        "solver_time_ms": 67540,
+        "num_called_functions": 7390,
+        "num_called_non_trivial_functions": 1030,
+        "mean_call_edges": 4.139512855209743,
+        "mean_non_trivial_call_edges": 23.525242718446602
+      },
+      {
+        "module_parse_time_ms": 860,
+        "pre_analysis_time_ms": 211,
+        "constraint_gen_time_ms": 216,
+        "solver_time_ms": 68553,
+        "num_called_functions": 7390,
+        "num_called_non_trivial_functions": 1030,
+        "mean_call_edges": 4.139512855209743,
+        "mean_non_trivial_call_edges": 23.525242718446602
+      },
+      {
+        "module_parse_time_ms": 921,
+        "pre_analysis_time_ms": 210,
+        "constraint_gen_time_ms": 214,
+        "solver_time_ms": 65587,
+        "num_called_functions": 7390,
+        "num_called_non_trivial_functions": 1030,
+        "mean_call_edges": 4.139512855209743,
+        "mean_non_trivial_call_edges": 23.525242718446602
+      }
+    ],
+    "tidal_roaring": [
+      {
+        "module_parse_time_ms": 897,
+        "pre_analysis_time_ms": 211,
+        "constraint_gen_time_ms": 210,
+        "solver_time_ms": 273071,
+        "num_called_functions": 7390,
+        "num_called_non_trivial_functions": 1030,
+        "mean_call_edges": 4.139512855209743,
+        "mean_non_trivial_call_edges": 23.525242718446602
+      },
+      {
+        "module_parse_time_ms": 838,
+        "pre_analysis_time_ms": 212,
+        "constraint_gen_time_ms": 212,
+        "solver_time_ms": 274130,
+        "num_called_functions": 7390,
+        "num_called_non_trivial_functions": 1030,
+        "mean_call_edges": 4.139512855209743,
+        "mean_non_trivial_call_edges": 23.525242718446602
+      },
+      {
+        "module_parse_time_ms": 843,
+        "pre_analysis_time_ms": 208,
+        "constraint_gen_time_ms": 213,
+        "solver_time_ms": 273364,
+        "num_called_functions": 7390,
+        "num_called_non_trivial_functions": 1030,
+        "mean_call_edges": 4.139512855209743,
+        "mean_non_trivial_call_edges": 23.525242718446602
+      }
+    ],
+    "tidal_call_graph": [
+      {
+        "module_parse_time_ms": 846,
+        "pre_analysis_time_ms": 208,
+        "constraint_gen_time_ms": 208,
+        "solver_time_ms": 22427,
+        "num_called_functions": 7390,
+        "num_called_non_trivial_functions": 1030,
+        "mean_call_edges": 4.139512855209743,
+        "mean_non_trivial_call_edges": 23.525242718446602
+      },
+      {
+        "module_parse_time_ms": 887,
+        "pre_analysis_time_ms": 211,
+        "constraint_gen_time_ms": 211,
+        "solver_time_ms": 22302,
+        "num_called_functions": 7390,
+        "num_called_non_trivial_functions": 1030,
+        "mean_call_edges": 4.139512855209743,
+        "mean_non_trivial_call_edges": 23.525242718446602
+      },
+      {
+        "module_parse_time_ms": 903,
+        "pre_analysis_time_ms": 215,
+        "constraint_gen_time_ms": 211,
+        "solver_time_ms": 22021,
+        "num_called_functions": 7390,
+        "num_called_non_trivial_functions": 1030,
+        "mean_call_edges": 4.139512855209743,
+        "mean_non_trivial_call_edges": 23.525242718446602
+      }
+    ],
+    "wave_shared": [
+      {
+        "module_parse_time_ms": 855,
+        "pre_analysis_time_ms": 207,
+        "constraint_gen_time_ms": 209,
+        "solver_time_ms": 87276,
+        "num_called_functions": 7390,
+        "num_called_non_trivial_functions": 1030,
+        "mean_call_edges": 4.139512855209743,
+        "mean_non_trivial_call_edges": 23.525242718446602
+      },
+      {
+        "module_parse_time_ms": 848,
+        "pre_analysis_time_ms": 208,
+        "constraint_gen_time_ms": 209,
+        "solver_time_ms": 88502,
+        "num_called_functions": 7390,
+        "num_called_non_trivial_functions": 1030,
+        "mean_call_edges": 4.139512855209743,
+        "mean_non_trivial_call_edges": 23.525242718446602
+      },
+      {
+        "module_parse_time_ms": 841,
+        "pre_analysis_time_ms": 211,
+        "constraint_gen_time_ms": 213,
+        "solver_time_ms": 89661,
+        "num_called_functions": 7390,
+        "num_called_non_trivial_functions": 1030,
+        "mean_call_edges": 4.139512855209743,
+        "mean_non_trivial_call_edges": 23.525242718446602
+      }
+    ],
+    "wave_roaring": [
+      {
+        "module_parse_time_ms": 868,
+        "pre_analysis_time_ms": 212,
+        "constraint_gen_time_ms": 212,
+        "solver_time_ms": 464211,
+        "num_called_functions": 7390,
+        "num_called_non_trivial_functions": 1030,
+        "mean_call_edges": 4.139512855209743,
+        "mean_non_trivial_call_edges": 23.525242718446602
+      },
+      {
+        "module_parse_time_ms": 845,
+        "pre_analysis_time_ms": 213,
+        "constraint_gen_time_ms": 244,
+        "solver_time_ms": 471152,
+        "num_called_functions": 7390,
+        "num_called_non_trivial_functions": 1030,
+        "mean_call_edges": 4.139512855209743,
+        "mean_non_trivial_call_edges": 23.525242718446602
+      },
+      {
+        "module_parse_time_ms": 866,
+        "pre_analysis_time_ms": 215,
+        "constraint_gen_time_ms": 255,
+        "solver_time_ms": 457600,
+        "num_called_functions": 7390,
+        "num_called_non_trivial_functions": 1030,
+        "mean_call_edges": 4.139512855209743,
+        "mean_non_trivial_call_edges": 23.525242718446602
+      }
+    ]
+  }
+}
