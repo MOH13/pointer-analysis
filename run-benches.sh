@@ -10,7 +10,7 @@ cargo build --release > /dev/null 2>&1
 
 declare -a benches
 benches=(benchmarks/*/bench.bc)
-# benches=(benchmarks/curl/bench.bc benchmarks/make/bench.bc benchmarks/vim/bench.bc)
+# benches=(benchmarks/curl/bench.bc benchmarks/make/bench.bc benchmarks/htop/bench.bc)
 
 echo "{"
 for bench in "${benches[@]}"; do
@@ -64,16 +64,16 @@ for bench in "${benches[@]}"; do
 
         echoerr "Demand Worklist (Hash)"
         echo "    \"demand_hash\": ["
-        echo "$(run "-s basic-demand -t hash -d call-graph" $bench),"
-        echo "$(run "-s basic-demand -t hash -d call-graph" $bench),"
-        echo "$(run "-s basic-demand -t hash -d call-graph" $bench)"
+        echo "$(run "-s basic-demand -t hash" $bench),"
+        echo "$(run "-s basic-demand -t hash" $bench),"
+        echo "$(run "-s basic-demand -t hash" $bench)"
         echo "    ],"
 
         echoerr "Demand Worklist (Call graph)"
         echo "    \"demand_call_graph\": ["
-        echo "$(run "-s basic-demand -t hash" $bench),"
-        echo "$(run "-s basic-demand -t hash" $bench),"
-        echo "$(run "-s basic-demand -t hash" $bench)"
+        echo "$(run "-s basic-demand -t hash -d call-graph" $bench),"
+        echo "$(run "-s basic-demand -t hash -d call-graph" $bench),"
+        echo "$(run "-s basic-demand -t hash -d call-graph" $bench)"
         echo "    ]"
     else
         echo "    ]"
