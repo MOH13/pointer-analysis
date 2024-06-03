@@ -2,7 +2,23 @@
 echoerr() { echo "$@" 1>&2; }
 
 run() {
-    target/release/pointer-analysis $1 -c 0 -j $2 2> /dev/null | sed 's/^/      /'
+    a="target/release/pointer-analysis -c 0 -j $@ 2> /dev/null | sed 's/^/      /'"
+    timeout 1h bash -c "$a"
+}
+
+run_three() {
+    run1=$(run $@)
+    if [ $? -eq 0 ]; then
+        run2=$(run $@)
+        if [ $? -eq 0 ]; then
+            run3=$(run $@)
+            if [ $? -eq 0 ]; then
+                echo "$run1,"
+                echo "$run2,"
+                echo "$run3"
+            fi
+        fi
+    fi
 }
 
 echoerr "Building.."
@@ -22,40 +38,30 @@ for bench in "${benches[@]}"; do
 
     echoerr "Tidal Propagation (Shared)"
     echo "    \"tidal_shared\": ["
-    echo "$(run "-s tidal" $bench),"
-    echo "$(run "-s tidal" $bench),"
-    echo "$(run "-s tidal" $bench)"
+    run_three -s tidal $bench
     echo "    ],"
 
     if [ "$name" != "cpython" ]; then
         echoerr "Tidal Propagation (Roaring call graph)"
         echo "    \"tidal_roaring\": ["
-        echo "$(run "-s tidal -t roaring -d call-graph" $bench),"
-        echo "$(run "-s tidal -t roaring -d call-graph" $bench),"
-        echo "$(run "-s tidal -t roaring -d call-graph" $bench)"
+        run_three -s tidal -t roaring -d call-graph $bench
         echo "    ],"
     fi
 
     echoerr "Tidal Propagation (Call graph)"
     echo "    \"tidal_call_graph\": ["
-    echo "$(run "-s tidal -d call-graph" $bench),"
-    echo "$(run "-s tidal -d call-graph" $bench),"
-    echo "$(run "-s tidal -d call-graph" $bench)"
+    run_three -s tidal -d call-graph $bench
     echo "    ],"
 
     echoerr "Wave Propagation (Shared)"
     echo "    \"wave_shared\": ["
-    echo "$(run "-s wave" $bench),"
-    echo "$(run "-s wave" $bench),"
-    echo "$(run "-s wave" $bench)"
-    echo "    ],"
+    run_three -s wave $bench
 
     if [ "$name" != "cpython" ]; then
+        echo "    ],"
         echoerr "Wave Propagation (Roaring)"
         echo "    \"wave_roaring\": ["
-        echo "$(run "-s wave -t roaring" $bench),"
-        echo "$(run "-s wave -t roaring" $bench),"
-        echo "$(run "-s wave -t roaring" $bench)"
+        run_three -s wave -t roaring $bench
     fi
 
 
@@ -64,16 +70,12 @@ for bench in "${benches[@]}"; do
 
         echoerr "Demand Worklist (Hash)"
         echo "    \"demand_hash\": ["
-        echo "$(run "-s basic-demand -t hash" $bench),"
-        echo "$(run "-s basic-demand -t hash" $bench),"
-        echo "$(run "-s basic-demand -t hash" $bench)"
+        run_three -s basic-demand -t hash $bench
         echo "    ],"
 
         echoerr "Demand Worklist (Call graph)"
         echo "    \"demand_call_graph\": ["
-        echo "$(run "-s basic-demand -t hash -d call-graph" $bench),"
-        echo "$(run "-s basic-demand -t hash -d call-graph" $bench),"
-        echo "$(run "-s basic-demand -t hash -d call-graph" $bench)"
+        run_three -s basic-demand -t hash -d call-graph $bench
         echo "    ]"
     else
         echo "    ]"

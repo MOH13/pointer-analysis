@@ -672,16 +672,16 @@ where
         let mut components: HashMap<IntegerTerm, (IntegerTerm, u32)> = HashMap::new();
         for v in 0..internal_state.node_count as u32 {
             if let Some(r_v) = internal_state.r[v as usize] {
-                let sol_len = self.sols[v as usize].len() as u32;
-                if self.edges.subset[v as usize].len() == 0 {
+                let edge_count = self.edges.subset[v as usize].len() as u32;
+                if edge_count == 0 {
                     continue;
                 }
                 nodes.push((v, r_v));
-                if let Err(mut cur) = components.try_insert(r_v, (v, sol_len)) {
-                    let (cur_best, best_sol_len) = cur.entry.get_mut();
-                    if sol_len > *best_sol_len {
+                if let Err(mut cur) = components.try_insert(r_v, (v, edge_count)) {
+                    let (cur_best, best_edge_count) = cur.entry.get_mut();
+                    if edge_count > *best_edge_count {
                         *cur_best = v;
-                        *best_sol_len = sol_len;
+                        *best_edge_count = edge_count;
                     }
                 }
             }
