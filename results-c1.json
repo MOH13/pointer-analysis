@@ -3,10 +3,16 @@
     "tidal_shared": [
       { "error": "OOM" }
     ],
+    "tidal_roaring": [
+      { "error": "OOM" }
+    ],
     "tidal_call_graph": [
       { "error": "OOM" }
     ],
     "wave_shared": [
+      { "error": "OOM" }
+    ],
+    "wave_roaring": [
       { "error": "OOM" }
     ]
   },
@@ -16,34 +22,34 @@
         "module_parse_time_ms": 34,
         "pre_analysis_time_ms": 8,
         "constraint_gen_time_ms": 8,
-        "solver_time_ms": 154,
+        "solver_time_ms": 152,
         "num_called_functions": 303,
         "num_called_non_trivial_functions": 2,
         "mean_call_edges": 1.0198019801980198,
         "mean_non_trivial_call_edges": 4.0,
-        "memory": 115236864
-      },
-      {
-        "module_parse_time_ms": 34,
-        "pre_analysis_time_ms": 8,
-        "constraint_gen_time_ms": 8,
-        "solver_time_ms": 158,
-        "num_called_functions": 303,
-        "num_called_non_trivial_functions": 2,
-        "mean_call_edges": 1.0198019801980198,
-        "mean_non_trivial_call_edges": 4.0,
-        "memory": 114905088
+        "memory": 114814976
       },
       {
         "module_parse_time_ms": 33,
         "pre_analysis_time_ms": 8,
         "constraint_gen_time_ms": 8,
-        "solver_time_ms": 155,
+        "solver_time_ms": 151,
         "num_called_functions": 303,
         "num_called_non_trivial_functions": 2,
         "mean_call_edges": 1.0198019801980198,
         "mean_non_trivial_call_edges": 4.0,
-        "memory": 114946048
+        "memory": 114819072
+      },
+      {
+        "module_parse_time_ms": 33,
+        "pre_analysis_time_ms": 8,
+        "constraint_gen_time_ms": 7,
+        "solver_time_ms": 150,
+        "num_called_functions": 303,
+        "num_called_non_trivial_functions": 2,
+        "mean_call_edges": 1.0198019801980198,
+        "mean_non_trivial_call_edges": 4.0,
+        "memory": 114880512
       }
     ],
     "tidal_roaring": [
@@ -51,69 +57,69 @@
         "module_parse_time_ms": 33,
         "pre_analysis_time_ms": 8,
         "constraint_gen_time_ms": 8,
-        "solver_time_ms": 92,
+        "solver_time_ms": 91,
         "num_called_functions": 303,
         "num_called_non_trivial_functions": 2,
         "mean_call_edges": 1.0198019801980198,
         "mean_non_trivial_call_edges": 4.0,
-        "memory": 95457280
-      },
-      {
-        "module_parse_time_ms": 34,
-        "pre_analysis_time_ms": 8,
-        "constraint_gen_time_ms": 8,
-        "solver_time_ms": 93,
-        "num_called_functions": 303,
-        "num_called_non_trivial_functions": 2,
-        "mean_call_edges": 1.0198019801980198,
-        "mean_non_trivial_call_edges": 4.0,
-        "memory": 95608832
-      },
-      {
-        "module_parse_time_ms": 34,
-        "pre_analysis_time_ms": 8,
-        "constraint_gen_time_ms": 8,
-        "solver_time_ms": 92,
-        "num_called_functions": 303,
-        "num_called_non_trivial_functions": 2,
-        "mean_call_edges": 1.0198019801980198,
-        "mean_non_trivial_call_edges": 4.0,
-        "memory": 95580160
-      }
-    ],
-    "tidal_call_graph": [
-      {
-        "module_parse_time_ms": 34,
-        "pre_analysis_time_ms": 8,
-        "constraint_gen_time_ms": 8,
-        "solver_time_ms": 71,
-        "num_called_functions": 303,
-        "num_called_non_trivial_functions": 2,
-        "mean_call_edges": 1.0198019801980198,
-        "mean_non_trivial_call_edges": 4.0,
-        "memory": 106246144
-      },
-      {
-        "module_parse_time_ms": 34,
-        "pre_analysis_time_ms": 8,
-        "constraint_gen_time_ms": 8,
-        "solver_time_ms": 71,
-        "num_called_functions": 303,
-        "num_called_non_trivial_functions": 2,
-        "mean_call_edges": 1.0198019801980198,
-        "mean_non_trivial_call_edges": 4.0,
-        "memory": 106209280
+        "memory": 95494144
       },
       {
         "module_parse_time_ms": 33,
         "pre_analysis_time_ms": 8,
-        "constraint_gen_time_ms": 8,
-        "solver_time_ms": 71,
+        "constraint_gen_time_ms": 7,
+        "solver_time_ms": 91,
         "num_called_functions": 303,
         "num_called_non_trivial_functions": 2,
         "mean_call_edges": 1.0198019801980198,
         "mean_non_trivial_call_edges": 4.0,
-        "memory": 106541056
+        "memory": 95506432
+      },
+      {
+        "module_parse_time_ms": 33,
+        "pre_analysis_time_ms": 8,
+        "constraint_gen_time_ms": 7,
+        "solver_time_ms": 90,
+        "num_called_functions": 303,
+        "num_called_non_trivial_functions": 2,
+        "mean_call_edges": 1.0198019801980198,
+        "mean_non_trivial_call_edges": 4.0,
+        "memory": 95363072
+      }
+    ],
+    "tidal_call_graph": [
+      {
+        "module_parse_time_ms": 33,
+        "pre_analysis_time_ms": 8,
+        "constraint_gen_time_ms": 7,
+        "solver_time_ms": 68,
+        "num_called_functions": 303,
+        "num_called_non_trivial_functions": 2,
+        "mean_call_edges": 1.0198019801980198,
+        "mean_non_trivial_call_edges": 4.0,
+        "memory": 106283008
+      },
+      {
+        "module_parse_time_ms": 33,
+        "pre_analysis_time_ms": 8,
+        "constraint_gen_time_ms": 7,
+        "solver_time_ms": 69,
+        "num_called_functions": 303,
+        "num_called_non_trivial_functions": 2,
+        "mean_call_edges": 1.0198019801980198,
+        "mean_non_trivial_call_edges": 4.0,
+        "memory": 106217472
+      },
+      {
+        "module_parse_time_ms": 33,
+        "pre_analysis_time_ms": 8,
+        "constraint_gen_time_ms": 7,
+        "solver_time_ms": 69,
+        "num_called_functions": 303,
+        "num_called_non_trivial_functions": 2,
+        "mean_call_edges": 1.0198019801980198,
+        "mean_non_trivial_call_edges": 4.0,
+        "memory": 106278912
       }
     ],
     "wave_shared": [
@@ -121,53 +127,42 @@
         "module_parse_time_ms": 33,
         "pre_analysis_time_ms": 8,
         "constraint_gen_time_ms": 8,
-        "solver_time_ms": 100,
+        "solver_time_ms": 96,
         "num_called_functions": 303,
         "num_called_non_trivial_functions": 2,
         "mean_call_edges": 1.0198019801980198,
         "mean_non_trivial_call_edges": 4.0,
-        "memory": 93036544
-      },
-      {
-        "module_parse_time_ms": 34,
-        "pre_analysis_time_ms": 8,
-        "constraint_gen_time_ms": 8,
-        "solver_time_ms": 100,
-        "num_called_functions": 303,
-        "num_called_non_trivial_functions": 2,
-        "mean_call_edges": 1.0198019801980198,
-        "mean_non_trivial_call_edges": 4.0,
-        "memory": 92934144
+        "memory": 92811264
       },
       {
         "module_parse_time_ms": 33,
         "pre_analysis_time_ms": 8,
-        "constraint_gen_time_ms": 8,
+        "constraint_gen_time_ms": 7,
         "solver_time_ms": 99,
         "num_called_functions": 303,
         "num_called_non_trivial_functions": 2,
         "mean_call_edges": 1.0198019801980198,
         "mean_non_trivial_call_edges": 4.0,
-        "memory": 92991488
-      }
-    ],
-    "wave_roaring": [
-      {
-        "module_parse_time_ms": 34,
-        "pre_analysis_time_ms": 8,
-        "constraint_gen_time_ms": 8,
-        "solver_time_ms": 129,
-        "num_called_functions": 303,
-        "num_called_non_trivial_functions": 2,
-        "mean_call_edges": 1.0198019801980198,
-        "mean_non_trivial_call_edges": 4.0,
-        "memory": 106512384
+        "memory": 92880896
       },
       {
         "module_parse_time_ms": 34,
         "pre_analysis_time_ms": 8,
         "constraint_gen_time_ms": 8,
-        "solver_time_ms": 125,
+        "solver_time_ms": 98,
+        "num_called_functions": 303,
+        "num_called_non_trivial_functions": 2,
+        "mean_call_edges": 1.0198019801980198,
+        "mean_non_trivial_call_edges": 4.0,
+        "memory": 93093888
+      }
+    ],
+    "wave_roaring": [
+      {
+        "module_parse_time_ms": 33,
+        "pre_analysis_time_ms": 8,
+        "constraint_gen_time_ms": 7,
+        "solver_time_ms": 127,
         "num_called_functions": 303,
         "num_called_non_trivial_functions": 2,
         "mean_call_edges": 1.0198019801980198,
@@ -175,80 +170,91 @@
         "memory": 106266624
       },
       {
-        "module_parse_time_ms": 34,
+        "module_parse_time_ms": 33,
         "pre_analysis_time_ms": 8,
         "constraint_gen_time_ms": 8,
-        "solver_time_ms": 129,
+        "solver_time_ms": 127,
         "num_called_functions": 303,
         "num_called_non_trivial_functions": 2,
         "mean_call_edges": 1.0198019801980198,
         "mean_non_trivial_call_edges": 4.0,
-        "memory": 106496000
-      }
-    ],
-    "demand_hash": [
+        "memory": 106491904
+      },
       {
         "module_parse_time_ms": 34,
         "pre_analysis_time_ms": 8,
         "constraint_gen_time_ms": 8,
-        "solver_time_ms": 1256,
+        "solver_time_ms": 124,
         "num_called_functions": 303,
         "num_called_non_trivial_functions": 2,
         "mean_call_edges": 1.0198019801980198,
         "mean_non_trivial_call_edges": 4.0,
-        "memory": 113745920
+        "memory": 106258432
+      }
+    ],
+    "demand_hash": [
+      {
+        "module_parse_time_ms": 33,
+        "pre_analysis_time_ms": 8,
+        "constraint_gen_time_ms": 7,
+        "solver_time_ms": 1236,
+        "num_called_functions": 303,
+        "num_called_non_trivial_functions": 2,
+        "mean_call_edges": 1.0198019801980198,
+        "mean_non_trivial_call_edges": 4.0,
+        "memory": 113549312
       },
       {
         "module_parse_time_ms": 33,
         "pre_analysis_time_ms": 8,
         "constraint_gen_time_ms": 7,
-        "solver_time_ms": 1263,
+        "solver_time_ms": 1247,
         "num_called_functions": 303,
         "num_called_non_trivial_functions": 2,
         "mean_call_edges": 1.0198019801980198,
         "mean_non_trivial_call_edges": 4.0,
-        "memory": 113717248
-      },
-      {
-        "module_parse_time_ms": 34,
-        "pre_analysis_time_ms": 8,
-        "constraint_gen_time_ms": 8,
-        "solver_time_ms": 1262,
-        "num_called_functions": 303,
-        "num_called_non_trivial_functions": 2,
-        "mean_call_edges": 1.0198019801980198,
-        "mean_non_trivial_call_edges": 4.0,
-        "memory": 113725440
-      }
-    ],
-    "demand_call_graph": [
-      {
-        "module_parse_time_ms": 34,
-        "pre_analysis_time_ms": 8,
-        "constraint_gen_time_ms": 8,
-        "solver_time_ms": 1216,
-        "num_called_functions": 303,
-        "num_called_non_trivial_functions": 2,
-        "mean_call_edges": 1.0198019801980198,
-        "mean_non_trivial_call_edges": 4.0,
-        "memory": 94183424
-      },
-      {
-        "module_parse_time_ms": 34,
-        "pre_analysis_time_ms": 8,
-        "constraint_gen_time_ms": 8,
-        "solver_time_ms": 1237,
-        "num_called_functions": 303,
-        "num_called_non_trivial_functions": 2,
-        "mean_call_edges": 1.0198019801980198,
-        "mean_non_trivial_call_edges": 4.0,
-        "memory": 94134272
+        "memory": 113672192
       },
       {
         "module_parse_time_ms": 33,
         "pre_analysis_time_ms": 8,
         "constraint_gen_time_ms": 8,
-        "solver_time_ms": 1218,
+        "solver_time_ms": 1253,
+        "num_called_functions": 303,
+        "num_called_non_trivial_functions": 2,
+        "mean_call_edges": 1.0198019801980198,
+        "mean_non_trivial_call_edges": 4.0,
+        "memory": 113602560
+      }
+    ],
+    "demand_call_graph": [
+      {
+        "module_parse_time_ms": 33,
+        "pre_analysis_time_ms": 8,
+        "constraint_gen_time_ms": 7,
+        "solver_time_ms": 1214,
+        "num_called_functions": 303,
+        "num_called_non_trivial_functions": 2,
+        "mean_call_edges": 1.0198019801980198,
+        "mean_non_trivial_call_edges": 4.0,
+        "memory": 94142464
+      },
+      {
+        "module_parse_time_ms": 34,
+        "pre_analysis_time_ms": 8,
+        "constraint_gen_time_ms": 8,
+        "solver_time_ms": 1279,
+        "num_called_functions": 303,
+        "num_called_non_trivial_functions": 2,
+        "mean_call_edges": 1.0198019801980198,
+        "mean_non_trivial_call_edges": 4.0,
+        "memory": 94425088
+      },
+      {
+        "module_parse_time_ms": 33,
+        "pre_analysis_time_ms": 8,
+        "constraint_gen_time_ms": 8,
+        "solver_time_ms": 1224,
         "num_called_functions": 303,
         "num_called_non_trivial_functions": 2,
         "mean_call_edges": 1.0198019801980198,
@@ -277,212 +283,512 @@
   "htop": {
     "tidal_shared": [
       {
-        "module_parse_time_ms": 55,
+        "module_parse_time_ms": 54,
         "pre_analysis_time_ms": 15,
-        "constraint_gen_time_ms": 17,
-        "solver_time_ms": 10652,
-        "num_called_functions": 925,
-        "num_called_non_trivial_functions": 124,
-        "mean_call_edges": 9.308108108108108,
-        "mean_non_trivial_call_edges": 62.975806451612904,
-        "memory": 898908160
-      },
-      {
-        "module_parse_time_ms": 55,
-        "pre_analysis_time_ms": 16,
         "constraint_gen_time_ms": 18,
-        "solver_time_ms": 10943,
+        "solver_time_ms": 10410,
         "num_called_functions": 925,
         "num_called_non_trivial_functions": 124,
         "mean_call_edges": 9.308108108108108,
         "mean_non_trivial_call_edges": 62.975806451612904,
-        "memory": 898949120
+        "memory": 898924544
       },
       {
-        "module_parse_time_ms": 55,
+        "module_parse_time_ms": 54,
         "pre_analysis_time_ms": 15,
         "constraint_gen_time_ms": 17,
-        "solver_time_ms": 10636,
+        "solver_time_ms": 10377,
         "num_called_functions": 925,
         "num_called_non_trivial_functions": 124,
         "mean_call_edges": 9.308108108108108,
         "mean_non_trivial_call_edges": 62.975806451612904,
-        "memory": 898830336
+        "memory": 898990080
+      },
+      {
+        "module_parse_time_ms": 54,
+        "pre_analysis_time_ms": 15,
+        "constraint_gen_time_ms": 17,
+        "solver_time_ms": 10569,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 9.308108108108108,
+        "mean_non_trivial_call_edges": 62.975806451612904,
+        "memory": 898977792
       }
     ],
     "tidal_roaring": [
       {
-        "module_parse_time_ms": 54,
+        "module_parse_time_ms": 52,
         "pre_analysis_time_ms": 15,
         "constraint_gen_time_ms": 17,
-        "solver_time_ms": 60138,
+        "solver_time_ms": 59700,
         "num_called_functions": 925,
         "num_called_non_trivial_functions": 124,
         "mean_call_edges": 9.308108108108108,
         "mean_non_trivial_call_edges": 62.975806451612904,
-        "memory": 1718657024
-      },
-      {
-        "module_parse_time_ms": 54,
-        "pre_analysis_time_ms": 15,
-        "constraint_gen_time_ms": 17,
-        "solver_time_ms": 60396,
-        "num_called_functions": 925,
-        "num_called_non_trivial_functions": 124,
-        "mean_call_edges": 9.308108108108108,
-        "mean_non_trivial_call_edges": 62.975806451612904,
-        "memory": 1719218176
+        "memory": 1717641216
       },
       {
         "module_parse_time_ms": 55,
         "pre_analysis_time_ms": 15,
-        "constraint_gen_time_ms": 17,
-        "solver_time_ms": 60228,
+        "constraint_gen_time_ms": 18,
+        "solver_time_ms": 59659,
         "num_called_functions": 925,
         "num_called_non_trivial_functions": 124,
         "mean_call_edges": 9.308108108108108,
         "mean_non_trivial_call_edges": 62.975806451612904,
-        "memory": 1718927360
+        "memory": 1718534144
+      },
+      {
+        "module_parse_time_ms": 54,
+        "pre_analysis_time_ms": 15,
+        "constraint_gen_time_ms": 18,
+        "solver_time_ms": 61327,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 9.308108108108108,
+        "mean_non_trivial_call_edges": 62.975806451612904,
+        "memory": 1719463936
       }
     ],
     "tidal_call_graph": [
       {
-        "module_parse_time_ms": 57,
-        "pre_analysis_time_ms": 16,
-        "constraint_gen_time_ms": 19,
-        "solver_time_ms": 11660,
-        "num_called_functions": 925,
-        "num_called_non_trivial_functions": 124,
-        "mean_call_edges": 9.308108108108108,
-        "mean_non_trivial_call_edges": 62.975806451612904,
-        "memory": 683511808
-      },
-      {
-        "module_parse_time_ms": 57,
-        "pre_analysis_time_ms": 16,
-        "constraint_gen_time_ms": 18,
-        "solver_time_ms": 11713,
-        "num_called_functions": 925,
-        "num_called_non_trivial_functions": 124,
-        "mean_call_edges": 9.308108108108108,
-        "mean_non_trivial_call_edges": 62.975806451612904,
-        "memory": 683409408
-      },
-      {
-        "module_parse_time_ms": 55,
+        "module_parse_time_ms": 53,
         "pre_analysis_time_ms": 15,
-        "constraint_gen_time_ms": 18,
-        "solver_time_ms": 11662,
+        "constraint_gen_time_ms": 17,
+        "solver_time_ms": 11111,
         "num_called_functions": 925,
         "num_called_non_trivial_functions": 124,
         "mean_call_edges": 9.308108108108108,
         "mean_non_trivial_call_edges": 62.975806451612904,
-        "memory": 683474944
+        "memory": 683503616
+      },
+      {
+        "module_parse_time_ms": 53,
+        "pre_analysis_time_ms": 15,
+        "constraint_gen_time_ms": 17,
+        "solver_time_ms": 11061,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 9.308108108108108,
+        "mean_non_trivial_call_edges": 62.975806451612904,
+        "memory": 683528192
+      },
+      {
+        "module_parse_time_ms": 52,
+        "pre_analysis_time_ms": 15,
+        "constraint_gen_time_ms": 17,
+        "solver_time_ms": 11037,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 9.308108108108108,
+        "mean_non_trivial_call_edges": 62.975806451612904,
+        "memory": 683331584
       }
     ],
     "wave_shared": [
       {
-        "module_parse_time_ms": 55,
-        "pre_analysis_time_ms": 16,
-        "constraint_gen_time_ms": 18,
-        "solver_time_ms": 12370,
+        "module_parse_time_ms": 54,
+        "pre_analysis_time_ms": 15,
+        "constraint_gen_time_ms": 17,
+        "solver_time_ms": 11696,
         "num_called_functions": 925,
         "num_called_non_trivial_functions": 124,
         "mean_call_edges": 9.308108108108108,
         "mean_non_trivial_call_edges": 62.975806451612904,
-        "memory": 833601536
+        "memory": 833626112
+      },
+      {
+        "module_parse_time_ms": 54,
+        "pre_analysis_time_ms": 15,
+        "constraint_gen_time_ms": 18,
+        "solver_time_ms": 11879,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 9.308108108108108,
+        "mean_non_trivial_call_edges": 62.975806451612904,
+        "memory": 833802240
       },
       {
         "module_parse_time_ms": 55,
         "pre_analysis_time_ms": 15,
         "constraint_gen_time_ms": 18,
-        "solver_time_ms": 12118,
+        "solver_time_ms": 11857,
         "num_called_functions": 925,
         "num_called_non_trivial_functions": 124,
         "mean_call_edges": 9.308108108108108,
         "mean_non_trivial_call_edges": 62.975806451612904,
-        "memory": 833638400
-      },
-      {
-        "module_parse_time_ms": 55,
-        "pre_analysis_time_ms": 15,
-        "constraint_gen_time_ms": 18,
-        "solver_time_ms": 12083,
-        "num_called_functions": 925,
-        "num_called_non_trivial_functions": 124,
-        "mean_call_edges": 9.308108108108108,
-        "mean_non_trivial_call_edges": 62.975806451612904,
-        "memory": 833597440
+        "memory": 833556480
       }
     ],
     "wave_roaring": [
       {
-        "module_parse_time_ms": 54,
-        "pre_analysis_time_ms": 15,
-        "constraint_gen_time_ms": 17,
-        "solver_time_ms": 97487,
-        "num_called_functions": 925,
-        "num_called_non_trivial_functions": 124,
-        "mean_call_edges": 9.308108108108108,
-        "mean_non_trivial_call_edges": 62.975806451612904,
-        "memory": 1547710464
-      },
-      {
-        "module_parse_time_ms": 54,
-        "pre_analysis_time_ms": 15,
-        "constraint_gen_time_ms": 17,
-        "solver_time_ms": 97192,
-        "num_called_functions": 925,
-        "num_called_non_trivial_functions": 124,
-        "mean_call_edges": 9.308108108108108,
-        "mean_non_trivial_call_edges": 62.975806451612904,
-        "memory": 1542479872
-      },
-      {
         "module_parse_time_ms": 55,
         "pre_analysis_time_ms": 15,
-        "constraint_gen_time_ms": 17,
-        "solver_time_ms": 97255,
+        "constraint_gen_time_ms": 18,
+        "solver_time_ms": 96433,
         "num_called_functions": 925,
         "num_called_non_trivial_functions": 124,
         "mean_call_edges": 9.308108108108108,
         "mean_non_trivial_call_edges": 62.975806451612904,
-        "memory": 1545711616
+        "memory": 1547948032
+      },
+      {
+        "module_parse_time_ms": 54,
+        "pre_analysis_time_ms": 15,
+        "constraint_gen_time_ms": 18,
+        "solver_time_ms": 97050,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 9.308108108108108,
+        "mean_non_trivial_call_edges": 62.975806451612904,
+        "memory": 1541492736
+      },
+      {
+        "module_parse_time_ms": 54,
+        "pre_analysis_time_ms": 15,
+        "constraint_gen_time_ms": 18,
+        "solver_time_ms": 97060,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 9.308108108108108,
+        "mean_non_trivial_call_edges": 62.975806451612904,
+        "memory": 1545699328
       }
     ],
     "demand_hash": [
       {
-        "module_parse_time_ms": 55,
+        "module_parse_time_ms": 54,
         "pre_analysis_time_ms": 15,
-        "constraint_gen_time_ms": 17,
-        "solver_time_ms": 3509745,
-        "num_called_functions": 925,
-        "num_called_non_trivial_functions": 124,
-        "mean_call_edges": 9.308108108108108,
-        "mean_non_trivial_call_edges": 62.975806451612904,
-        "memory": 10069614592
-      },
-      {
-        "module_parse_time_ms": 55,
-        "pre_analysis_time_ms": 15,
-        "constraint_gen_time_ms": 17,
-        "solver_time_ms": 3546758,
-        "num_called_functions": 925,
-        "num_called_non_trivial_functions": 124,
-        "mean_call_edges": 9.308108108108108,
-        "mean_non_trivial_call_edges": 62.975806451612904,
-        "memory": 10074509312
-      },
-      {
-        "module_parse_time_ms": 55,
-        "pre_analysis_time_ms": 16,
         "constraint_gen_time_ms": 18,
-        "solver_time_ms": 3508771,
+        "solver_time_ms": 3510205,
         "num_called_functions": 925,
         "num_called_non_trivial_functions": 124,
         "mean_call_edges": 9.308108108108108,
         "mean_non_trivial_call_edges": 62.975806451612904,
-        "memory": 10068971520
+        "memory": 10071982080
+      },
+      {
+        "module_parse_time_ms": 54,
+        "pre_analysis_time_ms": 15,
+        "constraint_gen_time_ms": 18,
+        "solver_time_ms": 3508534,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 9.308108108108108,
+        "mean_non_trivial_call_edges": 62.975806451612904,
+        "memory": 10074292224
+      },
+      {
+        "module_parse_time_ms": 55,
+        "pre_analysis_time_ms": 15,
+        "constraint_gen_time_ms": 17,
+        "solver_time_ms": 3579047,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 9.308108108108108,
+        "mean_non_trivial_call_edges": 62.975806451612904,
+        "memory": 10071117824
       }
     ],
     "demand_call_graph": [
+      {
+        "module_parse_time_ms": 54,
+        "pre_analysis_time_ms": 15,
+        "constraint_gen_time_ms": 18,
+        "solver_time_ms": 3280412,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 9.308108108108108,
+        "mean_non_trivial_call_edges": 62.975806451612904,
+        "memory": 9995378688
+      },
+      {
+        "module_parse_time_ms": 54,
+        "pre_analysis_time_ms": 15,
+        "constraint_gen_time_ms": 18,
+        "solver_time_ms": 3310865,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 9.308108108108108,
+        "mean_non_trivial_call_edges": 62.975806451612904,
+        "memory": 9992327168
+      },
+      {
+        "module_parse_time_ms": 54,
+        "pre_analysis_time_ms": 15,
+        "constraint_gen_time_ms": 18,
+        "solver_time_ms": 3287911,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 9.308108108108108,
+        "mean_non_trivial_call_edges": 62.975806451612904,
+        "memory": 9993687040
+      }
+    ]
+  },
+  "make": {
+    "tidal_shared": [
+      {
+        "module_parse_time_ms": 47,
+        "pre_analysis_time_ms": 11,
+        "constraint_gen_time_ms": 12,
+        "solver_time_ms": 924,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.4559819413092552,
+        "mean_non_trivial_call_edges": 21.2,
+        "memory": 378998784
+      },
+      {
+        "module_parse_time_ms": 47,
+        "pre_analysis_time_ms": 11,
+        "constraint_gen_time_ms": 12,
+        "solver_time_ms": 918,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.4559819413092552,
+        "mean_non_trivial_call_edges": 21.2,
+        "memory": 379195392
+      },
+      {
+        "module_parse_time_ms": 47,
+        "pre_analysis_time_ms": 11,
+        "constraint_gen_time_ms": 12,
+        "solver_time_ms": 922,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.4559819413092552,
+        "mean_non_trivial_call_edges": 21.2,
+        "memory": 378929152
+      }
+    ],
+    "tidal_roaring": [
+      {
+        "module_parse_time_ms": 47,
+        "pre_analysis_time_ms": 11,
+        "constraint_gen_time_ms": 12,
+        "solver_time_ms": 1477,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.4559819413092552,
+        "mean_non_trivial_call_edges": 21.2,
+        "memory": 206405632
+      },
+      {
+        "module_parse_time_ms": 46,
+        "pre_analysis_time_ms": 11,
+        "constraint_gen_time_ms": 11,
+        "solver_time_ms": 1484,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.4559819413092552,
+        "mean_non_trivial_call_edges": 21.2,
+        "memory": 206811136
+      },
+      {
+        "module_parse_time_ms": 45,
+        "pre_analysis_time_ms": 11,
+        "constraint_gen_time_ms": 11,
+        "solver_time_ms": 1483,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.4559819413092552,
+        "mean_non_trivial_call_edges": 21.2,
+        "memory": 206589952
+      }
+    ],
+    "tidal_call_graph": [
+      {
+        "module_parse_time_ms": 46,
+        "pre_analysis_time_ms": 11,
+        "constraint_gen_time_ms": 11,
+        "solver_time_ms": 1561,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.4559819413092552,
+        "mean_non_trivial_call_edges": 21.2,
+        "memory": 312008704
+      },
+      {
+        "module_parse_time_ms": 46,
+        "pre_analysis_time_ms": 11,
+        "constraint_gen_time_ms": 11,
+        "solver_time_ms": 1568,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.4559819413092552,
+        "mean_non_trivial_call_edges": 21.2,
+        "memory": 312000512
+      },
+      {
+        "module_parse_time_ms": 47,
+        "pre_analysis_time_ms": 11,
+        "constraint_gen_time_ms": 12,
+        "solver_time_ms": 1572,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.4559819413092552,
+        "mean_non_trivial_call_edges": 21.2,
+        "memory": 312012800
+      }
+    ],
+    "wave_shared": [
+      {
+        "module_parse_time_ms": 47,
+        "pre_analysis_time_ms": 11,
+        "constraint_gen_time_ms": 12,
+        "solver_time_ms": 683,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.4559819413092552,
+        "mean_non_trivial_call_edges": 21.2,
+        "memory": 340869120
+      },
+      {
+        "module_parse_time_ms": 46,
+        "pre_analysis_time_ms": 11,
+        "constraint_gen_time_ms": 11,
+        "solver_time_ms": 693,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.4559819413092552,
+        "mean_non_trivial_call_edges": 21.2,
+        "memory": 340844544
+      },
+      {
+        "module_parse_time_ms": 46,
+        "pre_analysis_time_ms": 11,
+        "constraint_gen_time_ms": 11,
+        "solver_time_ms": 683,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.4559819413092552,
+        "mean_non_trivial_call_edges": 21.2,
+        "memory": 340774912
+      }
+    ],
+    "wave_roaring": [
+      {
+        "module_parse_time_ms": 46,
+        "pre_analysis_time_ms": 11,
+        "constraint_gen_time_ms": 11,
+        "solver_time_ms": 705,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.4559819413092552,
+        "mean_non_trivial_call_edges": 21.2,
+        "memory": 227557376
+      },
+      {
+        "module_parse_time_ms": 46,
+        "pre_analysis_time_ms": 11,
+        "constraint_gen_time_ms": 12,
+        "solver_time_ms": 716,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.4559819413092552,
+        "mean_non_trivial_call_edges": 21.2,
+        "memory": 227368960
+      },
+      {
+        "module_parse_time_ms": 45,
+        "pre_analysis_time_ms": 11,
+        "constraint_gen_time_ms": 11,
+        "solver_time_ms": 707,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.4559819413092552,
+        "mean_non_trivial_call_edges": 21.2,
+        "memory": 227549184
+      }
+    ],
+    "demand_hash": [
+      {
+        "module_parse_time_ms": 46,
+        "pre_analysis_time_ms": 11,
+        "constraint_gen_time_ms": 11,
+        "solver_time_ms": 2978,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.4559819413092552,
+        "mean_non_trivial_call_edges": 21.2,
+        "memory": 359649280
+      },
+      {
+        "module_parse_time_ms": 45,
+        "pre_analysis_time_ms": 11,
+        "constraint_gen_time_ms": 12,
+        "solver_time_ms": 3011,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.4559819413092552,
+        "mean_non_trivial_call_edges": 21.2,
+        "memory": 359112704
+      },
+      {
+        "module_parse_time_ms": 47,
+        "pre_analysis_time_ms": 11,
+        "constraint_gen_time_ms": 12,
+        "solver_time_ms": 2995,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.4559819413092552,
+        "mean_non_trivial_call_edges": 21.2,
+        "memory": 359411712
+      }
+    ],
+    "demand_call_graph": [
+      {
+        "module_parse_time_ms": 45,
+        "pre_analysis_time_ms": 11,
+        "constraint_gen_time_ms": 12,
+        "solver_time_ms": 3347,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.4559819413092552,
+        "mean_non_trivial_call_edges": 21.2,
+        "memory": 339243008
+      },
+      {
+        "module_parse_time_ms": 46,
+        "pre_analysis_time_ms": 11,
+        "constraint_gen_time_ms": 11,
+        "solver_time_ms": 3348,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.4559819413092552,
+        "mean_non_trivial_call_edges": 21.2,
+        "memory": 339255296
+      },
+      {
+        "module_parse_time_ms": 46,
+        "pre_analysis_time_ms": 11,
+        "constraint_gen_time_ms": 12,
+        "solver_time_ms": 3353,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.4559819413092552,
+        "mean_non_trivial_call_edges": 21.2,
+        "memory": 339210240
+      }
+    ]
+  },
+  "vim": {
+    "tidal_shared": [
+      { "error": "OOM" }
+    ],
+    "tidal_roaring": [
+      { "error": "OOM" }
+    ],
+    "tidal_call_graph": [
+      { "error": "OOM" }
+    ],
+    "wave_shared": [
+      { "error": "OOM" }
+    ],
+    "wave_roaring": [
+      { "error": "OOM" }
+    ]
+  }
+}

@@ -2,7 +2,7 @@
 echoerr() { echo "$@" 1>&2; }
 
 run() {
-    a="target/release/pointer-analysis -c 1 -j $@ > /tmp/pointer-data.json"
+    a="target/release/pointer-analysis -j $@ > /tmp/pointer-data.json"
     stats="$(runexec --walltimelimit 3600 --memlimit 21474836480 --no-container -- bash -c "$a")"
     terminationreason="$(grep -oP '(?<=\bterminationreason=)[^;]+' <<< "$stats")"
     if [ $? -eq 0 ]; then
@@ -46,6 +46,11 @@ run_three() {
     fi
 }
 
+if [ $# -eq 0 ]; then
+    echoerr "Usage: $0 -c 0 or $0 -c 1"
+    exit 1
+fi
+
 echoerr "Building.."
 cargo build --release > /dev/null 2>&1
 
@@ -63,39 +68,39 @@ for bench in "${benches[@]}"; do
 
     echoerr "Tidal Propagation (Shared)"
     echo "    \"tidal_shared\": ["
-    run_three -s tidal $bench
+    run_three $@ -s tidal $bench
     echo "    ],"
 
     echoerr "Tidal Propagation (Roaring call graph)"
     echo "    \"tidal_roaring\": ["
-    run_three -s tidal -t roaring -d call-graph $bench
+    run_three $@ -s tidal -t roaring -d call-graph $bench
     echo "    ],"
 
     echoerr "Tidal Propagation (Call graph)"
     echo "    \"tidal_call_graph\": ["
-    run_three -s tidal -d call-graph $bench
+    run_three $@ -s tidal -d call-graph $bench
     echo "    ],"
 
     echoerr "Wave Propagation (Shared)"
     echo "    \"wave_shared\": ["
-    run_three -s wave $bench
+    run_three $@ -s wave $bench
     echo "    ],"
 
     echoerr "Wave Propagation (Roaring)"
     echo "    \"wave_roaring\": ["
-    run_three -s wave -t roaring $bench
+    run_three $@ -s wave -t roaring $bench
 
     if [ "$name" = "curl" ] || [ "$name" = "make" ] || [ "$name" = "htop" ]; then
         echo "    ],"
 
         echoerr "Demand Worklist (Hash)"
         echo "    \"demand_hash\": ["
-        run_three -s basic-demand -t hash $bench
+        run_three $@ -s basic-demand -t hash $bench
         echo "    ],"
 
         echoerr "Demand Worklist (Call graph)"
         echo "    \"demand_call_graph\": ["
-        run_three -s basic-demand -t hash -d call-graph $bench
+        run_three $@ -s basic-demand -t hash -d call-graph $bench
         echo "    ]"
     else
         echo "    ]"
