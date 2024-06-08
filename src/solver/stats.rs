@@ -1,4 +1,5 @@
 use hashbrown::{HashMap, HashSet};
+use serde::Serialize;
 
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
@@ -19,6 +20,7 @@ pub struct StatSolverState<T> {
     subsets: Vec<(T, usize, T)>,
     cond_lefts: Vec<(T, usize, T)>,
     cond_rights: Vec<(T, usize, T)>,
+    stats: StatSolverSerialize,
 }
 
 #[derive(PartialEq, Eq, Clone, Hash)]
@@ -80,6 +82,7 @@ impl<T: Eq + PartialEq + Hash + Clone> StatSolverState<T> {
             subsets: vec![],
             cond_lefts: vec![],
             cond_rights: vec![],
+            stats: StatSolverSerialize::default(),
         }
     }
 
@@ -118,33 +121,42 @@ impl<T: Eq + PartialEq + Hash + Clone> StatSolverState<T> {
             self.add_constraint(c);
         }
 
-        println!("Terms:\t\t{}", self.terms.len());
-        println!("Inclusion:\t{}", self.inclusions.len());
+        eprintln!("Terms:\t\t{}", self.terms.len());
+        eprintln!("Inclusion:\t{}", self.inclusions.len());
 
-        let num_offset_subsets = self.subsets.iter().filter(|(_, o, _)| *o != 0).count();
-        println!(
+        let offset_subsets = self.subsets.iter().filter(|(_, o, _)| *o != 0).count();
+        eprintln!(
             "Subset:\t\t{} ({} offset constraints)",
             self.subsets.len(),
-            num_offset_subsets
+            offset_subsets
         );
 
-        let num_offset_conds = self
-            .cond_lefts
-            .iter()
-            .chain(&self.cond_rights)
-            .filter(|(_, o, _)| *o != 0)
-            .count();
-        println!(
+        let offset_loads = self.cond_lefts.iter().filter(|(_, o, _)| *o != 0).count();
+        let offset_stores = self.cond_rights.iter().filter(|(_, o, _)| *o != 0).count();
+
+        eprintln!(
             "Univ. cond.:\t{} ({} offset constraints)",
             self.cond_lefts.len() + self.cond_rights.len(),
-            num_offset_conds
+            offset_loads + offset_stores,
         );
 
         let total = self.inclusions.len()
             + self.subsets.len()
             + self.cond_lefts.len()
             + self.cond_rights.len();
-        println!("Total:\t\t{total}");
+        eprintln!("Total:\t\t{total}");
+
+        self.stats = StatSolverSerialize {
+            terms: self.terms.len(),
+            inclusions: self.inclusions.len(),
+            subsets: self.subsets.len(),
+            offset_subsets,
+            loads: self.cond_lefts.len(),
+            offset_loads,
+            stores: self.cond_rights.len(),
+            offset_stores,
+            total,
+        };
     }
 }
 
@@ -178,6 +190,10 @@ where
 
     fn get(&self, _node: &Self::Term) -> Self::TermSet {
         HashSet::new()
+    }
+
+    fn as_serialize(&self) -> Box<dyn erased_serde::Serialize> {
+        Box::new(self.stats.clone())
     }
 }
 
@@ -228,4 +244,17 @@ where
             }))
             .collect()
     }
+}
+
+#[derive(Serialize, Default, Clone)]
+struct StatSolverSerialize {
+    terms: usize,
+    inclusions: usize,
+    subsets: usize,
+    offset_subsets: usize,
+    loads: usize,
+    offset_loads: usize,
+    stores: usize,
+    offset_stores: usize,
+    total: usize,
 }

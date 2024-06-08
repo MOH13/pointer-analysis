@@ -2,12 +2,14 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::mem;
+use std::time::Duration;
 
 use bitvec::bitvec;
 use bitvec::prelude::*;
 use hashbrown::{HashMap, HashSet};
 use once_cell::unsync::Lazy;
 use roaring::RoaringBitmap;
+use serde::Serialize;
 
 use super::context::{ContextState, TemplateTerm};
 use super::shared_bitvec::SharedBitVec;
@@ -57,6 +59,10 @@ pub struct ContextWavePropagationSolverState<T, S, C: ContextSelector> {
     term_types: Vec<TermType>,
     parents: Vec<IntegerTerm>,
     top_order: Vec<IntegerTerm>,
+    iters: u64,
+    scc_time: Duration,
+    propagation_time: Duration,
+    edge_instantiation_time: Duration,
 }
 
 impl<T, S, C: ContextSelector> ContextWavePropagationSolverState<T, S, C> {
@@ -72,31 +78,26 @@ where
     S: TermSetTrait<Term = u32> + Debug,
 {
     fn run_wave_propagation(&mut self) {
-        let mut iters = 0u64;
-
         let mut changed = true;
         while changed {
-            iters += 1;
+            self.iters += 1;
+
+            let scc_start = std::time::Instant::now();
             SCC::run(self).apply_to_graph(self);
             SCC::run_with_weighted(self).apply_to_graph_weighted(self);
+            self.scc_time += scc_start.elapsed();
 
-            let mut nodes_with_new_outgoing = S::new();
-
+            let propagation_start = std::time::Instant::now();
             changed = self.wave_propagate_iteration();
+            self.propagation_time += propagation_start.elapsed();
 
+            let edge_instantiation_start = std::time::Instant::now();
+            let mut nodes_with_new_outgoing = S::new();
             changed |= self.add_edges_after_wave_prop(&mut nodes_with_new_outgoing);
-            eprintln!("Iteration {iters}");
-        }
+            self.edge_instantiation_time += edge_instantiation_start.elapsed();
 
-        eprintln!(
-            "SCC count: {}",
-            self.parents
-                .iter()
-                .enumerate()
-                .filter(|(child, parent)| *child == **parent as usize)
-                .count()
-        );
-        eprintln!("Iterations: {}", iters);
+            eprintln!("Iteration {}", self.iters);
+        }
     }
 
     fn wave_propagate_iteration(&mut self) -> bool {
@@ -416,6 +417,10 @@ where
             term_types,
             parents,
             top_order,
+            iters: 0,
+            scc_time: Duration::ZERO,
+            propagation_time: Duration::ZERO,
+            edge_instantiation_time: Duration::ZERO,
         };
 
         for c in input.global.constraints {
@@ -502,8 +507,37 @@ where
 
     fn get_len(&self, term: &T) -> usize {
         let stack = self.get_stack(term);
-
         stack.len()
+    }
+
+    fn as_serialize(&self) -> Box<dyn erased_serde::Serialize> {
+        Box::new(WavePropSerialize {
+            sccs: self
+                .parents
+                .iter()
+                .enumerate()
+                .filter(|&(v, &p)| v == p as usize)
+                .count(),
+            edges: self
+                .edges
+                .subset
+                .iter()
+                .flat_map(|m| m.values())
+                .map(|o| o.len())
+                .sum(),
+            iterations: self.iters,
+            instantiated_contexts: self.context_state.num_instantiated_contexts(),
+            non_empty_nodes: (0..self.edges.sols.len())
+                .map(|v| {
+                    self.edges.sols
+                        [get_representative_no_mutation(&self.parents, v as u32) as usize]
+                        .len()
+                })
+                .sum(),
+            scc_time_ms: self.scc_time.as_millis() as u64,
+            term_propagation_time_ms: self.propagation_time.as_millis() as u64,
+            edge_instantiation_time_ms: self.edge_instantiation_time.as_millis() as u64,
+        })
     }
 }
 
@@ -1045,4 +1079,16 @@ where
 
         edges
     }
+}
+
+#[derive(Serialize)]
+pub(crate) struct WavePropSerialize {
+    pub sccs: usize,
+    pub edges: usize,
+    pub iterations: u64,
+    pub instantiated_contexts: usize,
+    pub non_empty_nodes: usize,
+    pub scc_time_ms: u64,
+    pub term_propagation_time_ms: u64,
+    pub edge_instantiation_time_ms: u64,
 }

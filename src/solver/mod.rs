@@ -539,6 +539,9 @@ pub trait SolverSolution {
     fn get_len(&self, node: &Self::Term) -> usize {
         self.get(node).len()
     }
+    fn as_serialize(&self) -> Box<dyn erased_serde::Serialize> {
+        Box::new(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -913,6 +916,10 @@ where
     fn get(&self, node: &Self::Term) -> Self::TermSet {
         let sol = self.sub_solution.get(&self.mapping.term_to_integer(node));
         HashSet::from_iter(sol.iter().map(|i| self.mapping.integer_to_term(i)))
+    }
+
+    fn as_serialize(&self) -> Box<dyn erased_serde::Serialize> {
+        self.sub_solution.as_serialize()
     }
 }
 

@@ -441,6 +441,10 @@ impl<T, C: ContextSelector + Clone> ContextState<T, C> {
         self.abstract_indices.len()
     }
 
+    pub fn num_instantiated_contexts(&self) -> usize {
+        self.instantiated_contexts.iter().map(HashMap::len).sum()
+    }
+
     pub fn term_to_concrete_global(&self, term: &T) -> Option<IntegerTerm>
     where
         T: Hash + Eq + Clone + Debug,

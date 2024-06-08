@@ -16,7 +16,7 @@ run() {
             echoerr "Memory exceeded"
             return 6
         else
-            echo '      { "error": "ERR" }'
+            echo '      { "error": "'"$terminationreason"'" }'
             echoerr "Unknown termination reason"
             return 42
         fi
@@ -55,8 +55,8 @@ echoerr "Building.."
 cargo build --release > /dev/null 2>&1
 
 declare -a benches
-benches=(benchmarks/*/bench.bc)
-# benches=(benchmarks/curl/bench.bc benchmarks/make/bench.bc benchmarks/htop/bench.bc)
+# benches=(benchmarks/*/bench.bc)
+benches=(benchmarks/curl/bench.bc benchmarks/make/bench.bc)
 
 echo "{"
 for bench in "${benches[@]}"; do
@@ -65,6 +65,10 @@ for bench in "${benches[@]}"; do
 
     echoerr "#### ${name} ####"
     echo "  \"$name\": {"
+    
+    echo "    \"stats\": ["
+    target/release/pointer-analysis -s dry-run -j $bench 2> /dev/null | sed 's/^/      /'
+    echo "    ],"
 
     echoerr "Tidal Propagation (Shared)"
     echo "    \"tidal_shared\": ["

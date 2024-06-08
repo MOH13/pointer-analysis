@@ -6,6 +6,7 @@ use std::ops::{Index, IndexMut};
 
 use bitvec::vec::BitVec;
 use hashbrown::{HashMap, HashSet};
+use serde::Serialize;
 use smallvec::SmallVec;
 
 use super::context::{ContextState, TemplateTerm};
@@ -840,6 +841,23 @@ where
                 .collect(),
         }
     }
+
+    fn as_serialize(&self) -> Box<dyn erased_serde::Serialize> {
+        Box::new(BasicDemandSerialize {
+            edges: self
+                .edges
+                .subsets
+                .subset
+                .iter()
+                .flat_map(|m| m.values())
+                .map(|o| o.len())
+                .sum(),
+            instantiated_contexts: self.context_state.num_instantiated_contexts(),
+            non_empty_nodes: self.edges.sols.iter().filter(|s| !s.is_empty()).count(),
+            points_to_queries: self.points_to_queries.count_ones(),
+            pointed_by_queries: self.pointed_by_queries.count_ones(),
+        })
+    }
 }
 
 struct Edges<C> {
@@ -1031,4 +1049,13 @@ where
             })
             .collect()
     }
+}
+
+#[derive(Serialize)]
+pub struct BasicDemandSerialize {
+    edges: usize,
+    instantiated_contexts: usize,
+    non_empty_nodes: usize,
+    points_to_queries: usize,
+    pointed_by_queries: usize,
 }

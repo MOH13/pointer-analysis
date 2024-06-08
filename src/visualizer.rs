@@ -179,6 +179,10 @@ where
     fn get_len(&self, node: &Self::Term) -> usize {
         self.deref().get_len(node)
     }
+
+    fn as_serialize(&self) -> Box<dyn erased_serde::Serialize> {
+        self.deref().as_serialize()
+    }
 }
 
 impl<'s, T> Visualizable for DynamicVisualizableSolution<'s, T>
@@ -260,6 +264,10 @@ where
 
     fn get_len(&self, node: &Self::Term) -> usize {
         self.0.get_len(node)
+    }
+
+    fn as_serialize(&self) -> Box<dyn erased_serde::Serialize> {
+        self.0.as_serialize()
     }
 }
 

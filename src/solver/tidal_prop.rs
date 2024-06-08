@@ -2,6 +2,7 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::mem;
+use std::time::Duration;
 
 use bitvec::bitvec;
 use bitvec::prelude::*;
@@ -10,9 +11,11 @@ use hashbrown::{HashMap, HashSet};
 use itertools::Itertools;
 use once_cell::unsync::Lazy;
 use roaring::RoaringBitmap;
+use serde::Serialize;
 use smallvec::SmallVec;
 
 use super::context::{ContextState, TemplateTerm};
+use super::context_wave_prop::WavePropSerialize;
 use super::shared_bitvec::SharedBitVec;
 use super::{
     edges_between, try_offset_term, CallSite, Constraint, ContextSelector, Demand,
@@ -107,6 +110,11 @@ pub struct TidalPropagationSolverState<T, S, C: ContextSelector> {
     new_points_to_queries: Vec<IntegerTerm>,
     new_pointed_by_queries: Vec<IntegerTerm>,
     new_incoming: Vec<IntegerTerm>,
+    iters: u64,
+    scc_time: Duration,
+    query_propagation_time: Duration,
+    term_propagation_time: Duration,
+    edge_instantiation_time: Duration,
 }
 
 impl<T, S, C: ContextSelector> TidalPropagationSolverState<T, S, C> {
@@ -122,16 +130,27 @@ where
     S: TermSetTrait<Term = u32> + Debug,
 {
     fn run_tidal_propagation(&mut self) {
-        let mut iters = 0u64;
-
         let mut changed = true;
         while changed {
-            iters += 1;
+            self.iters += 1;
+
+            let scc_start = std::time::Instant::now();
             self.collapse_cycles();
+            self.scc_time += scc_start.elapsed();
+
+            let query_propagation_start = std::time::Instant::now();
             self.query_propagation();
+            self.query_propagation_time += query_propagation_start.elapsed();
+
+            let term_propagation_start = std::time::Instant::now();
             changed = self.term_propagation();
+            self.term_propagation_time += term_propagation_start.elapsed();
+
+            let edge_instantiation_start = std::time::Instant::now();
             changed |= self.add_edges_after_wave_prop();
-            eprintln!("Iteration {iters}");
+            self.edge_instantiation_time += edge_instantiation_start.elapsed();
+
+            eprintln!("Iteration {}", self.iters);
         }
 
         eprintln!(
@@ -142,7 +161,6 @@ where
                 .filter(|(child, parent)| *child == **parent as usize)
                 .count()
         );
-        eprintln!("Iterations: {iters}");
     }
 
     fn collapse_cycles(&mut self) {
@@ -952,6 +970,11 @@ where
             new_points_to_queries: vec![],
             new_pointed_by_queries: vec![],
             new_incoming: vec![],
+            iters: 0,
+            scc_time: Duration::ZERO,
+            query_propagation_time: Duration::ZERO,
+            term_propagation_time: Duration::ZERO,
+            edge_instantiation_time: Duration::ZERO,
         };
 
         for c in &input.input.global.constraints {
@@ -1115,8 +1138,49 @@ where
 
     fn get_len(&self, term: &T) -> usize {
         let stack = self.get_stack(term);
-
         stack.len()
+    }
+
+    fn as_serialize(&self) -> Box<dyn erased_serde::Serialize> {
+        let mut points_to_queries = self.points_to_queries.clone();
+        for i in 0..self.sols.len() {
+            let rep = get_representative_no_mutation(&self.parents, i as u32);
+            if points_to_queries.test(rep as usize) {
+                points_to_queries.set(i);
+            }
+        }
+
+        Box::new(TidalPropSerialize {
+            wave_prop: WavePropSerialize {
+                sccs: self
+                    .parents
+                    .iter()
+                    .enumerate()
+                    .filter(|&(v, &p)| v == p as usize)
+                    .count(),
+                edges: self
+                    .edges
+                    .subset
+                    .iter()
+                    .flat_map(|m| m.values())
+                    .map(|o| o.len())
+                    .sum(),
+                iterations: self.iters,
+                instantiated_contexts: self.context_state.num_instantiated_contexts(),
+                non_empty_nodes: (0..self.sols.len())
+                    .map(|v| {
+                        self.sols[get_representative_no_mutation(&self.parents, v as u32) as usize]
+                            .len()
+                    })
+                    .sum(),
+                scc_time_ms: self.scc_time.as_millis() as u64,
+                term_propagation_time_ms: self.term_propagation_time.as_millis() as u64,
+                edge_instantiation_time_ms: self.edge_instantiation_time.as_millis() as u64,
+            },
+            query_propagation_time_ms: self.query_propagation_time.as_millis() as u64,
+            points_to_queries: points_to_queries.iter().count(),
+            pointed_by_queries: self.pointed_by_queries.termset.len(),
+        })
     }
 }
 
@@ -1632,4 +1696,13 @@ mod tests {
             );
         }
     }
+}
+
+#[derive(Serialize)]
+struct TidalPropSerialize {
+    #[serde(flatten)]
+    wave_prop: WavePropSerialize,
+    query_propagation_time_ms: u64,
+    points_to_queries: usize,
+    pointed_by_queries: usize,
 }

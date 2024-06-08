@@ -190,6 +190,8 @@ struct JsonOutput {
     num_called_non_trivial_functions: u64,
     mean_call_edges: f64,
     mean_non_trivial_call_edges: f64,
+    #[serde(flatten)]
+    solver_output: Box<dyn erased_serde::Serialize>,
 }
 
 impl JsonOutput {
@@ -238,6 +240,7 @@ impl JsonOutput {
             num_called_non_trivial_functions,
             mean_call_edges,
             mean_non_trivial_call_edges,
+            solver_output: result.into_solution().as_serialize(),
         }
     }
 }
