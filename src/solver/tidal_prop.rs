@@ -1167,12 +1167,13 @@ where
                     .sum(),
                 iterations: self.iters,
                 instantiated_contexts: self.context_state.num_instantiated_contexts(),
+                instantiated_nodes: self.sols.len(),
                 non_empty_nodes: (0..self.sols.len())
-                    .map(|v| {
-                        self.sols[get_representative_no_mutation(&self.parents, v as u32) as usize]
-                            .len()
+                    .filter(|&v| {
+                        !self.sols[get_representative_no_mutation(&self.parents, v as u32) as usize]
+                            .is_empty()
                     })
-                    .sum(),
+                    .count(),
                 scc_time_ms: self.scc_time.as_millis() as u64,
                 term_propagation_time_ms: self.term_propagation_time.as_millis() as u64,
                 edge_instantiation_time_ms: self.edge_instantiation_time.as_millis() as u64,

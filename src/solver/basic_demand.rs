@@ -853,6 +853,7 @@ where
                 .map(|o| o.len())
                 .sum(),
             instantiated_contexts: self.context_state.num_instantiated_contexts(),
+            instantiated_nodes: self.edges.sols.len(),
             non_empty_nodes: self.edges.sols.iter().filter(|s| !s.is_empty()).count(),
             points_to_queries: self.points_to_queries.count_ones(),
             pointed_by_queries: self.pointed_by_queries.count_ones(),
@@ -1055,6 +1056,7 @@ where
 pub struct BasicDemandSerialize {
     edges: usize,
     instantiated_contexts: usize,
+    instantiated_nodes: usize,
     non_empty_nodes: usize,
     points_to_queries: usize,
     pointed_by_queries: usize,

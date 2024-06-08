@@ -527,13 +527,14 @@ where
                 .sum(),
             iterations: self.iters,
             instantiated_contexts: self.context_state.num_instantiated_contexts(),
+            instantiated_nodes: self.edges.sols.len(),
             non_empty_nodes: (0..self.edges.sols.len())
-                .map(|v| {
-                    self.edges.sols
+                .filter(|&v| {
+                    !self.edges.sols
                         [get_representative_no_mutation(&self.parents, v as u32) as usize]
-                        .len()
+                        .is_empty()
                 })
-                .sum(),
+                .count(),
             scc_time_ms: self.scc_time.as_millis() as u64,
             term_propagation_time_ms: self.propagation_time.as_millis() as u64,
             edge_instantiation_time_ms: self.edge_instantiation_time.as_millis() as u64,
@@ -1087,6 +1088,7 @@ pub(crate) struct WavePropSerialize {
     pub edges: usize,
     pub iterations: u64,
     pub instantiated_contexts: usize,
+    pub instantiated_nodes: usize,
     pub non_empty_nodes: usize,
     pub scc_time_ms: u64,
     pub term_propagation_time_ms: u64,

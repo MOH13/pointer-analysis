@@ -52,11 +52,16 @@ if [ $# -eq 0 ]; then
 fi
 
 echoerr "Building.."
-cargo build --release > /dev/null 2>&1
+cargo build --release > /dev/null
+
+if [ $? -ne 0 ]; then
+    echoerr "Build failed"
+    exit 1
+fi
 
 declare -a benches
-# benches=(benchmarks/*/bench.bc)
-benches=(benchmarks/curl/bench.bc benchmarks/make/bench.bc)
+benches=(benchmarks/*/bench.bc)
+# benches=(benchmarks/curl/bench.bc benchmarks/make/bench.bc)
 
 echo "{"
 for bench in "${benches[@]}"; do
@@ -93,22 +98,17 @@ for bench in "${benches[@]}"; do
     echoerr "Wave Propagation (Roaring)"
     echo "    \"wave_roaring\": ["
     run_three $@ -s wave -t roaring $bench
+    echo "    ],"
 
-    if [ "$name" = "curl" ] || [ "$name" = "make" ] || [ "$name" = "htop" ]; then
-        echo "    ],"
+    echoerr "Demand Worklist (Hash)"
+    echo "    \"demand_hash\": ["
+    run_three $@ -s basic-demand -t hash $bench
+    echo "    ],"
 
-        echoerr "Demand Worklist (Hash)"
-        echo "    \"demand_hash\": ["
-        run_three $@ -s basic-demand -t hash $bench
-        echo "    ],"
-
-        echoerr "Demand Worklist (Call graph)"
-        echo "    \"demand_call_graph\": ["
-        run_three $@ -s basic-demand -t hash -d call-graph $bench
-        echo "    ]"
-    else
-        echo "    ]"
-    fi
+    echoerr "Demand Worklist (Call graph)"
+    echo "    \"demand_call_graph\": ["
+    run_three $@ -s basic-demand -t hash -d call-graph $bench
+    echo "    ]"
 
     if [ "$bench" = ${benches[-1]} ]; then
         echo "  }"
