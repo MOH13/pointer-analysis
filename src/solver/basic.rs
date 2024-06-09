@@ -8,8 +8,8 @@ use roaring::RoaringBitmap;
 
 use super::shared_bitvec::SharedBitVec;
 use super::{
-    edges_between, CallSite, Constraint, ContextInsensitiveInput, GenericSolverSolution,
-    IntegerTerm, Offsets, Solver, SolverExt, SolverSolution, TermSetTrait, TermType,
+    insert_edge, CallSite, Constraint, ContextInsensitiveInput, GenericSolverSolution, IntegerTerm,
+    Offsets, Solver, SolverExt, SolverSolution, TermSetTrait, TermType,
 };
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
 
@@ -135,8 +135,7 @@ impl<T: TermSetTrait<Term = IntegerTerm>> BasicSolverState<IntegerTerm, T> {
     }
 
     fn add_edge(&mut self, left: IntegerTerm, right: IntegerTerm, offset: usize) {
-        let edges = edges_between(&mut self.edges, left, right);
-        if edges.insert(offset) {
+        if insert_edge(&mut self.edges, left, right, offset) {
             for term in self.sols[left as usize].clone().iter() {
                 if let Some(t) = self.try_offset_term(term, None, offset) {
                     add_token!(self, t, right);
@@ -364,8 +363,8 @@ where
             for (&to, weights) in outgoing {
                 rev_edges[to as usize]
                     .entry(from as IntegerTerm)
-                    .or_default()
-                    .union_assign(weights);
+                    .and_modify(|e| e.union_assign(weights))
+                    .or_insert_with(|| weights.clone());
             }
         }
         Justifier {

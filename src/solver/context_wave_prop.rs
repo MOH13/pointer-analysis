@@ -6,6 +6,8 @@ use std::time::Duration;
 
 use bitvec::bitvec;
 use bitvec::prelude::*;
+use either::Either;
+use hashbrown::hash_map::Entry;
 use hashbrown::{HashMap, HashSet};
 use once_cell::unsync::Lazy;
 use roaring::RoaringBitmap;
@@ -14,7 +16,7 @@ use serde::Serialize;
 use super::context::{ContextState, TemplateTerm};
 use super::shared_bitvec::SharedBitVec;
 use super::{
-    edges_between, try_offset_term, CallSite, Constraint, ContextSelector, ContextSensitiveInput,
+    insert_edge, try_offset_term, CallSite, Constraint, ContextSelector, ContextSensitiveInput,
     IntegerTerm, Offsets, OnlyOnceStack, Solver, SolverExt, SolverSolution, TermSetTrait, TermType,
 };
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
@@ -182,7 +184,7 @@ where
                     if t == right {
                         continue;
                     }
-                    if edges_between(&mut self.edges.subset, t, right).insert(0) {
+                    if insert_edge(&mut self.edges.subset, t, right, 0) {
                         self.edges.sols[right as usize].union_assign(&self.edges.p_old[t as usize]);
                         self.edges.rev_subset[right as usize].insert(t);
                         changed = true;
@@ -220,7 +222,7 @@ where
                     if t == left {
                         continue;
                     }
-                    if edges_between(&mut self.edges.subset, left, t).insert(0) {
+                    if insert_edge(&mut self.edges.subset, left, t, 0) {
                         self.edges.sols[t as usize].union_assign(&self.edges.p_old[left as usize]);
                         self.edges.rev_subset[t as usize].insert(left);
                         changed = true;
@@ -619,11 +621,11 @@ where
     }
 
     fn add_edge(&mut self, left: IntegerTerm, right: IntegerTerm, offset: usize) -> bool {
-        let res = edges_between(&mut self.subset, left, right).insert(offset);
-        if res {
+        if insert_edge(&mut self.subset, left, right, offset) {
             self.rev_subset[right as usize].insert(left);
+            return true;
         }
-        res
+        false
     }
 }
 
@@ -822,12 +824,17 @@ where
 
             if offsets.has_non_zero() || other_parent != parent {
                 let other_term_set = &mut state.edges.sols[other_parent as usize];
-                let existing_offsets = state.edges.subset[parent as usize]
-                    .entry(other_parent)
-                    .or_default();
+                let mut entry = state.edges.subset[parent as usize].entry(other_parent);
+                let mut existing_offsets = match entry {
+                    Entry::Occupied(ref mut entry) => Either::Left(entry.get_mut()),
+                    Entry::Vacant(entry) => Either::Right(entry),
+                };
+
                 for offset in offsets.iter() {
-                    if existing_offsets.contains(offset) {
-                        continue;
+                    if let Either::Left(offs) = &existing_offsets {
+                        if offs.contains(offset) {
+                            continue;
+                        }
                     }
                     propagate_terms_into(
                         p_old,
@@ -836,7 +843,14 @@ where
                         other_term_set,
                         &state.term_types,
                     );
-                    existing_offsets.insert(offset);
+                    match existing_offsets {
+                        Either::Left(ref mut offs) => {
+                            offs.insert(offset);
+                        }
+                        Either::Right(entry) => {
+                            existing_offsets = Either::Left(entry.insert(Offsets::single(offset)));
+                        }
+                    }
                 }
             }
 
@@ -853,8 +867,8 @@ where
                 Some(orig_edges) => {
                     state.edges.subset[i as usize]
                         .entry(parent)
-                        .or_default()
-                        .union_assign(&orig_edges);
+                        .and_modify(|e| e.union_assign(&orig_edges))
+                        .or_insert_with(|| orig_edges.clone());
                 }
                 None => {
                     panic!("Expected edges from {i} to {child}");

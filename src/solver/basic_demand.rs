@@ -11,8 +11,8 @@ use smallvec::SmallVec;
 
 use super::context::{ContextState, TemplateTerm};
 use super::{
-    try_offset_term, CallSite, Constraint, ContextSelector, Demand, DemandContextSensitiveInput,
-    IntegerTerm, Offsets, Solver, SolverExt, SolverSolution, TermType,
+    insert_edge, try_offset_term, CallSite, Constraint, ContextSelector, Demand,
+    DemandContextSensitiveInput, IntegerTerm, Offsets, Solver, SolverExt, SolverSolution, TermType,
 };
 use crate::util::GetTwoMutExt;
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
@@ -901,15 +901,8 @@ impl Subsets {
     }
 
     fn add(&mut self, from: IntegerTerm, to: IntegerTerm, offset: usize) -> bool {
-        if self.subset[from as usize]
-            .entry(to)
-            .or_default()
-            .insert(offset)
-        {
-            self.rev_subset[to as usize]
-                .entry(from)
-                .or_default()
-                .insert(offset);
+        if insert_edge(&mut self.subset, from, to, offset) {
+            insert_edge(&mut self.rev_subset, to, from, offset);
             return true;
         }
         false

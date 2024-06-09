@@ -1,10 +1,12 @@
 use bitvec::vec::BitVec;
+use either::Either;
+use hashbrown::hash_map::Entry;
 use hashbrown::{HashMap, HashSet};
 use roaring::RoaringBitmap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::marker::PhantomData;
-use thin_vec::ThinVec;
+use thin_vec::{thin_vec, ThinVec};
 
 mod basic;
 mod basic_demand;
@@ -926,17 +928,19 @@ where
     }
 }
 
-fn edges_between<U>(
-    edges: &mut Vec<HashMap<IntegerTerm, U>>,
+fn insert_edge(
+    edges: &mut Vec<HashMap<IntegerTerm, Offsets>>,
     left: IntegerTerm,
     right: IntegerTerm,
-) -> &mut U
-where
-    U: Default,
-{
-    edges[usize::try_from(left).expect("Could not convert to usize")]
-        .entry(right)
-        .or_default()
+    offset: usize,
+) -> bool {
+    match edges[left as usize].entry(right) {
+        Entry::Occupied(mut entry) => entry.get_mut().insert(offset),
+        Entry::Vacant(entry) => {
+            entry.insert(Offsets::single(offset));
+            true
+        }
+    }
 }
 
 /// Offset a term if its term_type allows it. Does not work with function calls.
@@ -950,59 +954,86 @@ fn try_offset_term(term: IntegerTerm, term_type: TermType, offset: usize) -> Opt
     }
 }
 
-#[derive(Clone, Default)]
-pub struct Offsets {
-    zero: bool,
-    offsets: ThinVec<usize>,
+#[derive(Clone)]
+pub enum Offsets {
+    Zero,
+    Complex(ThinVec<usize>),
 }
 
 impl Offsets {
-    pub fn contains(&self, offset: usize) -> bool {
+    pub fn single(offset: usize) -> Self {
         if offset == 0 {
-            return self.zero;
+            Self::Zero
+        } else {
+            Self::Complex(thin_vec![offset])
         }
-        return self.offsets.contains(&offset);
+    }
+
+    pub fn contains(&self, offset: usize) -> bool {
+        match self {
+            Self::Zero => offset == 0,
+            Self::Complex(offsets) => offsets.contains(&offset),
+        }
     }
 
     pub fn insert(&mut self, offset: usize) -> bool {
-        if offset == 0 {
-            if !self.zero {
-                self.zero = true;
-                true
-            } else {
-                false
+        match self {
+            Self::Zero => {
+                if offset == 0 {
+                    false
+                } else {
+                    *self = Self::Complex(thin_vec![0, offset]);
+                    true
+                }
             }
-        } else {
-            match self.offsets.binary_search(&offset) {
+            Self::Complex(offsets) => match offsets.binary_search(&offset) {
                 Ok(_) => false,
                 Err(i) => {
-                    self.offsets.insert(i, offset);
+                    offsets.insert(i, offset);
                     true
+                }
+            },
+        }
+    }
+
+    pub fn union_assign(&mut self, other: &Self) {
+        match (self, other) {
+            (Offsets::Zero, Offsets::Zero) => {}
+            (this @ Offsets::Zero, Offsets::Complex(_)) => {
+                let mut list = thin_vec![0];
+                list.extend(other.iter());
+                *this = Offsets::Complex(list);
+            }
+            (this @ Offsets::Complex(_), Offsets::Zero) => {
+                this.insert(0);
+            }
+            (this @ Offsets::Complex(_), Offsets::Complex(list2)) => {
+                for &offset in list2 {
+                    this.insert(offset);
                 }
             }
         }
     }
 
-    pub fn union_assign(&mut self, other: &Self) {
-        self.zero = other.zero;
-        for offset in &other.offsets {
-            self.insert(*offset);
+    pub fn len(&self) -> usize {
+        match self {
+            Offsets::Zero => 1,
+            Offsets::Complex(offsets) => offsets.len(),
         }
     }
 
-    pub fn len(&self) -> usize {
-        self.zero as usize + self.offsets.len()
-    }
-
     pub fn iter(&self) -> impl Iterator<Item = usize> + '_ {
-        self.zero
-            .then_some(0)
-            .into_iter()
-            .chain(self.offsets.iter().copied())
+        match self {
+            Offsets::Zero => Either::Left(Some(0).into_iter()),
+            Offsets::Complex(offsets) => Either::Right(offsets.iter().copied()),
+        }
     }
 
     pub fn has_non_zero(&self) -> bool {
-        self.offsets.len() > 0
+        match self {
+            Offsets::Zero => false,
+            Offsets::Complex(offsets) => offsets.iter().any(|&o| o != 0),
+        }
     }
 }
 

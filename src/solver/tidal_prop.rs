@@ -7,6 +7,7 @@ use std::time::Duration;
 use bitvec::bitvec;
 use bitvec::prelude::*;
 use either::Either;
+use hashbrown::hash_map::Entry;
 use hashbrown::{HashMap, HashSet};
 use itertools::Itertools;
 use once_cell::unsync::Lazy;
@@ -18,7 +19,7 @@ use super::context::{ContextState, TemplateTerm};
 use super::context_wave_prop::WavePropSerialize;
 use super::shared_bitvec::SharedBitVec;
 use super::{
-    edges_between, try_offset_term, CallSite, Constraint, ContextSelector, Demand,
+    insert_edge, try_offset_term, CallSite, Constraint, ContextSelector, Demand,
     DemandContextSensitiveInput, IntegerTerm, Offsets, OnlyOnceStack, Solver, SolverExt,
     SolverSolution, TermSetTrait, TermType,
 };
@@ -474,7 +475,7 @@ where
                     if t == right {
                         continue;
                     }
-                    if edges_between(&mut self.edges.subset, t, right).insert(0) {
+                    if insert_edge(&mut self.edges.subset, t, right, 0) {
                         self.sols[right as usize].union_assign(&self.p_old[t as usize]);
                         self.edges.rev_subset[right as usize].insert(t);
                         self.new_incoming.push(right);
@@ -520,7 +521,7 @@ where
                     if t == left {
                         continue;
                     }
-                    if edges_between(&mut self.edges.subset, left, t).insert(0) {
+                    if insert_edge(&mut self.edges.subset, left, t, 0) {
                         self.sols[t as usize].union_assign(&self.p_old[left as usize]);
                         self.edges.rev_subset[t as usize].insert(left);
                         self.new_incoming.push(t);
@@ -760,13 +761,19 @@ where
 
             if offsets.has_non_zero() || other_parent != parent {
                 let other_term_set = &mut self.sols[other_parent as usize];
-                let existing_offsets = self.edges.subset[parent as usize]
-                    .entry(other_parent)
-                    .or_default();
+                let mut entry = self.edges.subset[parent as usize].entry(other_parent);
+                let mut existing_offsets = match entry {
+                    Entry::Occupied(ref mut entry) => Either::Left(entry.get_mut()),
+                    Entry::Vacant(entry) => Either::Right(entry),
+                };
+
                 for o in offsets.iter() {
-                    if existing_offsets.contains(o) {
-                        continue;
+                    if let Either::Left(offs) = &existing_offsets {
+                        if offs.contains(o) {
+                            continue;
+                        }
                     }
+
                     if o == 0 {
                         other_term_set.union_assign(&p_old);
                     } else {
@@ -783,7 +790,15 @@ where
                             }
                         }
                     }
-                    existing_offsets.insert(o);
+
+                    match existing_offsets {
+                        Either::Left(ref mut offs) => {
+                            offs.insert(o);
+                        }
+                        Either::Right(entry) => {
+                            existing_offsets = Either::Left(entry.insert(Offsets::single(o)));
+                        }
+                    }
                 }
             }
             self.edges.rev_subset[other as usize].remove(&child);
@@ -799,8 +814,8 @@ where
                 Some(orig_edges) => {
                     self.edges.subset[i as usize]
                         .entry(parent)
-                        .or_default()
-                        .union_assign(&orig_edges);
+                        .and_modify(|e| e.union_assign(&orig_edges))
+                        .or_insert_with(|| orig_edges.clone());
                 }
                 None => {
                     panic!("Expected edges from {i} to {child}");
@@ -1248,7 +1263,7 @@ impl<C: ContextSelector> Edges<C> {
     }
 
     fn add_edge(&mut self, left: IntegerTerm, right: IntegerTerm, offset: usize) -> bool {
-        let res = edges_between(&mut self.subset, left, right).insert(offset);
+        let res = insert_edge(&mut self.subset, left, right, offset);
         if res {
             self.rev_subset[right as usize].insert(left);
         }
