@@ -18,8 +18,9 @@ use crate::module_visitor::pointer::{
 use crate::module_visitor::structs::{StructMap, StructType};
 use crate::module_visitor::{ModuleVisitor, VarIdent};
 use crate::solver::{
-    CallSite, ConstrainedTerms, Constraint, ContextSensitiveInput, DemandContextSensitiveInput,
-    DemandInput, Demands, FunctionInput, Solver, SolverSolution, TermSetTrait, TermType,
+    CallSite, ConstrainedTerms, Constraint, ContextSensitiveInput, Demand,
+    DemandContextSensitiveInput, DemandInput, Demands, FunctionInput, Solver, SolverSolution,
+    TermSetTrait, TermType,
 };
 use crate::visualizer::Visualizable;
 
@@ -55,7 +56,7 @@ impl PointsToAnalysis {
         )
         .visit_module(module);
 
-        let cells_copy = pre_analyzer
+        let cells_copy: Vec<_> = pre_analyzer
             .functions
             .iter()
             .flat_map(|(_, content)| {
@@ -116,8 +117,66 @@ impl PointsToAnalysis {
             })
             .collect();
 
+        let (demands_list, all) = match demands {
+            Demands::All => {
+                let list = cells_copy
+                    .iter()
+                    .map(|c| Demand::PointedBy(c.clone()))
+                    .collect();
+                (list, true)
+            }
+            Demands::List(list) => (list, false),
+            Demands::CallGraphPointsTo => {
+                let mut list = vec![];
+                for cstr in functions
+                    .iter()
+                    .flat_map(|f| &f.constrained_terms.constraints)
+                {
+                    if let Constraint::CallDummy { cond_node, .. } = cstr {
+                        list.push(Demand::PointsTo(cond_node.clone()));
+                    }
+                }
+                (list, false)
+            }
+            Demands::CallGraphPointedBy => {
+                let list = functions
+                    .iter()
+                    .map(|f| Demand::PointedBy(f.return_terms[0].clone()))
+                    .collect();
+                (list, false)
+            }
+            Demands::NonTrivial => {
+                let mut list = vec![];
+                for cstr in functions
+                    .iter()
+                    .flat_map(|f| &f.constrained_terms.constraints)
+                {
+                    if let Constraint::CallDummy { cond_node, .. } = cstr {
+                        if !matches!(cond_node, Cell::Var(VarIdent::Global { .. })) {
+                            list.push(Demand::PointsTo(cond_node.clone()));
+                        }
+                    }
+                }
+                (list, false)
+            }
+            Demands::Escape => {
+                let list = functions
+                    .iter()
+                    .flat_map(|f| &f.return_terms)
+                    .map(|t| Demand::PointsTo(t.clone()))
+                    .collect();
+                (list, false)
+            }
+        };
+
+        let demands_copy = if all {
+            None
+        } else {
+            Some(demands_list.clone())
+        };
+
         let input = DemandInput {
-            demands,
+            demands: demands_list,
             input: ContextSensitiveInput {
                 global: entry,
                 functions,
@@ -147,6 +206,7 @@ impl PointsToAnalysis {
         PointsToResult {
             solution,
             cells: cells_copy,
+            demands: demands_copy,
             called_functions,
             cell_cache: CellCache::new(),
             pre_analysis_time,
@@ -198,6 +258,7 @@ pub struct CacheEntry<'b>(RefMut<'b, String>);
 pub struct PointsToResult<S> {
     pub solution: S,
     pub cells: Vec<Cell>,
+    pub demands: Option<Vec<Demand<Cell>>>,
     pub cell_cache: CellCache,
     pub called_functions: HashSet<Cell>,
     pub pre_analysis_time: Duration,

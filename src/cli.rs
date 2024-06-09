@@ -148,6 +148,7 @@ impl Display for CountMode {
 pub enum DemandMode {
     All,
     CallGraph,
+    Escape,
     List,
 }
 
@@ -156,6 +157,7 @@ impl Display for DemandMode {
         match self {
             DemandMode::All => write!(f, "all"),
             DemandMode::CallGraph => write!(f, "call-graph"),
+            DemandMode::Escape => write!(f, "escape"),
             DemandMode::List => write!(f, "list"),
         }
     }
@@ -165,6 +167,7 @@ impl Display for DemandMode {
 pub enum CallGraphMode {
     PointsTo,
     PointedBy,
+    NonTrivial,
 }
 
 impl Display for CallGraphMode {
@@ -172,6 +175,7 @@ impl Display for CallGraphMode {
         match self {
             CallGraphMode::PointsTo => write!(f, "points-to"),
             CallGraphMode::PointedBy => write!(f, "pointed-by"),
+            CallGraphMode::NonTrivial => write!(f, "non-trivial"),
         }
     }
 }

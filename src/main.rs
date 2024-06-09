@@ -18,9 +18,9 @@ use pointer_analysis::solver::{
 use pointer_analysis::visualizer::{AsDynamicVisualizableExt, DynamicVisualizableSolver};
 use serde::Serialize;
 use std::fmt::Debug;
-use std::io;
 use std::io::Write;
 use std::time::{Duration, Instant};
+use std::{io, mem};
 
 const STRING_FILTER: &'static str = ".str.";
 
@@ -30,7 +30,9 @@ fn get_demands(args: &Args) -> Demands<Cell> {
         DemandMode::CallGraph => match args.call_graph_mode {
             CallGraphMode::PointsTo => Demands::CallGraphPointsTo,
             CallGraphMode::PointedBy => Demands::CallGraphPointedBy,
+            CallGraphMode::NonTrivial => Demands::NonTrivial,
         },
+        DemandMode::Escape => Demands::Escape,
         DemandMode::List => {
             let demands = args
                 .points_to_queries
@@ -99,13 +101,13 @@ where
     )
 }
 
-fn show_output<S>(result: PointsToResult<S>, args: &Args, demand_filter: Option<&[Demand<Cell>]>)
+fn show_output<S>(mut result: PointsToResult<S>, args: &Args)
 where
     S: SolverSolution<Term = Cell>,
     S::TermSet: Debug + IntoIterator<Item = Cell> + FromIterator<Cell>,
 {
     if !args.dont_output {
-        match demand_filter {
+        match mem::take(&mut result.demands) {
             Some(demands) => {
                 let mut points_to_demands = HashSet::new();
                 let mut pointed_by_demands = HashSet::new();
@@ -370,17 +372,7 @@ fn main() -> io::Result<()> {
         return Ok(());
     }
 
-    let demand_filter = if args.full_query_output {
-        None
-    } else {
-        match &demands {
-            Demands::All => None,
-            Demands::CallGraphPointsTo => None,  // TODO
-            Demands::CallGraphPointedBy => None, // TODO
-            Demands::List(demands) => Some(demands.as_ref()),
-        }
-    };
-    show_output(result, &args, demand_filter);
+    show_output(result, &args);
 
     Ok(())
 }

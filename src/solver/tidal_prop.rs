@@ -22,7 +22,6 @@ use super::{
     DemandContextSensitiveInput, IntegerTerm, Offsets, OnlyOnceStack, Solver, SolverExt,
     SolverSolution, TermSetTrait, TermType,
 };
-use crate::solver::Demands;
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
 
 #[derive(Clone)]
@@ -992,64 +991,24 @@ where
             );
         }
 
-        match input.demands {
-            Demands::All => {
-                state.abstract_pointed_by_queries = bitvec::bitvec![1; num_abstract_terms];
-                for term in 0..num_terms as u32 {
-                    state.new_pointed_by_queries.push(term);
-                }
-            }
-            Demands::CallGraphPointsTo => {
-                let function_constraints = input
-                    .input
-                    .functions
-                    .iter()
-                    .flat_map(|f| &f.constrained_terms.constraints);
-                for constraint in input
-                    .input
-                    .global
-                    .constraints
-                    .iter()
-                    .chain(function_constraints)
-                {
-                    if let Constraint::CallDummy { cond_node, .. } = constraint {
-                        let abstract_term = state.context_state.mapping.term_to_integer(cond_node);
-                        state
-                            .abstract_points_to_queries
-                            .set(abstract_term as usize, true);
-                        if let Some(term) = state.context_state.term_to_concrete_global(cond_node) {
-                            state.new_points_to_queries.push(term);
-                        }
+        for demand in input.demands {
+            match demand {
+                Demand::PointsTo(term) => {
+                    let abstract_term = state.context_state.mapping.term_to_integer(&term);
+                    state
+                        .abstract_points_to_queries
+                        .set(abstract_term as usize, true);
+                    if let Some(term) = state.context_state.term_to_concrete_global(&term) {
+                        state.new_points_to_queries.push(term);
                     }
                 }
-            }
-            Demands::CallGraphPointedBy => {
-                for i in 0..fun_term_infos.len() {
-                    let fun_term = (input.input.global.terms.len() + i) as IntegerTerm;
-                    state.new_pointed_by_queries.push(fun_term);
-                }
-            }
-            Demands::List(demands) => {
-                for demand in demands {
-                    match demand {
-                        Demand::PointsTo(term) => {
-                            let abstract_term = state.context_state.mapping.term_to_integer(&term);
-                            state
-                                .abstract_points_to_queries
-                                .set(abstract_term as usize, true);
-                            if let Some(term) = state.context_state.term_to_concrete_global(&term) {
-                                state.new_points_to_queries.push(term);
-                            }
-                        }
-                        Demand::PointedBy(term) => {
-                            let abstract_term = state.context_state.mapping.term_to_integer(&term);
-                            state
-                                .abstract_pointed_by_queries
-                                .set(abstract_term as usize, true);
-                            if let Some(term) = state.context_state.term_to_concrete_global(&term) {
-                                state.new_pointed_by_queries.push(term);
-                            }
-                        }
+                Demand::PointedBy(term) => {
+                    let abstract_term = state.context_state.mapping.term_to_integer(&term);
+                    state
+                        .abstract_pointed_by_queries
+                        .set(abstract_term as usize, true);
+                    if let Some(term) = state.context_state.term_to_concrete_global(&term) {
+                        state.new_pointed_by_queries.push(term);
                     }
                 }
             }

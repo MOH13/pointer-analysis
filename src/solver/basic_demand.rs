@@ -12,7 +12,7 @@ use smallvec::SmallVec;
 use super::context::{ContextState, TemplateTerm};
 use super::{
     try_offset_term, CallSite, Constraint, ContextSelector, Demand, DemandContextSensitiveInput,
-    Demands, IntegerTerm, Offsets, Solver, SolverExt, SolverSolution, TermType,
+    IntegerTerm, Offsets, Solver, SolverExt, SolverSolution, TermType,
 };
 use crate::util::GetTwoMutExt;
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
@@ -141,80 +141,32 @@ where
             abstract_pointed_by_queries: bitvec::bitvec![0; num_abstract_terms],
         };
 
-        match input.demands {
-            Demands::All => {
-                state.abstract_pointed_by_queries = bitvec::bitvec![1; num_abstract_terms];
-                for term in 0..num_terms as u32 {
-                    add_pointed_by_query(term, &mut state.pointed_by_queries, &mut state.worklist);
-                }
-            }
-            Demands::CallGraphPointsTo => {
-                let function_constraints = input
-                    .input
-                    .functions
-                    .iter()
-                    .flat_map(|f| &f.constrained_terms.constraints);
-                for constraint in input
-                    .input
-                    .global
-                    .constraints
-                    .iter()
-                    .chain(function_constraints)
-                {
-                    if let Constraint::CallDummy { cond_node, .. } = constraint {
-                        let abstract_term = state.context_state.mapping.term_to_integer(cond_node);
-                        state
-                            .abstract_points_to_queries
-                            .set(abstract_term as usize, true);
-                        if let Some(term) = state.context_state.term_to_concrete_global(cond_node) {
-                            add_points_to_query(
-                                term,
-                                &mut state.points_to_queries,
-                                &mut state.worklist,
-                            );
-                        }
+        for demand in input.demands {
+            match demand {
+                Demand::PointsTo(term) => {
+                    let abstract_term = state.context_state.mapping.term_to_integer(&term);
+                    state
+                        .abstract_points_to_queries
+                        .set(abstract_term as usize, true);
+                    if let Some(term) = state.context_state.term_to_concrete_global(&term) {
+                        add_points_to_query(
+                            term,
+                            &mut state.points_to_queries,
+                            &mut state.worklist,
+                        );
                     }
                 }
-            }
-            Demands::CallGraphPointedBy => {
-                for i in 0..fun_term_infos.len() {
-                    let fun_term = (input.input.global.terms.len() + i) as IntegerTerm;
-                    add_pointed_by_query(
-                        fun_term,
-                        &mut state.pointed_by_queries,
-                        &mut state.worklist,
-                    );
-                }
-            }
-            Demands::List(demands) => {
-                for demand in demands {
-                    match demand {
-                        Demand::PointsTo(term) => {
-                            let abstract_term = state.context_state.mapping.term_to_integer(&term);
-                            state
-                                .abstract_points_to_queries
-                                .set(abstract_term as usize, true);
-                            if let Some(term) = state.context_state.term_to_concrete_global(&term) {
-                                add_points_to_query(
-                                    term,
-                                    &mut state.points_to_queries,
-                                    &mut state.worklist,
-                                );
-                            }
-                        }
-                        Demand::PointedBy(term) => {
-                            let abstract_term = state.context_state.mapping.term_to_integer(&term);
-                            state
-                                .abstract_pointed_by_queries
-                                .set(abstract_term as usize, true);
-                            if let Some(term) = state.context_state.term_to_concrete_global(&term) {
-                                add_pointed_by_query(
-                                    term,
-                                    &mut state.pointed_by_queries,
-                                    &mut state.worklist,
-                                );
-                            }
-                        }
+                Demand::PointedBy(term) => {
+                    let abstract_term = state.context_state.mapping.term_to_integer(&term);
+                    state
+                        .abstract_pointed_by_queries
+                        .set(abstract_term as usize, true);
+                    if let Some(term) = state.context_state.term_to_concrete_global(&term) {
+                        add_pointed_by_query(
+                            term,
+                            &mut state.pointed_by_queries,
+                            &mut state.worklist,
+                        );
                     }
                 }
             }
