@@ -47,7 +47,7 @@ pub struct Args {
     #[arg(short, long)]
     pub realloc_wrappers: Vec<String>,
     /// Set call string length when using context-sensitivity (range: 0 - 2)
-    #[arg(short = 'c', long, default_value_t = 1)]
+    #[arg(short = 'c', long, default_value_t = 0)]
     pub call_string: usize,
     /// List of points-to queries
     #[arg(short = 'T', long)]

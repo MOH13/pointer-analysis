@@ -734,7 +734,6 @@ where
         for (&other, offsets) in &child_edges {
             debug_assert_ne!(0, offsets.len());
 
-            let other = if other == child { parent } else { other };
             let other_parent = parent_fn(other);
 
             if offsets.has_non_zero() || other_parent != parent {
@@ -838,9 +837,6 @@ where
         }
 
         self.edges.rev_subset[parent as usize].union_assign(&child_rev_edges);
-        if self.edges.rev_subset[parent as usize].remove(&(child as IntegerTerm)) {
-            self.edges.rev_subset[parent as usize].insert(parent as IntegerTerm);
-        }
 
         let child_return_and_parameter_children =
             mem::take(&mut self.return_and_parameter_children[child as usize]);

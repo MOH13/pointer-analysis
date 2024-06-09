@@ -818,7 +818,6 @@ where
         for (&other, offsets) in &child_edges {
             debug_assert_ne!(0, offsets.len());
 
-            let other = if other == child { parent } else { other };
             let other_parent = parent_fn(other);
 
             if offsets.has_non_zero() || other_parent != parent {
@@ -864,10 +863,6 @@ where
         }
 
         state.edges.rev_subset[parent as usize].union_assign(&child_rev_edges);
-
-        if state.edges.rev_subset[parent as usize].remove(&(child as IntegerTerm)) {
-            state.edges.rev_subset[parent as usize].insert(parent as IntegerTerm);
-        }
 
         state.parents[child as usize] = parent;
         state.edges.p_old[child as usize] = S::new();
