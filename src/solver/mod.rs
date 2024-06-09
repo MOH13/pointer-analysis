@@ -510,7 +510,7 @@ pub type ContextInsensitiveInput<T> = ConstrainedTerms<T>;
 #[derive(Clone, Debug)]
 pub struct DemandInput<T, I> {
     pub input: I,
-    pub demands: Demands<T>,
+    pub demands: Vec<Demand<T>>,
 }
 
 impl<T, I> SolverInput for DemandInput<T, I>
@@ -529,6 +529,8 @@ pub enum Demands<T> {
     All,
     CallGraphPointsTo,
     CallGraphPointedBy,
+    NonTrivial,
+    Escape,
     List(Vec<Demand<T>>),
 }
 

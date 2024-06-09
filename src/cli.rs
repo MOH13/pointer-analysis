@@ -47,7 +47,7 @@ pub struct Args {
     #[arg(short, long)]
     pub realloc_wrappers: Vec<String>,
     /// Set call string length when using context-sensitivity (range: 0 - 2)
-    #[arg(short = 'c', long, default_value_t = 1)]
+    #[arg(short = 'c', long, default_value_t = 0)]
     pub call_string: usize,
     /// List of points-to queries
     #[arg(short = 'T', long)]
@@ -148,6 +148,7 @@ impl Display for CountMode {
 pub enum DemandMode {
     All,
     CallGraph,
+    Escape,
     List,
 }
 
@@ -156,6 +157,7 @@ impl Display for DemandMode {
         match self {
             DemandMode::All => write!(f, "all"),
             DemandMode::CallGraph => write!(f, "call-graph"),
+            DemandMode::Escape => write!(f, "escape"),
             DemandMode::List => write!(f, "list"),
         }
     }
@@ -165,6 +167,7 @@ impl Display for DemandMode {
 pub enum CallGraphMode {
     PointsTo,
     PointedBy,
+    NonTrivial,
 }
 
 impl Display for CallGraphMode {
@@ -172,6 +175,7 @@ impl Display for CallGraphMode {
         match self {
             CallGraphMode::PointsTo => write!(f, "points-to"),
             CallGraphMode::PointedBy => write!(f, "pointed-by"),
+            CallGraphMode::NonTrivial => write!(f, "non-trivial"),
         }
     }
 }
