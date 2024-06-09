@@ -21,7 +21,6 @@
 	"customizations": {
 		"vscode": {
 			"extensions": [
-				"rust-lang.rust-analyzer",
 				"ms-vsliveshare.vsliveshare"
 			]
 		}

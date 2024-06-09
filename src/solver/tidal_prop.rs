@@ -229,7 +229,7 @@ where
                     }
 
                     for &w in &state.edges.loads[v as usize] {
-                        to_visit.push(get_representative(state.parents, w))
+                        to_visit.push(get_representative(state.parents, w));
                     }
 
                     for &w in &state.return_and_parameter_children[v as usize] {
@@ -291,10 +291,13 @@ where
                     local_new_pb_queries.push(v);
 
                     for q in offsetable_terms(v, &state.context_state, state.abstract_rev_offsets) {
-                        // TODO: deduplicate?
-                        local_new_pb_queries.push(q);
-                        for &t in &state.edges.addr_ofs[q as usize] {
-                            to_visit.push(get_representative(&mut state.parents, t));
+                        if state.pointed_by_queries.contains(q) {
+                            continue;
+                        }
+                        if local_new_pb_queries.push(q) {
+                            for &t in &state.edges.addr_ofs[q as usize] {
+                                to_visit.push(get_representative(&mut state.parents, t));
+                            }
                         }
                     }
 
@@ -317,9 +320,13 @@ where
                             state.context_state.templates[fun_index as usize].num_return_terms;
                         if relative_index < num_return_terms {
                             let fun_term = state.context_state.templates[0].start_index + fun_index;
-                            local_new_pb_queries.push(fun_term);
-                            for &t in &state.edges.addr_ofs[fun_term as usize] {
-                                to_visit.push(get_representative(&mut state.parents, t));
+                            if state.pointed_by_queries.contains(fun_term) {
+                                continue;
+                            }
+                            if local_new_pb_queries.push(fun_term) {
+                                for &t in &state.edges.addr_ofs[fun_term as usize] {
+                                    to_visit.push(get_representative(&mut state.parents, t));
+                                }
                             }
                         }
                     }
@@ -330,6 +337,9 @@ where
                 BitVec::<usize>::repeat(false, self.term_count());
 
             for v in local_new_pb_queries {
+                if self.pointed_by_queries.contains(v) {
+                    continue;
+                }
                 if !new_pointed_by_queries_bitset[v as usize] {
                     new_pointed_by_queries_bitset.set(v as usize, true);
                     for &w in &self.edges.addr_ofs[v as usize] {
@@ -409,13 +419,17 @@ where
             let cond_node = get_representative(&mut self.parents, cond_node);
 
             let mut sols = self.sols[cond_node as usize].clone();
-            if !self.points_to_queries.test(cond_node as usize) {
-                sols.intersection_assign(self.pointed_by_queries.get_termset());
-            }
-
             if sols.len() == self.p_cache_call_dummies[i].len() {
                 continue;
             }
+
+            if !self.points_to_queries.test(cond_node as usize) {
+                sols.intersection_assign(self.pointed_by_queries.get_termset());
+                if sols.len() == self.p_cache_call_dummies[i].len() {
+                    continue;
+                }
+            }
+
             let p_new = sols.difference(&self.p_cache_call_dummies[i]);
             self.p_cache_call_dummies[i] = sols;
             for t in p_new.iter() {
@@ -440,13 +454,17 @@ where
             let right = get_representative(&mut self.parents, right);
 
             let mut sols = self.sols[cond_node as usize].clone();
-            if !self.points_to_queries.test(cond_node as usize) {
-                sols.intersection_assign(self.pointed_by_queries.get_termset());
-            }
-
             if sols.len() == self.p_cache_left[i].len() {
                 continue;
             }
+
+            if !self.points_to_queries.test(cond_node as usize) {
+                sols.intersection_assign(self.pointed_by_queries.get_termset());
+                if sols.len() == self.p_cache_left[i].len() {
+                    continue;
+                }
+            }
+
             let p_new = sols.difference(&self.p_cache_left[i]);
             self.p_cache_left[i] = sols;
             for t in p_new.iter() {
@@ -482,13 +500,17 @@ where
             let left = get_representative(&mut self.parents, left);
 
             let mut sols = self.sols[cond_node as usize].clone();
-            if !self.points_to_queries.test(cond_node as usize) {
-                sols.intersection_assign(self.pointed_by_queries.get_termset());
-            }
-
             if sols.len() == self.p_cache_right[i].len() {
                 continue;
             }
+
+            if !self.points_to_queries.test(cond_node as usize) {
+                sols.intersection_assign(self.pointed_by_queries.get_termset());
+                if sols.len() == self.p_cache_right[i].len() {
+                    continue;
+                }
+            }
+
             let p_new = sols.difference(&self.p_cache_right[i]);
             self.p_cache_right[i] = sols;
             for t in p_new.iter() {
@@ -669,6 +691,7 @@ where
             context_state: &self.context_state,
             edges: &self.edges,
             points_to_queries: &mut self.points_to_queries,
+            pointed_by_queries: &self.pointed_by_queries,
             visited_pointed_by: &mut self.visited_pointed_by,
             return_and_parameter_children: &self.return_and_parameter_children,
             new_points_to_queries: &mut self.new_points_to_queries,
@@ -734,11 +757,10 @@ where
         for (&other, offsets) in &child_edges {
             debug_assert_ne!(0, offsets.len());
 
-            let other = if other == child { parent } else { other };
             let other_parent = parent_fn(other);
 
             if offsets.has_non_zero() || other_parent != parent {
-                let other_term_set = &mut self.sols[other as usize];
+                let other_term_set = &mut self.sols[other_parent as usize];
                 let existing_offsets = self.edges.subset[parent as usize]
                     .entry(other_parent)
                     .or_default();
@@ -755,10 +777,10 @@ where
                         for t in to_add {
                             other_term_set.insert(t);
                             if self.pointed_by_queries.contains(t) {
-                                self.new_incoming.push(other);
+                                self.new_incoming.push(other_parent);
                             } else {
-                                self.edges.addr_ofs[t as usize].push(other);
-                                self.edges.rev_addr_ofs[other as usize].push(t);
+                                self.edges.addr_ofs[t as usize].push(other_parent);
+                                self.edges.rev_addr_ofs[other_parent as usize].push(t);
                             }
                         }
                     }
@@ -838,9 +860,6 @@ where
         }
 
         self.edges.rev_subset[parent as usize].union_assign(&child_rev_edges);
-        if self.edges.rev_subset[parent as usize].remove(&(child as IntegerTerm)) {
-            self.edges.rev_subset[parent as usize].insert(parent as IntegerTerm);
-        }
 
         let child_return_and_parameter_children =
             mem::take(&mut self.return_and_parameter_children[child as usize]);
@@ -1393,6 +1412,7 @@ struct SccVisitState<'a, T, S, C: ContextSelector> {
     context_state: &'a ContextState<T, C>,
     edges: &'a Edges<C>,
     points_to_queries: &'a mut uniset::BitSet,
+    pointed_by_queries: &'a PointedByQueries<S>,
     visited_pointed_by: &'a mut uniset::BitSet,
     return_and_parameter_children: &'a [SmallVec<[IntegerTerm; 2]>],
     new_points_to_queries: &'a mut Vec<IntegerTerm>,

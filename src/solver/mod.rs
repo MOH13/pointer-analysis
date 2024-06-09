@@ -4,6 +4,7 @@ use roaring::RoaringBitmap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::marker::PhantomData;
+use thin_vec::ThinVec;
 
 mod basic;
 mod basic_demand;
@@ -950,7 +951,7 @@ fn try_offset_term(term: IntegerTerm, term_type: TermType, offset: usize) -> Opt
 #[derive(Clone, Default)]
 pub struct Offsets {
     zero: bool,
-    offsets: Vec<usize>,
+    offsets: ThinVec<usize>,
 }
 
 impl Offsets {
@@ -1029,15 +1030,21 @@ impl OnlyOnceStack {
         }
     }
 
-    fn push(&mut self, term: IntegerTerm) {
-        if !self.already_added[term as usize] {
+    fn push(&mut self, term: IntegerTerm) -> bool {
+        if !self.has_contained(term) {
             self.already_added.set(term as usize, true);
             self.stack.push(term);
+            return true;
         }
+        return false;
     }
 
     fn pop(&mut self) -> Option<IntegerTerm> {
         self.stack.pop()
+    }
+
+    fn has_contained(&self, term: IntegerTerm) -> bool {
+        self.already_added[term as usize]
     }
 
     fn retain<F>(&mut self, f: F)
