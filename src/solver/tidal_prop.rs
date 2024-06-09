@@ -737,7 +737,7 @@ where
             let other_parent = parent_fn(other);
 
             if offsets.has_non_zero() || other_parent != parent {
-                let other_term_set = &mut self.sols[other as usize];
+                let other_term_set = &mut self.sols[other_parent as usize];
                 let existing_offsets = self.edges.subset[parent as usize]
                     .entry(other_parent)
                     .or_default();
@@ -754,10 +754,10 @@ where
                         for t in to_add {
                             other_term_set.insert(t);
                             if self.pointed_by_queries.contains(t) {
-                                self.new_incoming.push(other);
+                                self.new_incoming.push(other_parent);
                             } else {
-                                self.edges.addr_ofs[t as usize].push(other);
-                                self.edges.rev_addr_ofs[other as usize].push(t);
+                                self.edges.addr_ofs[t as usize].push(other_parent);
+                                self.edges.rev_addr_ofs[other_parent as usize].push(t);
                             }
                         }
                     }

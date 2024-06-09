@@ -821,7 +821,7 @@ where
             let other_parent = parent_fn(other);
 
             if offsets.has_non_zero() || other_parent != parent {
-                let other_term_set = &mut state.edges.sols[other as usize];
+                let other_term_set = &mut state.edges.sols[other_parent as usize];
                 let existing_offsets = state.edges.subset[parent as usize]
                     .entry(other_parent)
                     .or_default();
