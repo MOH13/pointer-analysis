@@ -707,14 +707,20 @@ where
         for (v, r_v) in nodes {
             let &(rep, _) = components.get(&r_v).unwrap();
             if v != rep {
-                self.unify(v, rep);
+                self.unify(v, |w| {
+                    components
+                        .get(&internal_state.r[w as usize].unwrap())
+                        .map(|(rep, _)| *rep)
+                        .unwrap_or(w)
+                });
             }
         }
 
         internal_state.top_order
     }
 
-    fn unify(&mut self, child: IntegerTerm, parent: IntegerTerm) {
+    fn unify(&mut self, child: IntegerTerm, parent_fn: impl Fn(IntegerTerm) -> IntegerTerm) {
+        let parent = parent_fn(child);
         debug_assert_ne!(child, parent);
         debug_assert!(self.parents[child as usize] == child);
 
@@ -729,34 +735,40 @@ where
             debug_assert_ne!(0, offsets.len());
 
             let other = if other == child { parent } else { other };
+            let other_parent = parent_fn(other);
 
-            let other_term_set = &mut self.sols[other as usize];
-            for o in offsets.iter() {
-                if o == 0 {
-                    other_term_set.union_assign(&p_old);
-                } else {
-                    let to_add = p_old_vec
-                        .iter()
-                        .filter_map(|&t| try_offset_term(t, self.term_types[t as usize], o));
-                    for t in to_add {
-                        other_term_set.insert(t);
-                        if self.pointed_by_queries.contains(t) {
-                            self.new_incoming.push(other);
-                        } else {
-                            self.edges.addr_ofs[t as usize].push(other);
-                            self.edges.rev_addr_ofs[other as usize].push(t);
+            if offsets.has_non_zero() || other_parent != parent {
+                let other_term_set = &mut self.sols[other as usize];
+                let existing_offsets = self.edges.subset[parent as usize]
+                    .entry(other_parent)
+                    .or_default();
+                for o in offsets.iter() {
+                    if existing_offsets.contains(o) {
+                        continue;
+                    }
+                    if o == 0 {
+                        other_term_set.union_assign(&p_old);
+                    } else {
+                        let to_add = p_old_vec
+                            .iter()
+                            .filter_map(|&t| try_offset_term(t, self.term_types[t as usize], o));
+                        for t in to_add {
+                            other_term_set.insert(t);
+                            if self.pointed_by_queries.contains(t) {
+                                self.new_incoming.push(other);
+                            } else {
+                                self.edges.addr_ofs[t as usize].push(other);
+                                self.edges.rev_addr_ofs[other as usize].push(t);
+                            }
                         }
                     }
+                    existing_offsets.insert(o);
                 }
             }
-
-            self.edges.subset[parent as usize]
-                .entry(other)
-                .or_default()
-                .union_assign(&offsets);
             self.edges.rev_subset[other as usize].remove(&child);
-            self.edges.rev_subset[other as usize].insert(parent);
+            self.edges.rev_subset[other_parent as usize].insert(parent);
         }
+
         let child_rev_edges = mem::take(&mut self.edges.rev_subset[child as usize]);
         for &i in child_rev_edges.iter() {
             if i == child {
