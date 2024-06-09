@@ -628,7 +628,6 @@ where
 }
 
 struct SCC<T, S, C> {
-    iterative: bool,
     node_count: usize,
     iteration: usize,
     /// 0 means not visited.
@@ -763,10 +762,9 @@ where
         }
     }
 
-    fn init_result(iterative: bool, state: &ContextWavePropagationSolverState<T, S, C>) -> Self {
+    fn init_result(state: &ContextWavePropagationSolverState<T, S, C>) -> Self {
         let node_count = state.term_count();
         Self {
-            iterative,
             node_count,
             iteration: 0,
             d: vec![0; node_count],
@@ -781,7 +779,7 @@ where
     }
 
     fn run(solver: &mut ContextWavePropagationSolverState<T, S, C>) -> Self {
-        let mut result = SCC::init_result(false, solver);
+        let mut result = SCC::init_result(solver);
         for v in 0..result.node_count as u32 {
             if result.d[v as usize] == 0 {
                 result.visit(v, solver);
@@ -791,7 +789,7 @@ where
     }
 
     fn run_with_weighted(solver: &mut ContextWavePropagationSolverState<T, S, C>) -> Self {
-        let mut result = SCC::init_result(false, solver);
+        let mut result = SCC::init_result(solver);
         for v in 0..result.node_count as u32 {
             if result.d[v as usize] == 0 {
                 result.visit_with_weighted(v, solver);
@@ -804,9 +802,10 @@ where
     fn unify(
         &self,
         child: IntegerTerm,
-        parent: IntegerTerm,
+        parent_fn: impl Fn(IntegerTerm) -> IntegerTerm,
         state: &mut ContextWavePropagationSolverState<T, S, C>,
     ) {
+        let parent = parent_fn(child);
         debug_assert_ne!(child, parent);
 
         let child_sols = mem::take(&mut state.edges.sols[child as usize]);
@@ -820,27 +819,32 @@ where
             debug_assert_ne!(0, offsets.len());
 
             let other = if other == child { parent } else { other };
+            let other_parent = parent_fn(other);
 
-            let other_term_set = &mut state.edges.sols[other as usize];
-            for offset in offsets.iter() {
-                propagate_terms_into(
-                    p_old,
-                    p_old_vec.iter().copied(),
-                    offset,
-                    other_term_set,
-                    &state.term_types,
-                )
+            if offsets.has_non_zero() || other_parent != parent {
+                let other_term_set = &mut state.edges.sols[other as usize];
+                let existing_offsets = state.edges.subset[parent as usize]
+                    .entry(other_parent)
+                    .or_default();
+                for offset in offsets.iter() {
+                    if existing_offsets.contains(offset) {
+                        continue;
+                    }
+                    propagate_terms_into(
+                        p_old,
+                        p_old_vec.iter().copied(),
+                        offset,
+                        other_term_set,
+                        &state.term_types,
+                    );
+                    existing_offsets.insert(offset);
+                }
             }
 
-            state.edges.subset[parent as usize]
-                .entry(other)
-                .or_default()
-                .union_assign(&offsets);
-            // Self::do_remove_stuff(&mut solver.rev_edges, other, child);
-            // solver.num_removes += 1;
             state.edges.rev_subset[other as usize].remove(&child);
-            state.edges.rev_subset[other as usize].insert(parent);
+            state.edges.rev_subset[other_parent as usize].insert(parent);
         }
+
         let child_rev_edges = mem::take(&mut state.edges.rev_subset[child as usize]);
         for &i in child_rev_edges.iter() {
             if i == child {
@@ -889,28 +893,22 @@ where
                 }
             }
         }
-        let mut removed = HashSet::new();
         for (v, r_v) in nodes {
             let &(rep, _) = components.get(&r_v).unwrap();
             if v != rep {
-                self.unify(v, rep, state);
-                if self.iterative {
-                    removed.insert(v);
-                }
+                self.unify(
+                    v,
+                    |w| {
+                        components
+                            .get(&self.r[w as usize].unwrap())
+                            .map(|(rep, _)| *rep)
+                            .unwrap_or(w)
+                    },
+                    state,
+                );
             }
         }
-        if self.iterative {
-            if !removed.is_empty() {
-                state.top_order = state
-                    .top_order
-                    .iter()
-                    .copied()
-                    .filter(|node| !removed.contains(node))
-                    .collect()
-            }
-        } else {
-            state.top_order = self.top_order;
-        }
+        state.top_order = self.top_order;
     }
 
     // Collapse cycles and update topological order
