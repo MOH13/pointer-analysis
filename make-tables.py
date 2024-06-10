@@ -87,7 +87,7 @@ make_table(data, ["stats"], [""], [
 make_table(data, ["tidal_shared", "tidal_call_graph", "wave_shared", "demand_hash", "demand_call_graph"], ["TP (All)", "TP (CG)", "WP", "WL (All)", "WL (CG)"], ["solver_time_ms"], ["Time (s)"])
 make_table(data, ["tidal_call_graph", "tidal_roaring"], ["TP (Shared)", "TP (Roaring)"], ["solver_time_ms", "memory"], ["Time (s)", "Memory (MB)"])
 make_table(data, ["tidal_shared"], [""], ["num_called_functions", "num_called_non_trivial_functions", "mean_call_edges", "mean_non_trivial_call_edges"], ["\\# Called", "\\# Called (non-trivial)", "Mean Call Edges", "Mean Call Edges (non-trivial)"])
-make_table(data, ["tidal_shared", "tidal_call_graph"], ["TP (All)", "TP (CG)"], ["non_empty_nodes", "sccs"], ["\\# Non-empty", "\\# SCCs"])
+make_table(data, ["tidal_shared", "tidal_call_graph"], ["TP (All)", "TP (CG)"], ["non_empty_nodes", "sccs", "iterations"], ["\\# Non-empty", "\\# SCCs", "\\# Iterations"])
 
 programs = list(data.keys())
 solvers = {

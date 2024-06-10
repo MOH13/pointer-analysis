@@ -168,7 +168,7 @@ where
             SccDirection::Forward,
             EdgeVisitMode::OnlyNonWeighted,
             CollapseMode::On,
-            (0..self.term_count() as IntegerTerm).collect(),
+            self.new_incoming.clone(),
             |_, _, _| {},
         );
     }
@@ -176,12 +176,12 @@ where
     fn query_propagation(&mut self) {
         let mut changed = true;
         let mut iters = 0;
+        let mut new_incoming = self.new_incoming.clone();
         while changed {
             let mut new_queries = 0;
             changed = false;
 
-            let mut pt_starting_nodes = self
-                .new_incoming
+            let mut pt_starting_nodes = new_incoming
                 .iter()
                 .map(|&t| get_representative(&mut self.parents, t))
                 .filter(|t| self.points_to_queries.test(*t as usize))
@@ -208,7 +208,9 @@ where
                     state.new_pointed_by_queries.push(v);
 
                     for &w in &state.edges.rev_addr_ofs[v as usize] {
-                        state.sols[v as usize].insert(w);
+                        if state.sols[v as usize].insert(w) {
+                            state.new_incoming.push(v);
+                        }
                     }
 
                     for &w in &state.edges.rev_subset[v as usize] {
@@ -225,6 +227,7 @@ where
                                     &state.term_types,
                                 );
                             }
+                            state.new_incoming.push(v);
                         }
                     }
 
@@ -269,7 +272,7 @@ where
                 }
             }
 
-            for v in self.new_incoming.drain(..) {
+            for v in new_incoming.drain(..) {
                 let v = get_representative(&mut self.parents, v);
                 if self.sols[v as usize].overlaps(self.pointed_by_queries.get_termset()) {
                     pb_starting_nodes.push(v);
@@ -286,7 +289,6 @@ where
                     if state.visited_pointed_by.test(v as usize) {
                         return;
                     }
-                    // println!("{}, {}", to_visit.len(), state.p_old.len());
                     state.visited_pointed_by.set(v as usize);
                     local_new_pb_queries.push(v);
 
@@ -344,7 +346,9 @@ where
                     new_pointed_by_queries_bitset.set(v as usize, true);
                     for &w in &self.edges.addr_ofs[v as usize] {
                         let w = get_representative(&mut self.parents, w);
-                        self.sols[w as usize].insert(v);
+                        if self.sols[w as usize].insert(v) {
+                            self.new_incoming.push(w);
+                        }
                     }
                     self.pointed_by_queries.insert(v);
                 }
@@ -357,11 +361,16 @@ where
     fn term_propagation(&mut self) -> bool {
         let mut changed = false;
 
+        let new_incoming = self
+            .new_incoming
+            .drain(..)
+            .map(|t| get_representative(&mut self.parents, t))
+            .collect();
         let top_order = self.scc(
             SccDirection::Forward,
-            EdgeVisitMode::OnlyNonWeighted,
-            CollapseMode::On,
-            (0..self.term_count() as IntegerTerm).collect(),
+            EdgeVisitMode::WithWeighted,
+            CollapseMode::Off,
+            new_incoming,
             |_, _, _| {},
         );
 
@@ -386,15 +395,15 @@ where
                             .filter_map(|&t| try_offset_term(t, self.term_types[t as usize], o));
                         for t in to_add {
                             self.sols[w as usize].insert(t);
-                            if self.pointed_by_queries.contains(t) {
-                                should_set_new_incoming = true;
-                            } else {
+                            should_set_new_incoming = true;
+                            if !self.pointed_by_queries.contains(t) {
                                 self.edges.addr_ofs[t as usize].push(w);
                                 self.edges.rev_addr_ofs[w as usize].push(t);
                             }
                         }
                     }
                 }
+
                 if should_set_new_incoming {
                     self.new_incoming.push(w);
                 }
@@ -418,10 +427,10 @@ where
         {
             let cond_node = get_representative(&mut self.parents, cond_node);
 
-            let mut sols = self.sols[cond_node as usize].clone();
-            if sols.len() == self.p_cache_call_dummies[i].len() {
+            if self.sols[cond_node as usize].len() == self.p_cache_call_dummies[i].len() {
                 continue;
             }
+            let mut sols = self.sols[cond_node as usize].clone();
 
             if !self.points_to_queries.test(cond_node as usize) {
                 sols.intersection_assign(self.pointed_by_queries.get_termset());
@@ -453,10 +462,10 @@ where
             let cond_node = get_representative(&mut self.parents, cond_node);
             let right = get_representative(&mut self.parents, right);
 
-            let mut sols = self.sols[cond_node as usize].clone();
-            if sols.len() == self.p_cache_left[i].len() {
+            if self.sols[cond_node as usize].len() == self.p_cache_left[i].len() {
                 continue;
             }
+            let mut sols = self.sols[cond_node as usize].clone();
 
             if !self.points_to_queries.test(cond_node as usize) {
                 sols.intersection_assign(self.pointed_by_queries.get_termset());
@@ -499,10 +508,10 @@ where
             let cond_node = get_representative(&mut self.parents, cond_node);
             let left = get_representative(&mut self.parents, left);
 
-            let mut sols = self.sols[cond_node as usize].clone();
-            if sols.len() == self.p_cache_right[i].len() {
+            if self.sols[cond_node as usize].len() == self.p_cache_right[i].len() {
                 continue;
             }
+            let mut sols = self.sols[cond_node as usize].clone();
 
             if !self.points_to_queries.test(cond_node as usize) {
                 sols.intersection_assign(self.pointed_by_queries.get_termset());
@@ -697,6 +706,7 @@ where
             new_points_to_queries: &mut self.new_points_to_queries,
             new_pointed_by_queries: &mut self.new_pointed_by_queries,
             parents: &mut self.parents,
+            new_incoming: &mut self.new_incoming,
         };
 
         while let Some(v) = internal_state.to_visit.pop() {
@@ -731,10 +741,10 @@ where
             let &(rep, _) = components.get(&r_v).unwrap();
             if v != rep {
                 self.unify(v, |w| {
-                    components
-                        .get(&internal_state.r[w as usize].unwrap())
-                        .map(|(rep, _)| *rep)
-                        .unwrap_or(w)
+                    let Some(r) = internal_state.r[w as usize] else {
+                        return w;
+                    };
+                    components.get(&r).map(|(rep, _)| *rep).unwrap_or(w)
                 });
             }
         }
@@ -1392,6 +1402,7 @@ struct SccVisitState<'a, T, S, C: ContextSelector> {
     new_points_to_queries: &'a mut Vec<IntegerTerm>,
     new_pointed_by_queries: &'a mut Vec<IntegerTerm>,
     parents: &'a mut [IntegerTerm],
+    new_incoming: &'a mut Vec<IntegerTerm>,
 }
 
 fn get_representative_no_mutation(parents: &[IntegerTerm], child: IntegerTerm) -> IntegerTerm {
