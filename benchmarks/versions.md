@@ -49,6 +49,37 @@ $ ./build.sh
 $ extract-bc -o bench.bc make
 ```
 
+## OpenSSL
+
+Got version `https://github.com/openssl/openssl/releases/tag/openssl-3.3.1`
+
+```sh
+$ CC=wllvm CFLAGS="-O0 -fno-discard-value-names" ./Configure
+$ make
+$ extract-bc -o bench.bc apps/openssl
+```
+
+## Tmux
+
+Got version `https://github.com/tmux/tmux/releases/tag/3.4`
+
+```sh
+$ ./autogen.sh
+$ CC=wllvm CFLAGS="-O0 -fno-discard-value-names" ./configure
+$ make
+$ extract-bc -o bench.bc tmux
+```
+
+## Valkey
+
+Got version `https://github.com/valkey-io/valkey/releases/tag/7.2.5`
+
+```sh
+$ cd src
+$ CC=wllvm CFLAGS="-O0 -fno-discard-value-names" make noopt
+$ extract-bc -o ../bench.bc valkey-server
+```
+
 ## Vim
 
 Got version `https://github.com/vim/vim/releases/tag/v9.1.0386`.

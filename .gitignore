@@ -37,6 +37,18 @@ stderr.txt
 !/benchmarks/make/COPYING
 !/benchmarks/make/bench.bc
 
+# OpenSSL
+!/benchmarks/openssl/LICENSE.txt
+!/benchmarks/openssl/bench.bc
+
+# Valkey
+!/benchmarks/valkey/COPYING
+!/benchmarks/valkey/bench.bc
+
+# Tmux
+!/benchmarks/tmux/COPYING
+!/benchmarks/tmux/bench.bc
+
 # Vim
 !/benchmarks/vim/LICENSE
 !/benchmarks/vim/bench.bc
