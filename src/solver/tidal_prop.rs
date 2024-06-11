@@ -1,8 +1,8 @@
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::Hash;
 use std::marker::PhantomData;
-use std::mem;
 use std::time::Duration;
+use std::{iter, mem};
 
 use bitvec::bitvec;
 use bitvec::prelude::*;
@@ -14,6 +14,7 @@ use once_cell::unsync::Lazy;
 use roaring::RoaringBitmap;
 use serde::Serialize;
 use smallvec::SmallVec;
+use thin_vec::ThinVec;
 
 use super::context::{ContextState, TemplateTerm};
 use super::context_wave_prop::WavePropSerialize;
@@ -28,29 +29,38 @@ use super::{
 use crate::util::GetManyMutExt;
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
 
-#[derive(Clone)]
-struct CondLeftEntry<C> {
-    cond_node: IntegerTerm,
-    right: IntegerTerm,
-    offset: usize,
-    call_site: Option<CallSite>,
-    context: C,
+#[derive(Clone, Debug)]
+enum CondEntry<C> {
+    Left {
+        right: IntegerTerm,
+        offset: usize,
+        call_site: Option<CallSite>,
+        context: C,
+    },
+    Right {
+        left: IntegerTerm,
+        offset: usize,
+        call_site: Option<CallSite>,
+        context: C,
+    },
+    CallDummy {
+        call_site: CallSite,
+        context: C,
+    },
 }
 
-#[derive(Clone)]
-struct CondRightEntry<C> {
-    cond_node: IntegerTerm,
-    left: IntegerTerm,
-    offset: usize,
-    call_site: Option<CallSite>,
-    context: C,
+#[derive(Debug)]
+struct CachedCondEntry<C, S> {
+    entry: CondEntry<C>,
+    cache: S,
 }
-
-#[derive(Clone)]
-struct CallDummyEntry<C> {
-    cond_node: IntegerTerm,
-    call_site: CallSite,
-    context: C,
+impl<C, S: TermSetTrait> CachedCondEntry<C, S> {
+    fn new(entry: CondEntry<C>) -> Self {
+        Self {
+            entry,
+            cache: S::new(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -96,11 +106,8 @@ impl<S: TermSetTrait<Term = IntegerTerm>> PointedByQueries<S> {
 pub struct TidalPropagationSolverState<T, S, C: ContextSelector> {
     sols: Vec<S>,
     p_old: Vec<S>,
-    p_cache_left: Vec<S>,
-    p_cache_right: Vec<S>,
-    p_cache_call_dummies: Vec<S>,
     context_state: ContextState<T, C>,
-    edges: Edges<C>,
+    edges: Edges<C, S>,
     term_types: Vec<TermType>,
     abstract_rev_offsets: Vec<SmallVec<[u32; 2]>>,
     parents: Vec<IntegerTerm>,
@@ -152,11 +159,12 @@ where
             self.query_propagation_time += query_propagation_start.elapsed();
 
             let term_propagation_start = std::time::Instant::now();
-            changed = self.term_propagation();
+            let (changed_terms, prop_changed) = self.term_propagation();
+            changed = prop_changed;
             self.term_propagation_time += term_propagation_start.elapsed();
 
             let edge_instantiation_start = std::time::Instant::now();
-            changed |= self.add_edges_after_wave_prop();
+            changed |= self.add_edges_after_wave_prop(changed_terms);
             self.edge_instantiation_time += edge_instantiation_start.elapsed();
 
             eprintln!("Iteration {}", self.iters);
@@ -223,29 +231,10 @@ where
                     state.points_to_queries.set(v as usize);
                     new_queries += 1;
                     state.new_pointed_by_queries.push(v);
+                    state.new_incoming.push(v);
 
                     for &w in &state.edges.rev_addr_ofs[v as usize] {
-                        if state.sols[v as usize].insert(w) {
-                            state.new_incoming.push(v);
-                        }
-                    }
-
-                    for &w in &state.edges.rev_subset[v as usize] {
-                        if state.p_old[w as usize].len() > 0 {
-                            let p_pt_old = &state.p_old[w as usize];
-                            let p_pt_old_vec =
-                                Lazy::new(|| p_pt_old.iter().collect::<Vec<IntegerTerm>>());
-                            for offset in state.edges.subset[w as usize][&v].iter() {
-                                propagate_terms_into(
-                                    p_pt_old,
-                                    p_pt_old_vec.iter().copied(),
-                                    offset,
-                                    &mut state.sols[v as usize],
-                                    &state.term_types,
-                                );
-                            }
-                            state.new_incoming.push(v);
-                        }
+                        state.sols[v as usize].insert(w);
                     }
 
                     for &w in &state.edges.loads[v as usize] {
@@ -363,9 +352,8 @@ where
                     new_pointed_by_queries_bitset.set(v as usize, true);
                     for &w in &self.edges.addr_ofs[v as usize] {
                         let w = get_representative(&mut self.parents, w);
-                        if self.sols[w as usize].insert(v) {
-                            self.new_incoming.push(w);
-                        }
+                        self.sols[w as usize].insert(v);
+                        self.new_incoming.push(w);
                     }
                     self.pointed_by_queries.insert(v);
                 }
@@ -375,7 +363,7 @@ where
         eprintln!("{iters} query iterations");
     }
 
-    fn term_propagation(&mut self) -> bool {
+    fn term_propagation(&mut self) -> (Vec<IntegerTerm>, bool) {
         let mut changed = false;
 
         let new_incoming = self
@@ -450,131 +438,90 @@ where
             }
         }
 
-        changed
+        (top_order, changed)
     }
 
-    fn add_edges_after_wave_prop(&mut self) -> bool {
+    fn add_edges_after_wave_prop(&mut self, changed_terms: Vec<IntegerTerm>) -> bool {
         let mut changed = false;
-        let call_dummies = self.edges.call_dummies.clone();
-        for (
-            i,
-            CallDummyEntry {
-                cond_node,
-                call_site,
-                context,
-            },
-        ) in call_dummies.into_iter().enumerate()
-        {
-            let cond_node = get_representative(&mut self.parents, cond_node);
-
-            if self.sols[cond_node as usize].len() == self.p_cache_call_dummies[i].len() {
-                continue;
-            }
-            let mut sols = self.sols[cond_node as usize].clone();
-
-            if !self.points_to_queries.test(cond_node as usize) {
-                sols.intersection_assign(self.pointed_by_queries.get_termset());
-                if sols.len() == self.p_cache_call_dummies[i].len() {
+        for cond_node in changed_terms {
+            for i in 0..self.edges.conds[cond_node as usize].len() {
+                let cond = &mut self.edges.conds[cond_node as usize][i];
+                if self.sols[cond_node as usize].len() == cond.cache.len() {
                     continue;
                 }
-            }
+                let mut sols = self.sols[cond_node as usize].clone();
 
-            let p_new = sols.difference(&self.p_cache_call_dummies[i]);
-            self.p_cache_call_dummies[i] = sols;
-            for t in p_new.iter() {
-                changed |= self
-                    .try_offset_and_instantiate(t, Some(&call_site), 0, &context)
-                    .is_some();
-            }
-        }
-        let left_conds = self.edges.left_conds.clone();
-        for (
-            i,
-            CondLeftEntry {
-                cond_node,
-                right,
-                offset,
-                call_site,
-                context,
-            },
-        ) in left_conds.into_iter().enumerate()
-        {
-            let cond_node = get_representative(&mut self.parents, cond_node);
-            let right = get_representative(&mut self.parents, right);
-
-            if self.sols[cond_node as usize].len() == self.p_cache_left[i].len() {
-                continue;
-            }
-            let mut sols = self.sols[cond_node as usize].clone();
-
-            if !self.points_to_queries.test(cond_node as usize) {
-                sols.intersection_assign(self.pointed_by_queries.get_termset());
-                if sols.len() == self.p_cache_left[i].len() {
-                    continue;
-                }
-            }
-
-            let p_new = sols.difference(&self.p_cache_left[i]);
-            self.p_cache_left[i] = sols;
-            for t in p_new.iter() {
-                if let Some(t) =
-                    self.try_offset_and_instantiate(t, call_site.as_ref(), offset, &context)
-                {
-                    let t = get_representative(&mut self.parents, t);
-                    if t == right {
+                if !self.points_to_queries.test(cond_node as usize) {
+                    sols.intersection_assign(self.pointed_by_queries.get_termset());
+                    if sols.len() == cond.cache.len() {
                         continue;
                     }
-                    if insert_edge(&mut self.edges.subset, t, right, 0) {
-                        self.sols[right as usize].union_assign(&self.p_old[t as usize]);
-                        self.edges.rev_subset[right as usize].insert(t);
-                        self.new_incoming.push(right);
-                        changed = true;
-                    }
                 }
-            }
-        }
-        let right_conds = self.edges.right_conds.clone();
-        for (
-            i,
-            CondRightEntry {
-                cond_node,
-                left,
-                offset,
-                call_site,
-                context,
-            },
-        ) in right_conds.into_iter().enumerate()
-        {
-            let cond_node = get_representative(&mut self.parents, cond_node);
-            let left = get_representative(&mut self.parents, left);
 
-            if self.sols[cond_node as usize].len() == self.p_cache_right[i].len() {
-                continue;
-            }
-            let mut sols = self.sols[cond_node as usize].clone();
+                let p_new = sols.difference(&cond.cache);
+                cond.cache = sols;
 
-            if !self.points_to_queries.test(cond_node as usize) {
-                sols.intersection_assign(self.pointed_by_queries.get_termset());
-                if sols.len() == self.p_cache_right[i].len() {
-                    continue;
-                }
-            }
-
-            let p_new = sols.difference(&self.p_cache_right[i]);
-            self.p_cache_right[i] = sols;
-            for t in p_new.iter() {
-                if let Some(t) =
-                    self.try_offset_and_instantiate(t, call_site.as_ref(), offset, &context)
-                {
-                    let t = get_representative(&mut self.parents, t);
-                    if t == left {
-                        continue;
+                match cond.entry.clone() {
+                    CondEntry::Left {
+                        right,
+                        offset,
+                        call_site,
+                        context,
+                    } => {
+                        let right = get_representative(&mut self.parents, right);
+                        for t in p_new.iter() {
+                            if let Some(t) = self.try_offset_and_instantiate(
+                                t,
+                                call_site.as_ref(),
+                                offset,
+                                &context,
+                            ) {
+                                let t = get_representative(&mut self.parents, t);
+                                if t == right {
+                                    continue;
+                                }
+                                if insert_edge(&mut self.edges.subset, t, right, 0) {
+                                    self.sols[right as usize].union_assign(&self.p_old[t as usize]);
+                                    self.edges.rev_subset[right as usize].insert(t);
+                                    self.new_incoming.push(right);
+                                    changed = true;
+                                }
+                            }
+                        }
                     }
-                    if insert_edge(&mut self.edges.subset, left, t, 0) {
-                        self.sols[t as usize].union_assign(&self.p_old[left as usize]);
-                        self.edges.rev_subset[t as usize].insert(left);
-                        self.new_incoming.push(t);
-                        changed = true;
+                    CondEntry::Right {
+                        left,
+                        offset,
+                        call_site,
+                        context,
+                    } => {
+                        let left = get_representative(&mut self.parents, left);
+                        for t in p_new.iter() {
+                            if let Some(t) = self.try_offset_and_instantiate(
+                                t,
+                                call_site.as_ref(),
+                                offset,
+                                &context,
+                            ) {
+                                let t = get_representative(&mut self.parents, t);
+                                if t == left {
+                                    continue;
+                                }
+                                if insert_edge(&mut self.edges.subset, left, t, 0) {
+                                    self.sols[t as usize].union_assign(&self.p_old[left as usize]);
+                                    self.edges.rev_subset[t as usize].insert(left);
+                                    self.new_incoming.push(t);
+                                    changed = true;
+                                }
+                            }
+                        }
+                    }
+                    CondEntry::CallDummy { call_site, context } => {
+                        for t in p_new.iter() {
+                            changed |= self
+                                .try_offset_and_instantiate(t, Some(&call_site), 0, &context)
+                                .is_some();
+                        }
                     }
                 }
             }
@@ -687,6 +634,7 @@ where
                         right_sols,
                         &self.term_types,
                     );
+                    self.new_incoming.push(right);
                 }
             }
         }
@@ -697,9 +645,23 @@ where
         let rep_c = c.map_terms(|&t| get_representative(&mut self.parents, t));
         self.edges.add_constraint(rep_c, context);
         match c {
-            Constraint::UnivCondSubsetLeft { .. } => self.p_cache_left.push(S::new()),
-            Constraint::UnivCondSubsetRight { .. } => self.p_cache_right.push(S::new()),
-            Constraint::CallDummy { .. } => self.p_cache_call_dummies.push(S::new()),
+            Constraint::UnivCondSubsetLeft {
+                cond_node, right, ..
+            } => {
+                if self.points_to_queries.test(right as usize) {
+                    self.new_points_to_queries.push(cond_node);
+                }
+                self.new_incoming.push(cond_node);
+            }
+            Constraint::UnivCondSubsetRight {
+                cond_node, left, ..
+            } => {
+                if self.visited_pointed_by.test(left as usize) {
+                    self.new_points_to_queries.push(cond_node);
+                }
+                self.new_incoming.push(cond_node)
+            }
+            Constraint::CallDummy { cond_node, .. } => self.new_incoming.push(cond_node),
             _ => {}
         }
     }
@@ -734,9 +696,7 @@ where
 
         let mut visit_state = SccVisitState {
             sols: &mut self.sols,
-            term_types: &self.term_types,
             abstract_rev_offsets: &self.abstract_rev_offsets,
-            p_old: &mut self.p_old,
             context_state: &self.context_state,
             edges: &self.edges,
             points_to_queries: &mut self.points_to_queries,
@@ -932,6 +892,8 @@ where
 
         let child_rev_addr_ofs = mem::take(&mut self.edges.rev_addr_ofs[child as usize]);
         self.edges.rev_addr_ofs[parent as usize].extend_from_slice(child_rev_addr_ofs.as_slice());
+        let child_conds = mem::take(&mut self.edges.conds[child as usize]);
+        self.edges.conds[parent as usize].extend(child_conds);
         let child_loads = mem::take(&mut self.edges.loads[child as usize]);
         self.edges.loads[parent as usize].extend_from_slice(child_loads.as_slice());
         let child_stores = mem::take(&mut self.edges.stores[child as usize]);
@@ -998,9 +960,7 @@ where
             rev_addr_ofs: vec![SmallVec::new(); num_terms],
             subset: vec![HashMap::new(); num_terms],
             rev_subset: vec![HashSet::new(); num_terms],
-            left_conds: vec![],
-            right_conds: vec![],
-            call_dummies: vec![],
+            conds: iter::repeat_with(ThinVec::new).take(num_terms).collect(),
             loads: vec![SmallVec::new(); num_terms],
             stores: vec![SmallVec::new(); num_terms],
         };
@@ -1050,9 +1010,6 @@ where
             context_state,
             sols: vec![S::new(); num_terms],
             p_old: vec![S::new(); num_terms],
-            p_cache_left: vec![],
-            p_cache_right: vec![],
-            p_cache_call_dummies: vec![],
             term_types,
             abstract_rev_offsets,
             parents: Vec::from_iter(0..num_terms as IntegerTerm),
@@ -1230,30 +1187,28 @@ where
                             .is_empty()
                     })
                     .count(),
-                scc_time_ms: self.scc_time.as_millis() as u64,
-                term_propagation_time_ms: self.term_propagation_time.as_millis() as u64,
-                edge_instantiation_time_ms: self.edge_instantiation_time.as_millis() as u64,
+                scc_time_ms: self.scc_time.as_secs_f64() * 1000.0,
+                term_propagation_time_ms: self.term_propagation_time.as_secs_f64() * 1000.0,
+                edge_instantiation_time_ms: self.edge_instantiation_time.as_secs_f64() * 1000.0,
             },
-            query_propagation_time_ms: self.query_propagation_time.as_millis() as u64,
+            query_propagation_time_ms: self.query_propagation_time.as_secs_f64() * 1000.0,
             points_to_queries: points_to_queries.iter().count(),
             pointed_by_queries: self.pointed_by_queries.termset.len(),
         })
     }
 }
 
-struct Edges<C: ContextSelector> {
+struct Edges<C: ContextSelector, S> {
     subset: Vec<HashMap<IntegerTerm, Offsets>>,
     rev_subset: Vec<HashSet<IntegerTerm>>,
-    left_conds: Vec<CondLeftEntry<C::Context>>,
-    right_conds: Vec<CondRightEntry<C::Context>>,
-    call_dummies: Vec<CallDummyEntry<C::Context>>,
+    conds: Vec<ThinVec<CachedCondEntry<C::Context, S>>>,
     loads: Vec<SmallVec<[IntegerTerm; 2]>>,
     stores: Vec<SmallVec<[IntegerTerm; 2]>>,
     addr_ofs: Vec<SmallVec<[IntegerTerm; 2]>>,
     rev_addr_ofs: Vec<SmallVec<[IntegerTerm; 2]>>,
 }
 
-impl<C: ContextSelector> Edges<C> {
+impl<C: ContextSelector, S: TermSetTrait> Edges<C, S> {
     fn add_constraint(&mut self, c: Constraint<IntegerTerm>, context: C::Context) {
         match c {
             Constraint::Inclusion { term, node } => {
@@ -1274,13 +1229,12 @@ impl<C: ContextSelector> Edges<C> {
                 offset,
                 call_site,
             } => {
-                self.left_conds.push(CondLeftEntry {
-                    cond_node,
+                self.conds[cond_node as usize].push(CachedCondEntry::new(CondEntry::Left {
                     right,
                     offset,
                     call_site,
                     context,
-                });
+                }));
                 self.loads[right as usize].push(cond_node);
             }
             Constraint::UnivCondSubsetRight {
@@ -1289,13 +1243,12 @@ impl<C: ContextSelector> Edges<C> {
                 offset,
                 call_site,
             } => {
-                self.right_conds.push(CondRightEntry {
-                    cond_node,
+                self.conds[cond_node as usize].push(CachedCondEntry::new(CondEntry::Right {
                     left,
                     offset,
                     call_site,
                     context,
-                });
+                }));
                 self.stores[left as usize].push(cond_node);
             }
             Constraint::CallDummy {
@@ -1304,11 +1257,10 @@ impl<C: ContextSelector> Edges<C> {
                 result_node: _,
                 call_site,
             } => {
-                self.call_dummies.push(CallDummyEntry {
-                    cond_node,
+                self.conds[cond_node as usize].push(CachedCondEntry::new(CondEntry::CallDummy {
                     call_site,
                     context,
-                });
+                }));
             }
         };
     }
@@ -1326,6 +1278,7 @@ impl<C: ContextSelector> Edges<C> {
         self.rev_subset.resize_with(size, HashSet::new);
         self.addr_ofs.resize_with(size, SmallVec::new);
         self.rev_addr_ofs.resize_with(size, SmallVec::new);
+        self.conds.resize_with(size, ThinVec::new);
         self.loads.resize_with(size, SmallVec::new);
         self.stores.resize_with(size, SmallVec::new);
     }
@@ -1431,11 +1384,9 @@ struct SccInternalState {
 
 struct SccVisitState<'a, T, S, C: ContextSelector> {
     sols: &'a mut [S],
-    term_types: &'a [TermType],
     abstract_rev_offsets: &'a [SmallVec<[u32; 2]>],
-    p_old: &'a [S],
     context_state: &'a ContextState<T, C>,
-    edges: &'a Edges<C>,
+    edges: &'a Edges<C, S>,
     points_to_queries: &'a mut uniset::BitSet,
     pointed_by_queries: &'a PointedByQueries<S>,
     visited_pointed_by: &'a mut uniset::BitSet,
@@ -1611,13 +1562,14 @@ where
 
 #[cfg(test)]
 mod tests {
+    use itertools::Itertools;
     use llvm_ir::{Module, Name};
 
     use crate::analysis::{Cell, Config, PointsToAnalysis};
     use crate::module_visitor::VarIdent;
     use crate::solver::tidal_prop::get_representative_no_mutation;
     use crate::solver::{
-        try_offset_term, ContextInsensitiveSelector, Demand, Demands, IntegerTerm, TermSetTrait,
+        try_offset_term, CallStringSelector, Demand, Demands, IntegerTerm, TermSetTrait,
     };
 
     use super::{offsetable_terms, SharedBitVecTidalPropagationSolver};
@@ -1627,19 +1579,21 @@ mod tests {
         let solver = SharedBitVecTidalPropagationSolver::new(false);
         let module =
             Module::from_bc_path("benchmarks/make/bench.bc").expect("Error parsing bc file");
-        let demands = vec![Demand::PointsTo(Cell::Var(VarIdent::new_local(
-            &Name::Number(6),
-            "eval_buffer",
-        )))];
+        // let demands = vec![Demand::PointsTo(Cell::Var(VarIdent::new_local(
+        //     &Name::Number(6),
+        //     "eval_buffer",
+        // )))];
         let state = PointsToAnalysis::run(
             &solver,
             &module,
-            ContextInsensitiveSelector,
-            Demands::List(demands),
+            CallStringSelector::<1>::new(),
+            // Demands::List(demands),
+            Demands::All,
             &Config::default(),
         )
         .into_solution();
 
+        // Points-to invariants
         for i in 0..state.sols.len() {
             if state.points_to_queries.test(i) {
                 for &t in state.edges.rev_addr_ofs[i].iter() {
@@ -1666,6 +1620,7 @@ mod tests {
                 }
             }
         }
+        // Pointed-by invariants
         for i in 0..state.sols.len() {
             if state.pointed_by_queries.contains(i as IntegerTerm) {
                 for x in &state.edges.addr_ofs[i as usize] {
@@ -1701,7 +1656,7 @@ mod tests {
                         state.visited_pointed_by.test(i),
                         "{:?} ({i}) points to {:?} ({t})",
                         state.context_state.concrete_to_input(i as u32),
-                        state.context_state.concrete_to_input(t)
+                        state.context_state.concrete_to_input(t),
                     );
                 }
                 for (j, offsets) in &state.edges.subset[i as usize] {
@@ -1763,7 +1718,7 @@ mod tests {
 struct TidalPropSerialize {
     #[serde(flatten)]
     wave_prop: WavePropSerialize,
-    query_propagation_time_ms: u64,
+    query_propagation_time_ms: f64,
     points_to_queries: usize,
     pointed_by_queries: usize,
 }
