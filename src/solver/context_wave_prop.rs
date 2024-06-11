@@ -537,9 +537,9 @@ where
                         .is_empty()
                 })
                 .count(),
-            scc_time_ms: self.scc_time.as_millis() as u64,
-            term_propagation_time_ms: self.propagation_time.as_millis() as u64,
-            edge_instantiation_time_ms: self.edge_instantiation_time.as_millis() as u64,
+            scc_time_ms: self.scc_time.as_secs_f64() * 1000.0,
+            term_propagation_time_ms: self.propagation_time.as_secs_f64() * 1000.0,
+            edge_instantiation_time_ms: self.edge_instantiation_time.as_secs_f64() * 1000.0,
         })
     }
 }
@@ -1097,7 +1097,7 @@ pub(crate) struct WavePropSerialize {
     pub instantiated_contexts: usize,
     pub instantiated_nodes: usize,
     pub non_empty_nodes: usize,
-    pub scc_time_ms: u64,
-    pub term_propagation_time_ms: u64,
-    pub edge_instantiation_time_ms: u64,
+    pub scc_time_ms: f64,
+    pub term_propagation_time_ms: f64,
+    pub edge_instantiation_time_ms: f64,
 }

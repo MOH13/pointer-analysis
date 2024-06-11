@@ -184,10 +184,10 @@ where
 
 #[derive(Serialize)]
 struct JsonOutput {
-    module_parse_time_ms: u64,
-    pre_analysis_time_ms: u64,
-    constraint_gen_time_ms: u64,
-    solver_time_ms: u64,
+    module_parse_time_ms: f64,
+    pre_analysis_time_ms: f64,
+    constraint_gen_time_ms: f64,
+    solver_time_ms: f64,
     num_called_functions: u64,
     num_called_non_trivial_functions: u64,
     mean_call_edges: f64,
@@ -234,10 +234,10 @@ impl JsonOutput {
         };
 
         Self {
-            module_parse_time_ms: module_parse_time.as_millis() as u64,
-            pre_analysis_time_ms: result.pre_analysis_time.as_millis() as u64,
-            constraint_gen_time_ms: result.constraint_gen_time.as_millis() as u64,
-            solver_time_ms: result.solver_time.as_millis() as u64,
+            module_parse_time_ms: module_parse_time.as_secs_f64() * 1000.0,
+            pre_analysis_time_ms: result.pre_analysis_time.as_secs_f64() * 1000.0,
+            constraint_gen_time_ms: result.constraint_gen_time.as_secs_f64() * 1000.0,
+            solver_time_ms: result.solver_time.as_secs_f64() * 1000.0,
             num_called_functions,
             num_called_non_trivial_functions,
             mean_call_edges,

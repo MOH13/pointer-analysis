@@ -9,6 +9,7 @@ source.ll
 heaptrack.*
 perf.data
 perf.data.old
+*.ll
 
 # Created by run-benches.sh
 stderr.txt
