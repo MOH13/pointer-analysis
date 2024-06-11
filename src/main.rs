@@ -307,16 +307,17 @@ fn main() -> io::Result<()> {
         // with demands
         (SolverMode::BasicDemand, _) => BasicDemandSolver::new().as_dynamic_visualizable(),
         (SolverMode::Tidal, TermSet::Hash) => {
-            HashTidalPropagationSolver::new(false).as_dynamic_visualizable()
+            HashTidalPropagationSolver::new().as_dynamic_visualizable()
         }
         (SolverMode::Tidal, TermSet::Roaring) => {
-            RoaringTidalPropagationSolver::new(false).as_dynamic_visualizable()
+            RoaringTidalPropagationSolver::new().as_dynamic_visualizable()
         }
         (SolverMode::Tidal, TermSet::SharedBitVec) => {
             if args.aggressive_sharing {
-                RcSharedBitVecTidalPropagationSolver::new(true).as_dynamic_visualizable()
+                RcSharedBitVecTidalPropagationSolver::new_with_aggressive_dedup()
+                    .as_dynamic_visualizable()
             } else {
-                SharedBitVecTidalPropagationSolver::new(false).as_dynamic_visualizable()
+                SharedBitVecTidalPropagationSolver::new().as_dynamic_visualizable()
             }
         }
         (SolverMode::Justify, _) => {

@@ -248,7 +248,7 @@ fn basic_demand(resource: &str) {
 fn tidal_prop(resource: &str) {
     run_test_template(
         resource,
-        SharedBitVecTidalPropagationSolver::new(false),
+        SharedBitVecTidalPropagationSolver::new(),
         CallStringSelector::<2>::new(),
         true,
     )
