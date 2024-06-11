@@ -1,13 +1,21 @@
 use std::collections::VecDeque;
+use std::hash::Hash;
+use std::mem;
 use std::ops::{BitAnd, BitOr};
 use std::rc::Rc;
 
 use arrayvec::ArrayVec;
 use either::Either;
+use hashbrown::HashMap;
+use itertools::Itertools;
 use sdset::exponential_search_by_key;
 use smallvec::SmallVec;
 use tinybitset::TinyBitSet;
 
+use crate::solver::rc_termset::get_duplicates;
+use crate::solver::IntegerTerm;
+
+use super::rc_termset::deduplicate;
 use super::TermSetTrait;
 
 type Term = u32;
@@ -19,7 +27,7 @@ const BACKING_ARRAY_SIZE: usize = 2;
 // Maximal size of a sorted list of u32 terms so that it has the same size as InnerBitVec
 const ARRAY_VEC_SIZE: usize = 14; // wrong: (std::mem::size_of::<InnerBitVec>() - 4) / 4 - 1;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct Segment {
     start_index: Term,
     chunk: Rc<Chunk>,
@@ -31,7 +39,7 @@ impl Segment {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Hash)]
 struct Chunk {
     data: TinyBitSet<u64, BLOCKS_IN_CHUNK>,
     len: u32,
@@ -239,6 +247,13 @@ impl PartialEq for InnerBitVec {
     }
 }
 
+impl Hash for InnerBitVec {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.segments.hash(state);
+        self.len.hash(state);
+    }
+}
+
 fn start_index_of_term(term: Term) -> Term {
     term / ELEMS_IN_CHUNK
 }
@@ -263,8 +278,22 @@ fn chunk_diff(big: &Chunk, small: &Chunk) -> u32 {
 //     Rc::make_mut(v)
 // }
 
+impl SharedBitVec {
+    fn to_forced_bitvec(&self) -> Self {
+        let Self::Array(arr) = self else {
+            return self.clone();
+        };
+        let arr = arr.clone();
+        let mut forced_bitvec = Self::BitVec(InnerBitVec::default());
+        for t in arr {
+            forced_bitvec.insert(t);
+        }
+        return forced_bitvec;
+    }
+}
+
 impl TermSetTrait for SharedBitVec {
-    type Term = u32;
+    type Term = IntegerTerm;
 
     fn new() -> Self {
         Default::default()
@@ -323,6 +352,10 @@ impl TermSetTrait for SharedBitVec {
     }
 
     fn union_assign(&mut self, other: &Self) {
+        if self.len() == 0 {
+            self.clone_from(other);
+            return;
+        }
         match (self, other) {
             (this @ SharedBitVec::Array(_), SharedBitVec::Array(other_terms)) => {
                 if other_terms.len() == 0 {
@@ -752,6 +785,95 @@ impl TermSetTrait for SharedBitVec {
                     .map(|i| i as Term + s.start_index * ELEMS_IN_CHUNK as Term)
             })),
         }
+    }
+
+    fn deduplicate<'a>(sets: impl Iterator<Item = &'a mut Self>)
+    where
+        Self: 'a,
+    {
+        let mut set_dups: Vec<_> =
+            get_duplicates(sets.filter(|s| s.len() > 0), |s| (s.len(), s.iter().next())).collect();
+
+        let chunks = set_dups
+            .iter_mut()
+            .filter_map(|(s, _)| match s {
+                SharedBitVec::BitVec(inner) => Some(inner),
+                _ => None,
+            })
+            .flat_map(|inner| inner.segments.iter_mut().map(|s| &mut s.chunk));
+
+        deduplicate(
+            chunks,
+            |chunk| (chunk.len, chunk.data.iter().next()),
+            |c1, c2| {
+                if !Rc::ptr_eq(c1, c2) {
+                    *c1 = c2.clone();
+                }
+            },
+        );
+
+        for (set, dups) in set_dups.into_iter() {
+            for dup in dups {
+                *dup = set.clone();
+            }
+        }
+    }
+
+    fn print_deduplicate_stats<'a>(sets: impl Iterator<Item = &'a Self>)
+    where
+        Self: 'a,
+    {
+        let mut sets: Vec<_> = sets.collect();
+        let total_term_sets = sets.len();
+
+        let dups: Vec<_> = get_duplicates(sets.as_mut_slice().into_iter(), |s| {
+            (s.len(), s.iter().next())
+        })
+        .collect();
+
+        assert_eq!(
+            dups.iter()
+                .map(|(_, duplicates)| duplicates.len() + 1)
+                .sum::<usize>(),
+            total_term_sets
+        );
+
+        let unique_sets = dups.len();
+
+        dbg!(total_term_sets);
+        dbg!(unique_sets);
+
+        let mut chunks_vec: Vec<_> = sets
+            .iter_mut()
+            .filter_map(|s| match s {
+                SharedBitVec::BitVec(inner) => Some(inner),
+                _ => None,
+            })
+            .flat_map(|inner| inner.segments.iter().map(|s| &s.chunk))
+            .collect();
+
+        let num_segments = chunks_vec.len();
+        let num_chunks = chunks_vec.iter().counts_by(|chunk| Rc::as_ptr(chunk)).len();
+        let chunk_dups: Vec<_> = get_duplicates(chunks_vec.iter_mut(), |chunk| {
+            (chunk.len, chunk.data.iter().next())
+        })
+        .collect();
+        let num_unique_chunks = chunk_dups.len();
+        dbg!(num_segments);
+        dbg!(num_chunks);
+        dbg!(num_unique_chunks);
+    }
+}
+
+impl Hash for SharedBitVec {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            SharedBitVec::Array(_) => {
+                let forced_bitvec = self.to_forced_bitvec();
+                core::mem::discriminant(&forced_bitvec).hash(state);
+            }
+            SharedBitVec::BitVec(_) => core::mem::discriminant(self).hash(state),
+        };
     }
 }
 

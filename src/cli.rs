@@ -11,8 +11,12 @@ pub struct Args {
     // Select used solver
     #[arg(short, long, default_value_t = SolverMode::Wave)]
     pub solver: SolverMode,
+    // Term set representation used in solver
     #[arg(short, long, default_value_t = TermSet::SharedBitVec)]
     pub termset: TermSet,
+    /// Use RcTermSet for Tidal Prop with SharedBitVecs
+    #[arg(short, long, default_value_t = false)]
+    pub aggressive_sharing: bool,
     /// List of keywords that must present to be included in output
     #[arg(short, long)]
     pub include_keywords: Vec<String>,

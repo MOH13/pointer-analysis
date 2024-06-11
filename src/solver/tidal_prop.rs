@@ -17,12 +17,15 @@ use smallvec::SmallVec;
 
 use super::context::{ContextState, TemplateTerm};
 use super::context_wave_prop::WavePropSerialize;
+use super::rc_termset::RcTermSet;
 use super::shared_bitvec::SharedBitVec;
 use super::{
     insert_edge, try_offset_term, CallSite, Constraint, ContextSelector, Demand,
     DemandContextSensitiveInput, IntegerTerm, Offsets, OnlyOnceStack, Solver, SolverExt,
     SolverSolution, TermSetTrait, TermType,
 };
+
+use crate::util::GetManyMutExt;
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
 
 #[derive(Clone)]
@@ -51,11 +54,11 @@ struct CallDummyEntry<C> {
 }
 
 #[derive(Clone)]
-pub struct TidalPropagationSolver<S, C>(PhantomData<S>, PhantomData<C>);
+pub struct TidalPropagationSolver<S, C>(PhantomData<S>, PhantomData<C>, bool);
 
 impl<S, C> TidalPropagationSolver<S, C> {
-    pub fn new() -> Self {
-        Self(PhantomData, PhantomData)
+    pub fn new(aggressive_dedup: bool) -> Self {
+        Self(PhantomData, PhantomData, aggressive_dedup)
     }
 }
 
@@ -115,6 +118,7 @@ pub struct TidalPropagationSolverState<T, S, C: ContextSelector> {
     query_propagation_time: Duration,
     term_propagation_time: Duration,
     edge_instantiation_time: Duration,
+    aggressive_dedup: bool,
 }
 
 impl<T, S, C: ContextSelector> TidalPropagationSolverState<T, S, C> {
@@ -138,6 +142,11 @@ where
             self.collapse_cycles();
             self.scc_time += scc_start.elapsed();
 
+            if self.aggressive_dedup {
+                let sets = self.sols.iter_mut().chain(self.p_old.iter_mut());
+                S::deduplicate(sets);
+            }
+
             let query_propagation_start = std::time::Instant::now();
             self.query_propagation();
             self.query_propagation_time += query_propagation_start.elapsed();
@@ -152,6 +161,14 @@ where
 
             eprintln!("Iteration {}", self.iters);
         }
+
+        let non_empty_iter = self
+            .sols
+            .iter()
+            .chain(&self.p_old)
+            .filter(|s| !s.is_empty());
+
+        S::print_deduplicate_stats(non_empty_iter);
 
         eprintln!(
             "SCC count: {}",
@@ -374,7 +391,9 @@ where
             |_, _, _| {},
         );
 
-        for &v in top_order.iter().rev() {
+        let dedup_step = top_order.len() / 3;
+
+        for (i, &v) in top_order.iter().rev().enumerate() {
             // Skip if no new terms in solution set
             if self.sols[v as usize].len() == self.p_old[v as usize].len() {
                 continue;
@@ -389,6 +408,13 @@ where
                 for o in offsets.iter() {
                     if o == 0 {
                         self.sols[w as usize].union_assign(&p_dif);
+                        if self.aggressive_dedup
+                            && self.sols[v as usize].len() == self.sols[w as usize].len()
+                        {
+                            if let Some((a, b)) = self.sols.get_two_mut(v as usize, w as usize) {
+                                S::deduplicate_subset_pair(a, b);
+                            }
+                        }
                     } else {
                         let to_add = p_dif_vec
                             .iter()
@@ -407,6 +433,20 @@ where
                 if should_set_new_incoming {
                     self.new_incoming.push(w);
                 }
+            }
+
+            if self.aggressive_dedup && i % dedup_step == 0 && i != 0 {
+                let num = i / dedup_step;
+                let range = top_order.len() - num * dedup_step - 1
+                    ..top_order.len() - (num - 1) * dedup_step - 1;
+                let indices = &top_order[range];
+                let sets = self
+                    .sols
+                    .my_get_many_mut(indices)
+                    .into_iter()
+                    .chain(self.p_old.my_get_many_mut(indices).into_iter())
+                    .flatten();
+                S::deduplicate(sets);
             }
         }
 
@@ -1030,6 +1070,7 @@ where
             query_propagation_time: Duration::ZERO,
             term_propagation_time: Duration::ZERO,
             edge_instantiation_time: Duration::ZERO,
+            aggressive_dedup: self.2,
         };
 
         for c in &input.input.global.constraints {
@@ -1429,6 +1470,8 @@ fn get_representative(parents: &mut [IntegerTerm], child: IntegerTerm) -> Intege
 pub type HashTidalPropagationSolver<C> = TidalPropagationSolver<HashSet<IntegerTerm>, C>;
 pub type RoaringTidalPropagationSolver<C> = TidalPropagationSolver<RoaringBitmap, C>;
 pub type SharedBitVecTidalPropagationSolver<C> = TidalPropagationSolver<SharedBitVec, C>;
+pub type RcSharedBitVecTidalPropagationSolver<C> =
+    TidalPropagationSolver<RcTermSet<SharedBitVec>, C>;
 
 #[derive(Clone)]
 pub struct TidalPropagationNode<T, C> {
@@ -1581,7 +1624,7 @@ mod tests {
 
     #[test]
     fn tidal_invariants() {
-        let solver = SharedBitVecTidalPropagationSolver::new();
+        let solver = SharedBitVecTidalPropagationSolver::new(false);
         let module =
             Module::from_bc_path("benchmarks/make/bench.bc").expect("Error parsing bc file");
         let demands = vec![Demand::PointsTo(Cell::Var(VarIdent::new_local(

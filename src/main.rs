@@ -8,7 +8,8 @@ use pointer_analysis::cli::{Args, CallGraphMode, CountMode, DemandMode, SolverMo
 use pointer_analysis::module_visitor::VarIdent;
 use pointer_analysis::solver::{
     BasicDemandSolver, BasicHashSolver, BasicRoaringSolver, Demands, HashTidalPropagationSolver,
-    RoaringTidalPropagationSolver, SharedBitVecTidalPropagationSolver, StatSolver,
+    RcSharedBitVecTidalPropagationSolver, RoaringTidalPropagationSolver,
+    SharedBitVecTidalPropagationSolver, StatSolver,
 };
 use pointer_analysis::solver::{
     BasicSharedBitVecSolver, CallStringSelector, ContextInsensitiveSolver, Demand,
@@ -306,13 +307,17 @@ fn main() -> io::Result<()> {
         // with demands
         (SolverMode::BasicDemand, _) => BasicDemandSolver::new().as_dynamic_visualizable(),
         (SolverMode::Tidal, TermSet::Hash) => {
-            HashTidalPropagationSolver::new().as_dynamic_visualizable()
+            HashTidalPropagationSolver::new(false).as_dynamic_visualizable()
         }
         (SolverMode::Tidal, TermSet::Roaring) => {
-            RoaringTidalPropagationSolver::new().as_dynamic_visualizable()
+            RoaringTidalPropagationSolver::new(false).as_dynamic_visualizable()
         }
         (SolverMode::Tidal, TermSet::SharedBitVec) => {
-            SharedBitVecTidalPropagationSolver::new().as_dynamic_visualizable()
+            if args.aggressive_sharing {
+                RcSharedBitVecTidalPropagationSolver::new(true).as_dynamic_visualizable()
+            } else {
+                SharedBitVecTidalPropagationSolver::new(false).as_dynamic_visualizable()
+            }
         }
         (SolverMode::Justify, _) => {
             let solver = JustificationSolver::<Cell>::new()

@@ -14,7 +14,7 @@ use super::{
     insert_edge, try_offset_term, CallSite, Constraint, ContextSelector, Demand,
     DemandContextSensitiveInput, IntegerTerm, Offsets, Solver, SolverExt, SolverSolution, TermType,
 };
-use crate::util::GetTwoMutExt;
+use crate::util::GetManyMutExt;
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
 
 #[derive(Clone)]

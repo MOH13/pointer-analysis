@@ -12,6 +12,7 @@ mod basic;
 mod basic_demand;
 mod context;
 mod context_wave_prop;
+mod rc_termset;
 mod shared_bitvec;
 mod stats;
 #[cfg(test)]
@@ -32,7 +33,8 @@ pub use context_wave_prop::{
 };
 pub use stats::StatSolver;
 pub use tidal_prop::{
-    HashTidalPropagationSolver, RoaringTidalPropagationSolver, SharedBitVecTidalPropagationSolver,
+    HashTidalPropagationSolver, RcSharedBitVecTidalPropagationSolver,
+    RoaringTidalPropagationSolver, SharedBitVecTidalPropagationSolver,
 };
 
 use crate::visualizer::Node;
@@ -243,6 +245,21 @@ pub trait TermSetTrait: Clone + Default + PartialEq {
 
     fn overlaps(&self, other: &Self) -> bool {
         self.iter().any(|t| other.contains(t))
+    }
+
+    // Deduplicate when guaranteed that set1 is a subset of s2
+    fn deduplicate_subset_pair(_set1: &Self, _set2: &mut Self) {}
+
+    fn deduplicate<'a>(_sets: impl Iterator<Item = &'a mut Self>)
+    where
+        Self: 'a,
+    {
+    }
+
+    fn print_deduplicate_stats<'a>(_sets: impl Iterator<Item = &'a Self>)
+    where
+        Self: 'a,
+    {
     }
 }
 
