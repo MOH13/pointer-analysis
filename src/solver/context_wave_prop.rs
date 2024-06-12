@@ -173,7 +173,6 @@ where
                 let sols = &self.edges.sols[cond_node as usize];
                 let p_new = sols.difference(&cond.cache);
                 cond.cache.clone_from(sols);
-                println!("Cond {:?}", self.context_state.concrete_to_input(cond_node));
 
                 match cond.entry.clone() {
                     CondEntry::Left {
