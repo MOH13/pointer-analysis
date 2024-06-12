@@ -1,0 +1,208 @@
+{
+  "cpython": {
+    "stats": [
+      {
+        "module_parse_time_ms": 4494.605617,
+        "pre_analysis_time_ms": 2173.241512,
+        "constraint_gen_time_ms": 1827.9901320000001,
+        "solver_time_ms": 137.819578,
+        "num_called_functions": 15387,
+        "num_called_non_trivial_functions": 5724,
+        "mean_call_edges": 0.0,
+        "mean_non_trivial_call_edges": 0.0,
+        "terms": 954767,
+        "inclusions": 109256,
+        "subsets": 350479,
+        "offset_subsets": 51689,
+        "loads": 319969,
+        "offset_loads": 2320,
+        "stores": 178993,
+        "offset_stores": 93087,
+        "total": 958697
+      }
+    ],
+    "tidal_shared": [
+,
+,
+
+    ],
+    "tidal_roaring": [
+,
+,
+
+    ],
+    "tidal_call_graph": [
+,
+,
+
+    ],
+    "wave_shared": [
+,
+,
+
+    ],
+    "wave_roaring": [
+,
+,
+
+    ],
+    "demand_hash": [
+,
+,
+
+    ],
+    "demand_call_graph": [
+,
+,
+
+    ]
+  },
+  "curl": {
+    "stats": [
+      {
+        "module_parse_time_ms": 70.576532,
+        "pre_analysis_time_ms": 14.582995,
+        "constraint_gen_time_ms": 16.050375,
+        "solver_time_ms": 5.743242,
+        "num_called_functions": 303,
+        "num_called_non_trivial_functions": 2,
+        "mean_call_edges": 0.0,
+        "mean_non_trivial_call_edges": 0.0,
+        "terms": 33362,
+        "inclusions": 3791,
+        "subsets": 9131,
+        "offset_subsets": 2175,
+        "loads": 10045,
+        "offset_loads": 34,
+        "stores": 4922,
+        "offset_stores": 3257,
+        "total": 27889
+      }
+    ],
+    "tidal_shared": [
+,
+,
+
+    ],
+    "tidal_roaring": [
+,
+,
+
+    ],
+    "tidal_call_graph": [
+,
+,
+
+    ],
+    "wave_shared": [
+,
+,
+
+    ],
+    "wave_roaring": [
+,
+,
+
+    ],
+    "demand_hash": [
+,
+,
+
+    ],
+    "demand_call_graph": [
+,
+,
+
+    ]
+  },
+  "emacs": {
+    "stats": [
+      {
+        "module_parse_time_ms": 1184.411442,
+        "pre_analysis_time_ms": 254.267874,
+        "constraint_gen_time_ms": 319.153615,
+        "solver_time_ms": 85.312342,
+        "num_called_functions": 8743,
+        "num_called_non_trivial_functions": 718,
+        "mean_call_edges": 0.0,
+        "mean_non_trivial_call_edges": 0.0,
+        "terms": 547541,
+        "inclusions": 55727,
+        "subsets": 151846,
+        "offset_subsets": 46400,
+        "loads": 234626,
+        "offset_loads": 18062,
+        "stores": 110313,
+        "offset_stores": 75330,
+        "total": 552512
+      }
+    ],
+    "tidal_shared": [
+,
+,
+
+    ],
+    "tidal_roaring": [
+,
+,
+
+    ],
+    "tidal_call_graph": [
+,
+,
+
+    ],
+    "wave_shared": [
+,
+,
+
+    ],
+    "wave_roaring": [
+,
+,
+
+    ],
+    "demand_hash": [
+,
+,
+
+    ],
+    "demand_call_graph": [
+,
+,
+
+    ]
+  },
+  "htop": {
+    "stats": [
+      {
+        "module_parse_time_ms": 129.21882300000001,
+        "pre_analysis_time_ms": 25.039451,
+        "constraint_gen_time_ms": 30.532937999999998,
+        "solver_time_ms": 9.642028999999999,
+        "num_called_functions": 925,
+        "num_called_non_trivial_functions": 124,
+        "mean_call_edges": 0.0,
+        "mean_non_trivial_call_edges": 0.0,
+        "terms": 52855,
+        "inclusions": 6737,
+        "subsets": 17383,
+        "offset_subsets": 5032,
+        "loads": 19563,
+        "offset_loads": 84,
+        "stores": 7800,
+        "offset_stores": 5090,
+        "total": 51483
+      }
+    ],
+    "tidal_shared": [
+,
+,
+
+    ],
+    "tidal_roaring": [
+,
+,
+
+    ],
+    "tidal_call_graph": [

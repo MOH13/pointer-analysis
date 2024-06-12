@@ -19,6 +19,7 @@ use thin_vec::ThinVec;
 use super::context::{ContextState, TemplateTerm};
 use super::context_wave_prop::WavePropSerialize;
 use super::rc_termset::RcTermSet;
+use super::scc::{scc, CollapseMode, SccEdges, SccGraph};
 use super::shared_bitvec::SharedBitVec;
 use super::{
     insert_edge, try_offset_term, CallSite, Constraint, ContextSelector, Demand,
@@ -187,10 +188,8 @@ where
     }
 
     fn collapse_cycles(&mut self) {
-        self.scc(
-            SccDirection::Forward,
-            EdgeVisitMode::OnlyNonWeighted,
-            CollapseMode::On,
+        scc::<ForwardUnweightedSccVisitState<CollapseMarker, T, S, C>, _>(
+            self,
             self.new_incoming.clone(),
             |_, _, _| {},
         );
@@ -217,10 +216,8 @@ where
             );
 
             // Points-to query propagation
-            self.scc(
-                SccDirection::Backward,
-                EdgeVisitMode::WithWeighted,
-                CollapseMode::Off,
+            scc::<PointsToSccVisitState<T, S, C>, _>(
+                self,
                 pt_starting_nodes,
                 |v, state, to_visit| {
                     if state.points_to_queries.test(v as usize) {
@@ -290,10 +287,8 @@ where
             }
 
             // Pointed-by query propagation
-            self.scc(
-                SccDirection::Forward,
-                EdgeVisitMode::OnlyNonWeighted,
-                CollapseMode::Off,
+            scc::<PointedBySccVisitState<T, S, C>, _>(
+                self,
                 pb_starting_nodes,
                 |v, state, to_visit| {
                     if state.visited_pointed_by.test(v as usize) {
@@ -380,10 +375,8 @@ where
             .drain(..)
             .map(|t| get_representative(&mut self.parents, t))
             .collect();
-        let top_order = self.scc(
-            SccDirection::Forward,
-            EdgeVisitMode::WithWeighted,
-            CollapseMode::Off,
+        let top_order = scc::<ForwardUnweightedSccVisitState<NoCollapseMarker, _, _, _>>(
+            self,
             new_incoming,
             |_, _, _| {},
         );
@@ -682,247 +675,6 @@ where
         }
     }
 
-    fn scc<F>(
-        &mut self,
-        direction: SccDirection,
-        visit_weighted: EdgeVisitMode,
-        collapse_cycles: CollapseMode,
-        initial_nodes: Vec<IntegerTerm>,
-        mut visit_handler: F,
-    ) -> Vec<IntegerTerm>
-    where
-        F: FnMut(IntegerTerm, &mut SccVisitState<T, S, C>, &mut OnlyOnceStack),
-    {
-        let node_count = self.term_count();
-
-        let to_visit = OnlyOnceStack::from_nodes(initial_nodes, node_count);
-
-        let mut internal_state = SccInternalState {
-            direction,
-            visit_weighted,
-            node_count,
-            iteration: 0,
-            d: vec![0; node_count],
-            r: vec![None; node_count],
-            c: bitvec![0; node_count],
-            s: vec![],
-            to_visit,
-            top_order: vec![],
-        };
-
-        let mut visit_state = SccVisitState {
-            sols: &mut self.sols,
-            abstract_rev_offsets: &self.abstract_rev_offsets,
-            context_state: &self.context_state,
-            edges: &self.edges,
-            points_to_queries: &mut self.points_to_queries,
-            pointed_by_queries: &self.pointed_by_queries,
-            visited_pointed_by: &mut self.visited_pointed_by,
-            mention_points_to: &mut self.mention_points_to,
-            return_and_parameter_children: &self.return_and_parameter_children,
-            new_points_to_queries: &mut self.new_points_to_queries,
-            new_pointed_by_queries: &mut self.new_pointed_by_queries,
-            parents: &mut self.parents,
-            new_incoming: &mut self.new_incoming,
-        };
-
-        while let Some(v) = internal_state.to_visit.pop() {
-            if internal_state.d[v as usize] == 0 {
-                visit(&mut internal_state, &mut visit_state, &mut visit_handler, v);
-            }
-        }
-
-        if collapse_cycles == CollapseMode::Off {
-            return internal_state.top_order;
-        }
-
-        let mut nodes = vec![];
-        let mut components: HashMap<IntegerTerm, (IntegerTerm, u32)> = HashMap::new();
-        for v in 0..internal_state.node_count as u32 {
-            if let Some(r_v) = internal_state.r[v as usize] {
-                let edge_count = self.edges.subset[v as usize].len() as u32;
-                if edge_count == 0 {
-                    continue;
-                }
-                nodes.push((v, r_v));
-                if let Err(mut cur) = components.try_insert(r_v, (v, edge_count)) {
-                    let (cur_best, best_edge_count) = cur.entry.get_mut();
-                    if edge_count > *best_edge_count {
-                        *cur_best = v;
-                        *best_edge_count = edge_count;
-                    }
-                }
-            }
-        }
-        for (v, r_v) in nodes {
-            let &(rep, _) = components.get(&r_v).unwrap();
-            if v != rep {
-                self.unify(v, |w| {
-                    let Some(r) = internal_state.r[w as usize] else {
-                        return w;
-                    };
-                    components.get(&r).map(|(rep, _)| *rep).unwrap_or(w)
-                });
-            }
-        }
-
-        internal_state.top_order
-    }
-
-    fn unify(&mut self, child: IntegerTerm, parent_fn: impl Fn(IntegerTerm) -> IntegerTerm) {
-        let parent = parent_fn(child);
-        debug_assert_ne!(child, parent);
-        debug_assert!(self.parents[child as usize] == child);
-
-        let child_sols = mem::take(&mut self.sols[child as usize]);
-        self.sols[parent as usize].union_assign(&child_sols);
-
-        let p_old = &self.p_old[parent as usize];
-        let p_old_vec = Lazy::new(|| p_old.iter().collect::<Vec<IntegerTerm>>());
-        let child_edges = mem::take(&mut self.edges.subset[child as usize]);
-
-        for (&other, offsets) in &child_edges {
-            debug_assert_ne!(0, offsets.len());
-
-            let other_parent = parent_fn(other);
-
-            if offsets.has_non_zero() || other_parent != parent {
-                let other_term_set = &mut self.sols[other_parent as usize];
-                let mut entry = self.edges.subset[parent as usize].entry(other_parent);
-                let mut existing_offsets = match entry {
-                    Entry::Occupied(ref mut entry) => Either::Left(entry.get_mut()),
-                    Entry::Vacant(entry) => Either::Right(entry),
-                };
-
-                for o in offsets.iter() {
-                    if let Either::Left(offs) = &existing_offsets {
-                        if offs.contains(o) {
-                            continue;
-                        }
-                    }
-
-                    if o == 0 {
-                        other_term_set.union_assign(&p_old);
-                    } else {
-                        let to_add = p_old_vec
-                            .iter()
-                            .filter_map(|&t| try_offset_term(t, self.term_types[t as usize], o));
-                        for t in to_add {
-                            other_term_set.insert(t);
-                            if self.pointed_by_queries.contains(t) {
-                                self.new_incoming.push(other_parent);
-                            } else {
-                                self.edges.addr_ofs[t as usize].push(other_parent);
-                                self.edges.rev_addr_ofs[other_parent as usize].push(t);
-                            }
-                        }
-                    }
-
-                    match existing_offsets {
-                        Either::Left(ref mut offs) => {
-                            offs.insert(o);
-                        }
-                        Either::Right(entry) => {
-                            existing_offsets = Either::Left(entry.insert(Offsets::single(o)));
-                        }
-                    }
-                }
-            }
-            self.edges.rev_subset[other as usize].remove(&child);
-            self.edges.rev_subset[other_parent as usize].insert(parent);
-        }
-
-        let child_rev_edges = mem::take(&mut self.edges.rev_subset[child as usize]);
-        for &i in child_rev_edges.iter() {
-            if i == child {
-                continue;
-            }
-            match self.edges.subset[i as usize].remove(&child) {
-                Some(orig_edges) => {
-                    self.edges.subset[i as usize]
-                        .entry(parent)
-                        .and_modify(|e| e.union_assign(&orig_edges))
-                        .or_insert_with(|| orig_edges.clone());
-                }
-                None => {
-                    panic!("Expected edges from {i} to {child}");
-                }
-            }
-        }
-
-        if self.visited_pointed_by.test(parent as usize)
-            && !self.visited_pointed_by.test(child as usize)
-        {
-            self.new_pointed_by_queries.push(child);
-            for &w in &self.edges.stores[child as usize] {
-                self.new_points_to_queries.push(w);
-            }
-
-            for &w in &self.return_and_parameter_children[child as usize] {
-                let (fun_index, relative_index) = self
-                    .context_state
-                    .get_function_and_relative_index_from_concrete_index(w);
-                let fun_index = fun_index.expect("Term should be in a function");
-                let num_return_terms =
-                    self.context_state.templates[fun_index as usize].num_return_terms;
-                if relative_index < num_return_terms {
-                    let fun_term = self.context_state.templates[0].start_index + fun_index;
-                    self.new_pointed_by_queries.push(fun_term);
-                }
-            }
-        }
-
-        if !self.points_to_queries.test(parent as usize)
-            && self.points_to_queries.test(child as usize)
-        {
-            self.new_points_to_queries.push(parent);
-        }
-
-        if self.points_to_queries.test(parent as usize)
-            && !self.points_to_queries.test(child as usize)
-        {
-            for &w in &self.edges.loads[child as usize] {
-                self.new_points_to_queries.push(w);
-            }
-
-            for &w in &self.return_and_parameter_children[child as usize] {
-                let (fun_index, relative_index) = self
-                    .context_state
-                    .get_function_and_relative_index_from_concrete_index(w);
-                let fun_index = fun_index.expect("Term should be in a function");
-                let template = &self.context_state.templates[fun_index as usize];
-                if relative_index >= template.num_return_terms
-                    && relative_index < template.num_return_terms + template.num_parameter_terms
-                {
-                    self.new_pointed_by_queries
-                        .push(self.context_state.templates[0].start_index + fun_index);
-                }
-            }
-        }
-
-        self.edges.rev_subset[parent as usize].union_assign(&child_rev_edges);
-
-        let child_mention_points_to = mem::take(&mut self.mention_points_to[child as usize]);
-        self.mention_points_to[parent as usize].extend_from_slice(&child_mention_points_to);
-
-        let child_return_and_parameter_children =
-            mem::take(&mut self.return_and_parameter_children[child as usize]);
-        self.return_and_parameter_children[parent as usize]
-            .extend_from_slice(&child_return_and_parameter_children);
-
-        let child_rev_addr_ofs = mem::take(&mut self.edges.rev_addr_ofs[child as usize]);
-        self.edges.rev_addr_ofs[parent as usize].extend_from_slice(child_rev_addr_ofs.as_slice());
-        let child_conds = mem::take(&mut self.edges.conds[child as usize]);
-        self.edges.conds[parent as usize].extend(child_conds);
-        let child_loads = mem::take(&mut self.edges.loads[child as usize]);
-        self.edges.loads[parent as usize].extend_from_slice(child_loads.as_slice());
-        let child_stores = mem::take(&mut self.edges.stores[child as usize]);
-        self.edges.stores[parent as usize].extend_from_slice(child_stores.as_slice());
-
-        self.parents[child as usize] = parent;
-        self.p_old[child as usize] = S::new();
-    }
-
     /// Returns the corresponding function term if `node` is function, otherwise None
     /// Todo: Improve
     fn global_to_fun_term(&self, node: IntegerTerm) -> Option<IntegerTerm> {
@@ -1202,6 +954,171 @@ where
     }
 }
 
+impl<T, S, C> SccGraph for TidalPropagationSolverState<T, S, C>
+where
+    C: ContextSelector + Clone,
+    T: Hash + Eq + Clone + Debug,
+    S: TermSetTrait<Term = u32> + Debug,
+{
+    fn unify(&mut self, child: IntegerTerm, parent_fn: impl Fn(IntegerTerm) -> IntegerTerm) {
+        let parent = parent_fn(child);
+        debug_assert_ne!(child, parent);
+        debug_assert!(self.parents[child as usize] == child);
+
+        let child_sols = mem::take(&mut self.sols[child as usize]);
+        self.sols[parent as usize].union_assign(&child_sols);
+
+        let p_old = &self.p_old[parent as usize];
+        let p_old_vec = Lazy::new(|| p_old.iter().collect::<Vec<IntegerTerm>>());
+        let child_edges = mem::take(&mut self.edges.subset[child as usize]);
+
+        for (&other, offsets) in &child_edges {
+            debug_assert_ne!(0, offsets.len());
+
+            let other_parent = parent_fn(other);
+
+            if offsets.has_non_zero() || other_parent != parent {
+                let other_term_set = &mut self.sols[other_parent as usize];
+                let mut entry = self.edges.subset[parent as usize].entry(other_parent);
+                let mut existing_offsets = match entry {
+                    Entry::Occupied(ref mut entry) => Either::Left(entry.get_mut()),
+                    Entry::Vacant(entry) => Either::Right(entry),
+                };
+
+                for o in offsets.iter() {
+                    if let Either::Left(offs) = &existing_offsets {
+                        if offs.contains(o) {
+                            continue;
+                        }
+                    }
+
+                    if o == 0 {
+                        other_term_set.union_assign(&p_old);
+                    } else {
+                        let to_add = p_old_vec
+                            .iter()
+                            .filter_map(|&t| try_offset_term(t, self.term_types[t as usize], o));
+                        for t in to_add {
+                            other_term_set.insert(t);
+                            if self.pointed_by_queries.contains(t) {
+                                self.new_incoming.push(other_parent);
+                            } else {
+                                self.edges.addr_ofs[t as usize].push(other_parent);
+                                self.edges.rev_addr_ofs[other_parent as usize].push(t);
+                            }
+                        }
+                    }
+
+                    match existing_offsets {
+                        Either::Left(ref mut offs) => {
+                            offs.insert(o);
+                        }
+                        Either::Right(entry) => {
+                            existing_offsets = Either::Left(entry.insert(Offsets::single(o)));
+                        }
+                    }
+                }
+            }
+            self.edges.rev_subset[other as usize].remove(&child);
+            self.edges.rev_subset[other_parent as usize].insert(parent);
+        }
+
+        let child_rev_edges = mem::take(&mut self.edges.rev_subset[child as usize]);
+        for &i in child_rev_edges.iter() {
+            if i == child {
+                continue;
+            }
+            match self.edges.subset[i as usize].remove(&child) {
+                Some(orig_edges) => {
+                    self.edges.subset[i as usize]
+                        .entry(parent)
+                        .and_modify(|e| e.union_assign(&orig_edges))
+                        .or_insert_with(|| orig_edges.clone());
+                }
+                None => {
+                    panic!("Expected edges from {i} to {child}");
+                }
+            }
+        }
+
+        if self.visited_pointed_by.test(parent as usize)
+            && !self.visited_pointed_by.test(child as usize)
+        {
+            self.new_pointed_by_queries.push(child);
+            for &w in &self.edges.stores[child as usize] {
+                self.new_points_to_queries.push(w);
+            }
+
+            for &w in &self.return_and_parameter_children[child as usize] {
+                let (fun_index, relative_index) = self
+                    .context_state
+                    .get_function_and_relative_index_from_concrete_index(w);
+                let fun_index = fun_index.expect("Term should be in a function");
+                let num_return_terms =
+                    self.context_state.templates[fun_index as usize].num_return_terms;
+                if relative_index < num_return_terms {
+                    let fun_term = self.context_state.templates[0].start_index + fun_index;
+                    self.new_pointed_by_queries.push(fun_term);
+                }
+            }
+        }
+
+        if !self.points_to_queries.test(parent as usize)
+            && self.points_to_queries.test(child as usize)
+        {
+            self.new_points_to_queries.push(parent);
+        }
+
+        if self.points_to_queries.test(parent as usize)
+            && !self.points_to_queries.test(child as usize)
+        {
+            for &w in &self.edges.loads[child as usize] {
+                self.new_points_to_queries.push(w);
+            }
+
+            for &w in &self.return_and_parameter_children[child as usize] {
+                let (fun_index, relative_index) = self
+                    .context_state
+                    .get_function_and_relative_index_from_concrete_index(w);
+                let fun_index = fun_index.expect("Term should be in a function");
+                let template = &self.context_state.templates[fun_index as usize];
+                if relative_index >= template.num_return_terms
+                    && relative_index < template.num_return_terms + template.num_parameter_terms
+                {
+                    self.new_pointed_by_queries
+                        .push(self.context_state.templates[0].start_index + fun_index);
+                }
+            }
+        }
+
+        self.edges.rev_subset[parent as usize].union_assign(&child_rev_edges);
+
+        let child_mention_points_to = mem::take(&mut self.mention_points_to[child as usize]);
+        self.mention_points_to[parent as usize].extend_from_slice(&child_mention_points_to);
+
+        let child_return_and_parameter_children =
+            mem::take(&mut self.return_and_parameter_children[child as usize]);
+        self.return_and_parameter_children[parent as usize]
+            .extend_from_slice(&child_return_and_parameter_children);
+
+        let child_rev_addr_ofs = mem::take(&mut self.edges.rev_addr_ofs[child as usize]);
+        self.edges.rev_addr_ofs[parent as usize].extend_from_slice(child_rev_addr_ofs.as_slice());
+        let child_conds = mem::take(&mut self.edges.conds[child as usize]);
+        self.edges.conds[parent as usize].extend(child_conds);
+        let child_loads = mem::take(&mut self.edges.loads[child as usize]);
+        self.edges.loads[parent as usize].extend_from_slice(child_loads.as_slice());
+        let child_stores = mem::take(&mut self.edges.stores[child as usize]);
+        self.edges.stores[parent as usize].extend_from_slice(child_stores.as_slice());
+
+        self.parents[child as usize] = parent;
+        self.p_old[child as usize] = S::new();
+    }
+
+    fn parent_heuristic(&self, node: IntegerTerm) -> u32 {
+        self.edges.subset[node as usize].len() as u32
+    }
+}
+
 impl<T, S, C> SolverSolution for TidalPropagationSolverState<T, S, C>
 where
     T: Hash + Eq + Clone + Debug,
@@ -1364,71 +1281,14 @@ impl<C: ContextSelector, S: TermSetTrait> Edges<C, S> {
         self.loads.resize_with(size, SmallVec::new);
         self.stores.resize_with(size, SmallVec::new);
     }
-}
 
-fn visit<'a, F, T, S, C>(
-    internal: &mut SccInternalState,
-    visit_state: &mut SccVisitState<'a, T, S, C>,
-    visit_handler: &mut F,
-    v: IntegerTerm,
-) where
-    for<'b> F: FnMut(IntegerTerm, &mut SccVisitState<'b, T, S, C>, &mut OnlyOnceStack),
-    C: ContextSelector,
-{
-    if internal.d[v as usize] != 0 {
-        return;
-    }
-    visit_handler(v, visit_state, &mut internal.to_visit);
-
-    internal.iteration += 1;
-    internal.d[v as usize] = internal.iteration;
-    internal.r[v as usize] = Some(v);
-
-    let edges_iter = match internal.direction {
-        SccDirection::Forward => Either::Left(visit_state.edges.subset[v as usize].iter()),
-        SccDirection::Backward => Either::Right(
-            visit_state.edges.rev_subset[v as usize]
-                .iter()
-                .map(|w| (w, visit_state.edges.subset[*w as usize].get(&v).unwrap())),
-        ),
-    };
-
-    for (&w, offsets) in edges_iter {
-        if !offsets.contains(0) {
-            debug_assert!(offsets.has_non_zero());
-            if internal.visit_weighted == EdgeVisitMode::WithWeighted {
-                internal.to_visit.push(w);
-            }
-            continue;
-        }
-
-        if internal.d[w as usize] == 0 {
-            visit(internal, visit_state, visit_handler, w);
-        }
-        if !internal.c[w as usize] {
-            let r_v = internal.r[v as usize].unwrap();
-            let r_w = internal.r[w as usize].unwrap();
-            internal.r[v as usize] = Some(if internal.d[r_v as usize] < internal.d[r_w as usize] {
-                r_v
-            } else {
-                r_w
-            });
-        }
-    }
-
-    if internal.r[v as usize] == Some(v) {
-        internal.c.set(v as usize, true);
-        while let Some(&w) = internal.s.last() {
-            if internal.d[w as usize] <= internal.d[v as usize] {
-                break;
-            }
-            internal.s.pop();
-            internal.c.set(w as usize, true);
-            internal.r[w as usize] = Some(v);
-        }
-        internal.top_order.push(v);
-    } else {
-        internal.s.push(v);
+    fn get_forward_unweighted_edges(
+        &self,
+        node: IntegerTerm,
+    ) -> impl Iterator<Item = (IntegerTerm, super::scc::SccEdgeWeight)> + '_ {
+        self.subset[node as usize]
+            .iter()
+            .filter_map(move |(v, offsets)| offsets.scc_edge_only_unweighted().map(|w| (*v, w)))
     }
 }
 
@@ -1444,41 +1304,37 @@ enum EdgeVisitMode {
     WithWeighted,
 }
 
-#[derive(PartialEq, Eq, Clone, Copy)]
-enum CollapseMode {
-    On,
-    Off,
-}
-
-struct SccInternalState {
+struct SccEdgesAdapter<'e> {
+    edges: &'e Edges,
     direction: SccDirection,
-    visit_weighted: EdgeVisitMode,
-    node_count: usize,
-    iteration: usize,
-    /// 0 means not visited.
-    d: Vec<usize>,
-    r: Vec<Option<IntegerTerm>>,
-    c: BitVec,
-    s: Vec<IntegerTerm>,
-    to_visit: OnlyOnceStack,
-    top_order: Vec<IntegerTerm>,
+    mode: EdgeVisitMode,
 }
 
-struct SccVisitState<'a, T, S, C: ContextSelector> {
-    sols: &'a mut [S],
-    abstract_rev_offsets: &'a [SmallVec<[u32; 2]>],
-    context_state: &'a ContextState<T, C>,
-    edges: &'a Edges<C, S>,
-    points_to_queries: &'a mut uniset::BitSet,
-    pointed_by_queries: &'a PointedByQueries<S>,
-    visited_pointed_by: &'a mut uniset::BitSet,
-    mention_points_to: &'a mut [SmallVec<[IntegerTerm; 2]>],
-    return_and_parameter_children: &'a [SmallVec<[IntegerTerm; 2]>],
-    new_points_to_queries: &'a mut Vec<IntegerTerm>,
-    new_pointed_by_queries: &'a mut Vec<IntegerTerm>,
-    parents: &'a mut [IntegerTerm],
-    new_incoming: &'a mut Vec<IntegerTerm>,
-}
+// fn successors(
+//     edges: &<Self::Graph as SccGraph>::Edges,
+//     node: IntegerTerm,
+// ) -> impl Iterator<Item = (IntegerTerm, super::scc::SccEdgeWeight)> {
+//     edges.subset[node as usize]
+//         .iter()
+//         .flat_map(|(other, offsets)| {
+//             offsets
+//                 .scc_edge_only_unweighted()
+//                 .map(|weight| (*other, weight))
+//         })
+// }
+
+// fn successors(
+//     edges: &<Self::Graph as SccGraph>::Edges,
+//     node: IntegerTerm,
+// ) -> impl Iterator<Item = (IntegerTerm, super::scc::SccEdgeWeight)> {
+//     edges.subset[node as usize]
+//         .iter()
+//         .flat_map(|(other, offsets)| {
+//             offsets
+//                 .scc_edge_only_unweighted()
+//                 .map(|weight| (*other, weight))
+//         })
+// }
 
 fn get_representative_no_mutation(parents: &[IntegerTerm], child: IntegerTerm) -> IntegerTerm {
     let mut node = child;

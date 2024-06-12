@@ -13,6 +13,7 @@ mod basic_demand;
 mod context;
 mod context_wave_prop;
 mod rc_termset;
+mod scc;
 mod shared_bitvec;
 mod stats;
 #[cfg(test)]
@@ -38,6 +39,8 @@ pub use tidal_prop::{
 };
 
 use crate::visualizer::Node;
+
+use self::scc::SccEdgeWeight;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Constraint<T> {
@@ -1067,6 +1070,25 @@ impl Offsets {
         match self {
             Offsets::Zero => false,
             Offsets::Complex(offsets) => offsets.iter().any(|&o| o != 0),
+        }
+    }
+    pub fn scc_edge_only_unweighted(&self) -> Option<SccEdgeWeight> {
+        if self.contains(0) {
+            return Some(SccEdgeWeight::Unweighted);
+        }
+        None
+    }
+
+    pub fn scc_edge_weight(&self) -> SccEdgeWeight {
+        match self {
+            Offsets::Zero => SccEdgeWeight::Unweighted,
+            Offsets::Complex(offsets) => {
+                if offsets[0] == 0 {
+                    SccEdgeWeight::Both
+                } else {
+                    SccEdgeWeight::Weighted
+                }
+            }
         }
     }
 }
