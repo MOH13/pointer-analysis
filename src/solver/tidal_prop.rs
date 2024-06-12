@@ -4,7 +4,6 @@ use std::marker::PhantomData;
 use std::time::Duration;
 use std::{iter, mem};
 
-use bitvec::bitvec;
 use bitvec::prelude::*;
 use either::Either;
 use hashbrown::hash_map::Entry;
@@ -19,7 +18,7 @@ use thin_vec::ThinVec;
 use super::context::{ContextState, TemplateTerm};
 use super::context_wave_prop::WavePropSerialize;
 use super::rc_termset::RcTermSet;
-use super::scc::{scc, CollapseMode, SccEdges, SccGraph};
+use super::scc::{scc, SccEdges, SccGraph};
 use super::shared_bitvec::SharedBitVec;
 use super::{
     insert_edge, try_offset_term, CallSite, Constraint, ContextSelector, Demand,
@@ -188,11 +187,15 @@ where
     }
 
     fn collapse_cycles(&mut self) {
-        scc::<ForwardUnweightedSccVisitState<CollapseMarker, T, S, C>, _>(
-            self,
+        scc(
+            &self
+                .edges
+                .scc_edges(SccDirection::Forward, EdgeVisitMode::OnlyNonWeighted),
             self.new_incoming.clone(),
-            |_, _, _| {},
-        );
+            |_, _| {},
+        )
+        .collapse_cycles(self)
+        .finish();
     }
 
     fn query_propagation(&mut self) {
@@ -216,49 +219,50 @@ where
             );
 
             // Points-to query propagation
-            scc::<PointsToSccVisitState<T, S, C>, _>(
-                self,
+            scc(
+                &self
+                    .edges
+                    .scc_edges(SccDirection::Backward, EdgeVisitMode::WithWeighted),
                 pt_starting_nodes,
-                |v, state, to_visit| {
-                    if state.points_to_queries.test(v as usize) {
+                |v, to_visit| {
+                    if self.points_to_queries.test(v as usize) {
                         return;
                     }
-                    state.points_to_queries.set(v as usize);
+                    self.points_to_queries.set(v as usize);
                     new_queries += 1;
-                    state.new_pointed_by_queries.push(v);
-                    state.new_incoming.push(v);
+                    self.new_pointed_by_queries.push(v);
+                    self.new_incoming.push(v);
 
-                    for &w in &state.edges.rev_addr_ofs[v as usize] {
-                        state.sols[v as usize].insert(w);
+                    for &w in &self.edges.rev_addr_ofs[v as usize] {
+                        self.sols[v as usize].insert(w);
                     }
 
-                    for &w in &state.edges.loads[v as usize] {
-                        to_visit.push(get_representative(state.parents, w));
+                    for &w in &self.edges.loads[v as usize] {
+                        to_visit.push(get_representative(&mut self.parents, w));
                     }
 
-                    for &w in &state.return_and_parameter_children[v as usize] {
-                        let (fun_index, relative_index) = state
+                    for &w in &self.return_and_parameter_children[v as usize] {
+                        let (fun_index, relative_index) = self
                             .context_state
                             .get_function_and_relative_index_from_concrete_index(w);
                         let fun_index = fun_index.expect("Term should be in a function");
-                        let template = &state.context_state.templates[fun_index as usize];
+                        let template = &self.context_state.templates[fun_index as usize];
                         if relative_index >= template.num_return_terms
                             && relative_index
                                 < template.num_return_terms + template.num_parameter_terms
                         {
-                            state
-                                .new_pointed_by_queries
-                                .push(state.context_state.templates[0].start_index + fun_index);
+                            self.new_pointed_by_queries
+                                .push(self.context_state.templates[0].start_index + fun_index);
                         }
                     }
 
-                    for f_index in mem::take(&mut state.mention_points_to[v as usize]) {
-                        state
-                            .new_pointed_by_queries
-                            .push(state.context_state.function_to_fun_term(f_index));
+                    for f_index in mem::take(&mut self.mention_points_to[v as usize]) {
+                        self.new_pointed_by_queries
+                            .push(self.context_state.function_to_fun_term(f_index));
                     }
                 },
-            );
+            )
+            .finish();
 
             let mut pb_starting_nodes = vec![];
             let mut local_new_pb_queries = OnlyOnceStack::new(self.term_count());
@@ -287,58 +291,61 @@ where
             }
 
             // Pointed-by query propagation
-            scc::<PointedBySccVisitState<T, S, C>, _>(
-                self,
+            scc(
+                &self
+                    .edges
+                    .scc_edges(SccDirection::Forward, EdgeVisitMode::OnlyNonWeighted),
                 pb_starting_nodes,
-                |v, state, to_visit| {
-                    if state.visited_pointed_by.test(v as usize) {
+                |v, to_visit| {
+                    if self.visited_pointed_by.test(v as usize) {
                         return;
                     }
-                    state.visited_pointed_by.set(v as usize);
+                    self.visited_pointed_by.set(v as usize);
                     local_new_pb_queries.push(v);
 
-                    for q in offsetable_terms(v, &state.context_state, state.abstract_rev_offsets) {
-                        if state.pointed_by_queries.contains(q) {
+                    for q in offsetable_terms(v, &self.context_state, &self.abstract_rev_offsets) {
+                        if self.pointed_by_queries.contains(q) {
                             continue;
                         }
                         if local_new_pb_queries.push(q) {
-                            for &t in &state.edges.addr_ofs[q as usize] {
-                                to_visit.push(get_representative(&mut state.parents, t));
+                            for &t in &self.edges.addr_ofs[q as usize] {
+                                to_visit.push(get_representative(&mut self.parents, t));
                             }
                         }
                     }
 
-                    for &w in &state.edges.addr_ofs[v as usize] {
-                        let w = get_representative(state.parents, w);
+                    for &w in &self.edges.addr_ofs[v as usize] {
+                        let w = get_representative(&mut self.parents, w);
                         to_visit.push(w);
                     }
 
-                    for &w in &state.edges.stores[v as usize] {
-                        state.new_points_to_queries.push(w);
+                    for &w in &self.edges.stores[v as usize] {
+                        self.new_points_to_queries.push(w);
                         changed = true;
                     }
 
-                    for &w in &state.return_and_parameter_children[v as usize] {
-                        let (fun_index, relative_index) = state
+                    for &w in &self.return_and_parameter_children[v as usize] {
+                        let (fun_index, relative_index) = self
                             .context_state
                             .get_function_and_relative_index_from_concrete_index(w);
                         let fun_index = fun_index.expect("Term should be in a function");
                         let num_return_terms =
-                            state.context_state.templates[fun_index as usize].num_return_terms;
+                            self.context_state.templates[fun_index as usize].num_return_terms;
                         if relative_index < num_return_terms {
-                            let fun_term = state.context_state.templates[0].start_index + fun_index;
-                            if state.pointed_by_queries.contains(fun_term) {
+                            let fun_term = self.context_state.templates[0].start_index + fun_index;
+                            if self.pointed_by_queries.contains(fun_term) {
                                 continue;
                             }
                             if local_new_pb_queries.push(fun_term) {
-                                for &t in &state.edges.addr_ofs[fun_term as usize] {
-                                    to_visit.push(get_representative(&mut state.parents, t));
+                                for &t in &self.edges.addr_ofs[fun_term as usize] {
+                                    to_visit.push(get_representative(&mut self.parents, t));
                                 }
                             }
                         }
                     }
                 },
-            );
+            )
+            .finish();
 
             let mut new_pointed_by_queries_bitset =
                 BitVec::<usize>::repeat(false, self.term_count());
@@ -378,11 +385,16 @@ where
         let top_order = scc(
             &self
                 .edges
-                .scc(SccDirection::Forward, EdgeVisitMode::WithWeighted),
+                .scc_edges(SccDirection::Forward, EdgeVisitMode::WithWeighted),
             new_incoming,
             |_, _| {},
         )
         .into_top_order();
+        // .get_pre_top(
+        //     &self
+        //         .edges
+        //         .scc(SccDirection::Forward, EdgeVisitMode::WithWeighted),
+        // );
 
         for &v in top_order.iter().rev() {
             // Skip if no new terms in solution set
@@ -1285,20 +1297,11 @@ impl<C: ContextSelector, S: TermSetTrait> Edges<C, S> {
         self.stores.resize_with(size, SmallVec::new);
     }
 
-    fn get_forward_unweighted_edges(
-        &self,
-        node: IntegerTerm,
-    ) -> impl Iterator<Item = (IntegerTerm, super::scc::SccEdgeWeight)> + '_ {
-        self.subset[node as usize]
-            .iter()
-            .filter_map(move |(v, offsets)| offsets.scc_edge_only_unweighted().map(|w| (*v, w)))
-    }
-
-    fn scc<'e>(
+    fn scc_edges<'e>(
         &'e self,
         direction: SccDirection,
         mode: EdgeVisitMode,
-    ) -> SccEdgesAdapter<'e, C, E> {
+    ) -> SccEdgesAdapter<'e, C, S> {
         SccEdgesAdapter {
             edges: self,
             direction,
@@ -1353,32 +1356,6 @@ impl<'e, C: ContextSelector, S> SccEdges for SccEdgesAdapter<'e, C, S> {
     }
 }
 
-// fn successors(
-//     edges: &<Self::Graph as SccGraph>::Edges,
-//     node: IntegerTerm,
-// ) -> impl Iterator<Item = (IntegerTerm, super::scc::SccEdgeWeight)> {
-//     edges.subset[node as usize]
-//         .iter()
-//         .flat_map(|(other, offsets)| {
-//             offsets
-//                 .scc_edge_only_unweighted()
-//                 .map(|weight| (*other, weight))
-//         })
-// }
-
-// fn successors(
-//     edges: &<Self::Graph as SccGraph>::Edges,
-//     node: IntegerTerm,
-// ) -> impl Iterator<Item = (IntegerTerm, super::scc::SccEdgeWeight)> {
-//     edges.subset[node as usize]
-//         .iter()
-//         .flat_map(|(other, offsets)| {
-//             offsets
-//                 .scc_edge_only_unweighted()
-//                 .map(|weight| (*other, weight))
-//         })
-// }
-
 fn get_representative_no_mutation(parents: &[IntegerTerm], child: IntegerTerm) -> IntegerTerm {
     let mut node = child;
     loop {
@@ -1403,6 +1380,7 @@ fn get_representative(parents: &mut [IntegerTerm], child: IntegerTerm) -> Intege
 pub type HashTidalPropagationSolver<C> = TidalPropagationSolver<HashSet<IntegerTerm>, C>;
 pub type RoaringTidalPropagationSolver<C> = TidalPropagationSolver<RoaringBitmap, C>;
 pub type SharedBitVecTidalPropagationSolver<C> = TidalPropagationSolver<SharedBitVec, C>;
+pub type RcRoaringTidalPropagationSolver<C> = TidalPropagationSolver<RcTermSet<RoaringBitmap>, C>;
 pub type RcSharedBitVecTidalPropagationSolver<C> =
     TidalPropagationSolver<RcTermSet<SharedBitVec>, C>;
 
@@ -1542,17 +1520,24 @@ where
     }
 }
 
+#[derive(Serialize)]
+struct TidalPropSerialize {
+    #[serde(flatten)]
+    wave_prop: WavePropSerialize,
+    query_propagation_time_ms: f64,
+    points_to_queries: usize,
+    pointed_by_queries: usize,
+    #[serde(flatten)]
+    term_set_dedup_stats: Option<Box<dyn erased_serde::Serialize>>,
+}
+
 #[cfg(test)]
 mod tests {
-    use itertools::Itertools;
-    use llvm_ir::{Module, Name};
+    use llvm_ir::Module;
 
-    use crate::analysis::{Cell, Config, PointsToAnalysis};
-    use crate::module_visitor::VarIdent;
+    use crate::analysis::{Config, PointsToAnalysis};
     use crate::solver::tidal_prop::get_representative_no_mutation;
-    use crate::solver::{
-        try_offset_term, CallStringSelector, Demand, Demands, IntegerTerm, TermSetTrait,
-    };
+    use crate::solver::{try_offset_term, CallStringSelector, Demands, IntegerTerm, TermSetTrait};
 
     use super::{offsetable_terms, SharedBitVecTidalPropagationSolver};
 
@@ -1694,15 +1679,4 @@ mod tests {
             );
         }
     }
-}
-
-#[derive(Serialize)]
-struct TidalPropSerialize {
-    #[serde(flatten)]
-    wave_prop: WavePropSerialize,
-    query_propagation_time_ms: f64,
-    points_to_queries: usize,
-    pointed_by_queries: usize,
-    #[serde(flatten)]
-    term_set_dedup_stats: Option<Box<dyn erased_serde::Serialize>>,
 }

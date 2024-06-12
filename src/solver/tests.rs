@@ -52,7 +52,7 @@ macro_rules! solver_tests {
                     }
                     use Term::*;
                     use $crate::solver::AsContextInsensitive;
-                    let $solver = AsContextInsensitive($crate::solver::SharedBitVecContextWavePropagationSolver::new());
+                    let $solver = AsContextInsensitive($crate::solver::SharedBitVecWavePropagationSolver::new());
                     $body
                 }
                 #[test]

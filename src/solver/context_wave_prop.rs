@@ -1,11 +1,9 @@
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::Hash;
 use std::marker::PhantomData;
-use std::mem;
 use std::time::Duration;
+use std::{iter, mem};
 
-use bitvec::bitvec;
-use bitvec::prelude::*;
 use either::Either;
 use hashbrown::hash_map::Entry;
 use hashbrown::{HashMap, HashSet};
@@ -13,68 +11,80 @@ use itertools::Itertools;
 use once_cell::unsync::Lazy;
 use roaring::RoaringBitmap;
 use serde::Serialize;
+use thin_vec::ThinVec;
 
 use super::context::{ContextState, TemplateTerm};
+use super::rc_termset::RcTermSet;
+use super::scc::{SccEdges, SccGraph};
 use super::shared_bitvec::SharedBitVec;
 use super::{
     insert_edge, try_offset_term, CallSite, Constraint, ContextSelector, ContextSensitiveInput,
     IntegerTerm, Offsets, OnlyOnceStack, Solver, SolverExt, SolverSolution, TermSetTrait, TermType,
 };
+use crate::solver::scc::scc;
+use crate::util::GetManyMutExt;
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
 
-#[derive(Clone)]
-struct CondLeftEntry<C> {
-    cond_node: IntegerTerm,
-    right: IntegerTerm,
-    offset: usize,
-    call_site: Option<CallSite>,
-    context: C,
+#[derive(Clone, Debug)]
+enum CondEntry<C> {
+    Left {
+        right: IntegerTerm,
+        offset: usize,
+        call_site: Option<CallSite>,
+        context: C,
+    },
+    Right {
+        left: IntegerTerm,
+        offset: usize,
+        call_site: Option<CallSite>,
+        context: C,
+    },
+    CallDummy {
+        call_site: CallSite,
+        context: C,
+    },
 }
 
-#[derive(Clone)]
-struct CondRightEntry<C> {
-    cond_node: IntegerTerm,
-    left: IntegerTerm,
-    offset: usize,
-    call_site: Option<CallSite>,
-    context: C,
+#[derive(Debug)]
+struct CachedCondEntry<C, S> {
+    entry: CondEntry<C>,
+    cache: S,
 }
-
-#[derive(Clone)]
-struct CallDummyEntry<C> {
-    cond_node: IntegerTerm,
-    call_site: CallSite,
-    context: C,
-}
-
-#[derive(Clone)]
-pub struct ContextWavePropagationSolver<S, C>(PhantomData<S>, PhantomData<C>);
-
-impl<S, C> ContextWavePropagationSolver<S, C> {
-    pub fn new() -> Self {
-        Self(PhantomData, PhantomData)
+impl<C, S: TermSetTrait> CachedCondEntry<C, S> {
+    fn new(entry: CondEntry<C>) -> Self {
+        Self {
+            entry,
+            cache: S::new(),
+        }
     }
 }
 
-pub struct ContextWavePropagationSolverState<T, S, C: ContextSelector> {
+#[derive(Clone)]
+pub struct WavePropagationSolver<S, C>(PhantomData<S>, PhantomData<C>, bool);
+
+impl<S, C> WavePropagationSolver<S, C> {
+    pub fn new() -> Self {
+        Self(PhantomData, PhantomData, false)
+    }
+    pub fn new_with_aggressive_dedup() -> Self {
+        Self(PhantomData, PhantomData, true)
+    }
+}
+
+pub struct WavePropagationSolverState<T, S, C: ContextSelector> {
     context_state: ContextState<T, C>,
     edges: Edges<S, C>,
     term_types: Vec<TermType>,
     parents: Vec<IntegerTerm>,
-    top_order: Vec<IntegerTerm>,
+    new_incoming: Vec<IntegerTerm>,
     iters: u64,
     scc_time: Duration,
     propagation_time: Duration,
     edge_instantiation_time: Duration,
+    aggressive_dedup: bool,
 }
 
-impl<T, S, C: ContextSelector> ContextWavePropagationSolverState<T, S, C> {
-    fn term_count(&self) -> usize {
-        self.edges.sols.len()
-    }
-}
-
-impl<T, S, C> ContextWavePropagationSolverState<T, S, C>
+impl<T, S, C> WavePropagationSolverState<T, S, C>
 where
     C: ContextSelector + Clone,
     T: Hash + Eq + Clone + Debug,
@@ -86,26 +96,30 @@ where
             self.iters += 1;
 
             let scc_start = std::time::Instant::now();
-            SCC::run(self).apply_to_graph(self);
-            SCC::run_with_weighted(self).apply_to_graph_weighted(self);
+            let top_order = scc(&self.edges, mem::take(&mut self.new_incoming), |_, _| {})
+                .collapse_cycles(self)
+                .into_top_order();
             self.scc_time += scc_start.elapsed();
 
             let propagation_start = std::time::Instant::now();
-            changed = self.wave_propagate_iteration();
+            changed = self.wave_propagate_iteration(&top_order);
             self.propagation_time += propagation_start.elapsed();
 
             let edge_instantiation_start = std::time::Instant::now();
-            let mut nodes_with_new_outgoing = S::new();
-            changed |= self.add_edges_after_wave_prop(&mut nodes_with_new_outgoing);
+            changed |= self.add_edges_after_wave_prop(&top_order);
             self.edge_instantiation_time += edge_instantiation_start.elapsed();
+
+            if self.aggressive_dedup {
+                self.deduplicate(&top_order);
+            }
 
             eprintln!("Iteration {}", self.iters);
         }
     }
 
-    fn wave_propagate_iteration(&mut self) -> bool {
+    fn wave_propagate_iteration(&mut self, top_order: &[IntegerTerm]) -> bool {
         let mut changed = false;
-        for &v in self.top_order.iter().rev() {
+        for &v in top_order.iter().rev() {
             // Skip if no new terms in solution set
             if self.edges.sols[v as usize].len() == self.edges.p_old[v as usize].len() {
                 continue;
@@ -113,126 +127,142 @@ where
             changed = true;
             let p_dif = self.edges.sols[v as usize].weak_difference(&self.edges.p_old[v as usize]);
             let p_dif_vec = Lazy::new(|| p_dif.iter().collect::<Vec<IntegerTerm>>());
-            self.edges.p_old[v as usize].union_assign(&p_dif);
+            if self.aggressive_dedup {
+                self.edges.p_old[v as usize].clone_from(&self.edges.sols[v as usize]);
+            } else {
+                self.edges.p_old[v as usize].union_assign(&p_dif);
+            }
 
             for (&w, offsets) in &self.edges.subset[v as usize] {
+                let mut should_set_new_incoming = false;
                 for o in offsets.iter() {
-                    propagate_terms_into(
+                    should_set_new_incoming = propagate_terms_into(
                         &p_dif,
                         p_dif_vec.iter().copied(),
                         o,
                         &mut self.edges.sols[w as usize],
                         &self.term_types,
-                    );
+                    ) && o > 0;
+                    if o == 0 {
+                        if self.aggressive_dedup {
+                            if let Some((a, b)) =
+                                self.edges.sols.get_two_mut(v as usize, w as usize)
+                            {
+                                S::deduplicate_subset_pair(a, b);
+                            }
+                        }
+                    }
+                }
+
+                if should_set_new_incoming {
+                    self.new_incoming.push(w);
                 }
             }
         }
         changed
     }
 
-    fn add_edges_after_wave_prop(&mut self, nodes_with_new_outgoing: &mut S) -> bool {
+    fn add_edges_after_wave_prop(&mut self, changed_terms: &[IntegerTerm]) -> bool {
         let mut changed = false;
-        let call_dummies = self.edges.call_dummies.clone();
-        for (
-            i,
-            CallDummyEntry {
-                cond_node,
-                call_site,
-                context,
-            },
-        ) in call_dummies.into_iter().enumerate()
-        {
-            let cond_node = get_representative(&mut self.parents, cond_node);
-
-            if self.edges.sols[cond_node as usize].len() == self.edges.p_cache_call_dummies[i].len()
-            {
-                continue;
-            }
-            let p_new =
-                self.edges.sols[cond_node as usize].difference(&self.edges.p_cache_call_dummies[i]);
-            self.edges.p_cache_call_dummies[i].union_assign(&p_new);
-            for t in p_new.iter() {
-                changed |= self
-                    .try_offset_and_instantiate(t, Some(&call_site), 0, &context)
-                    .is_some();
-            }
-        }
-        let left_conds = self.edges.left_conds.clone();
-        for (
-            i,
-            CondLeftEntry {
-                cond_node,
-                right,
-                offset,
-                call_site,
-                context,
-            },
-        ) in left_conds.into_iter().enumerate()
-        {
-            let cond_node = get_representative(&mut self.parents, cond_node);
-            let right = get_representative(&mut self.parents, right);
-
-            if self.edges.sols[cond_node as usize].len() == self.edges.p_cache_left[i].len() {
-                continue;
-            }
-            let p_new = self.edges.sols[cond_node as usize].difference(&self.edges.p_cache_left[i]);
-            self.edges.p_cache_left[i].union_assign(&p_new);
-            for t in p_new.iter() {
-                if let Some(t) =
-                    self.try_offset_and_instantiate(t, call_site.as_ref(), offset, &context)
-                {
-                    let t = get_representative(&mut self.parents, t);
-                    if t == right {
-                        continue;
-                    }
-                    if insert_edge(&mut self.edges.subset, t, right, 0) {
-                        self.edges.sols[right as usize].union_assign(&self.edges.p_old[t as usize]);
-                        self.edges.rev_subset[right as usize].insert(t);
-                        changed = true;
-                        nodes_with_new_outgoing.insert(t);
-                    }
+        for &cond_node in changed_terms {
+            for i in 0..self.edges.conds[cond_node as usize].len() {
+                let cond = &mut self.edges.conds[cond_node as usize][i];
+                if self.edges.sols[cond_node as usize].len() == cond.cache.len() {
+                    continue;
                 }
-            }
-        }
-        let right_conds = self.edges.right_conds.clone();
-        for (
-            i,
-            CondRightEntry {
-                cond_node,
-                left,
-                offset,
-                call_site,
-                context,
-            },
-        ) in right_conds.into_iter().enumerate()
-        {
-            let cond_node = get_representative(&mut self.parents, cond_node);
-            let left = get_representative(&mut self.parents, left);
+                let sols = &self.edges.sols[cond_node as usize];
+                let p_new = sols.difference(&cond.cache);
+                cond.cache.clone_from(sols);
+                println!("Cond {:?}", self.context_state.concrete_to_input(cond_node));
 
-            if self.edges.sols[cond_node as usize].len() == self.edges.p_cache_right[i].len() {
-                continue;
-            }
-            let p_new =
-                self.edges.sols[cond_node as usize].difference(&self.edges.p_cache_right[i]);
-            self.edges.p_cache_right[i].union_assign(&p_new);
-            for t in p_new.iter() {
-                if let Some(t) =
-                    self.try_offset_and_instantiate(t, call_site.as_ref(), offset, &context)
-                {
-                    let t = get_representative(&mut self.parents, t);
-                    if t == left {
-                        continue;
+                match cond.entry.clone() {
+                    CondEntry::Left {
+                        right,
+                        offset,
+                        call_site,
+                        context,
+                    } => {
+                        let right = get_representative(&mut self.parents, right);
+                        for t in p_new.iter() {
+                            if let Some(t) = self.try_offset_and_instantiate(
+                                t,
+                                call_site.as_ref(),
+                                offset,
+                                &context,
+                            ) {
+                                let t = get_representative(&mut self.parents, t);
+                                if t == right {
+                                    continue;
+                                }
+                                if insert_edge(&mut self.edges.subset, t, right, 0) {
+                                    self.edges.sols[right as usize]
+                                        .union_assign(&self.edges.p_old[t as usize]);
+                                    self.edges.rev_subset[right as usize].insert(t);
+                                    self.new_incoming.push(right);
+                                    changed = true;
+                                }
+                            }
+                        }
                     }
-                    if insert_edge(&mut self.edges.subset, left, t, 0) {
-                        self.edges.sols[t as usize].union_assign(&self.edges.p_old[left as usize]);
-                        self.edges.rev_subset[t as usize].insert(left);
-                        changed = true;
-                        nodes_with_new_outgoing.insert(t);
+                    CondEntry::Right {
+                        left,
+                        offset,
+                        call_site,
+                        context,
+                    } => {
+                        let left = get_representative(&mut self.parents, left);
+                        for t in p_new.iter() {
+                            if let Some(t) = self.try_offset_and_instantiate(
+                                t,
+                                call_site.as_ref(),
+                                offset,
+                                &context,
+                            ) {
+                                let t = get_representative(&mut self.parents, t);
+                                if t == left {
+                                    continue;
+                                }
+                                if insert_edge(&mut self.edges.subset, left, t, 0) {
+                                    self.edges.sols[t as usize]
+                                        .union_assign(&self.edges.p_old[left as usize]);
+                                    self.edges.rev_subset[t as usize].insert(left);
+                                    self.new_incoming.push(t);
+                                    changed = true;
+                                }
+                            }
+                        }
+                    }
+                    CondEntry::CallDummy { call_site, context } => {
+                        for t in p_new.iter() {
+                            changed |= self
+                                .try_offset_and_instantiate(t, Some(&call_site), 0, &context)
+                                .is_some();
+                        }
                     }
                 }
             }
         }
         changed
+    }
+
+    fn deduplicate(&mut self, changed_terms: &[IntegerTerm]) {
+        let sets = self
+            .edges
+            .sols
+            .my_get_many_mut(changed_terms)
+            .into_iter()
+            .chain(self.edges.p_old.my_get_many_mut(changed_terms))
+            .flatten()
+            .chain(
+                self.edges
+                    .conds
+                    .my_get_many_mut(changed_terms)
+                    .into_iter()
+                    .flatten()
+                    .flat_map(|conds| conds.iter_mut())
+                    .map(|c| &mut c.cache),
+            );
+        S::deduplicate(sets);
     }
 
     fn try_offset_and_instantiate(
@@ -287,6 +317,7 @@ where
             self.edges.sols.resize_with(new_len, S::new);
             self.edges.subset.resize_with(new_len, HashMap::new);
             self.edges.rev_subset.resize_with(new_len, HashSet::new);
+            self.edges.conds.resize_with(new_len, ThinVec::new);
             self.term_types.extend_from_slice(&template.types);
             self.parents.extend(
                 (0..num_instantiated).map(|i| (instantiated_start_index + i) as IntegerTerm),
@@ -330,6 +361,7 @@ where
                         right_sols,
                         &self.term_types,
                     );
+                    self.new_incoming.push(right);
                 }
             }
         }
@@ -338,19 +370,124 @@ where
 
     fn add_constraint(&mut self, c: Constraint<IntegerTerm>, context: C::Context) {
         let c = c.map_terms(|&t| get_representative(&mut self.parents, t));
+        match c {
+            Constraint::Inclusion { node, .. } => {
+                self.new_incoming.push(node);
+            }
+            Constraint::Subset { right, .. } => {
+                self.new_incoming.push(right);
+            }
+            Constraint::UnivCondSubsetLeft { cond_node, .. }
+            | Constraint::UnivCondSubsetRight { cond_node, .. }
+            | Constraint::CallDummy { cond_node, .. } => {
+                self.new_incoming.push(cond_node);
+            }
+        }
         self.edges.add_constraint(c, context);
     }
 }
 
+impl<T, S, C> SccGraph for WavePropagationSolverState<T, S, C>
+where
+    C: ContextSelector + Clone,
+    T: Hash + Eq + Clone + Debug,
+    S: TermSetTrait<Term = u32> + Debug,
+{
+    fn unify(&mut self, child: IntegerTerm, parent_fn: impl Fn(IntegerTerm) -> IntegerTerm) {
+        let parent = parent_fn(child);
+        debug_assert_ne!(child, parent);
+
+        let child_sols = mem::take(&mut self.edges.sols[child as usize]);
+        self.edges.sols[parent as usize].union_assign(&child_sols);
+
+        let p_old = &self.edges.p_old[parent as usize];
+        let p_old_vec = Lazy::new(|| p_old.iter().collect::<Vec<IntegerTerm>>());
+        let child_edges = mem::take(&mut self.edges.subset[child as usize]);
+
+        for (&other, offsets) in &child_edges {
+            debug_assert_ne!(0, offsets.len());
+
+            let other_parent = parent_fn(other);
+
+            if offsets.has_non_zero() || other_parent != parent {
+                let other_term_set = &mut self.edges.sols[other_parent as usize];
+                let mut entry = self.edges.subset[parent as usize].entry(other_parent);
+                let mut existing_offsets = match entry {
+                    Entry::Occupied(ref mut entry) => Either::Left(entry.get_mut()),
+                    Entry::Vacant(entry) => Either::Right(entry),
+                };
+
+                for offset in offsets.iter() {
+                    if let Either::Left(offs) = &existing_offsets {
+                        if offs.contains(offset) {
+                            continue;
+                        }
+                    }
+                    propagate_terms_into(
+                        p_old,
+                        p_old_vec.iter().copied(),
+                        offset,
+                        other_term_set,
+                        &self.term_types,
+                    );
+                    match existing_offsets {
+                        Either::Left(ref mut offs) => {
+                            offs.insert(offset);
+                        }
+                        Either::Right(entry) => {
+                            existing_offsets = Either::Left(entry.insert(Offsets::single(offset)));
+                        }
+                    }
+                }
+            }
+
+            self.edges.rev_subset[other as usize].remove(&child);
+            self.edges.rev_subset[other_parent as usize].insert(parent);
+        }
+
+        let child_rev_edges = mem::take(&mut self.edges.rev_subset[child as usize]);
+        for &i in child_rev_edges.iter() {
+            if i == child {
+                continue;
+            }
+            match self.edges.subset[i as usize].remove(&child) {
+                Some(orig_edges) => {
+                    self.edges.subset[i as usize]
+                        .entry(parent)
+                        .and_modify(|e| e.union_assign(&orig_edges))
+                        .or_insert_with(|| orig_edges.clone());
+                }
+                None => {
+                    panic!("Expected edges from {i} to {child}");
+                }
+            }
+        }
+
+        self.edges.rev_subset[parent as usize].union_assign(&child_rev_edges);
+        let child_conds = mem::take(&mut self.edges.conds[child as usize]);
+        self.edges.conds[parent as usize].extend(child_conds);
+
+        self.parents[child as usize] = parent;
+        self.edges.p_old[child as usize] = S::new();
+    }
+
+    fn parent_heuristic(&self, node: IntegerTerm) -> u32 {
+        self.edges.subset[node as usize].len() as u32
+    }
+}
+
+/// Return true if new terms were offset propagated
 fn propagate_terms_into<S: TermSetTrait<Term = IntegerTerm>>(
     term_set: &S,
     term_set_iter: impl IntoIterator<Item = IntegerTerm>,
     offset: usize,
     dest_term_set: &mut S,
     term_types: &[TermType],
-) {
+) -> bool {
+    let mut propagated_term_weighted = false;
     if offset == 0 {
         dest_term_set.union_assign(term_set);
+        return false;
     } else {
         let to_add = term_set_iter.into_iter().filter_map(|t| {
             if let TermType::Struct(allowed) = term_types[t as usize] {
@@ -359,24 +496,28 @@ fn propagate_terms_into<S: TermSetTrait<Term = IntegerTerm>>(
                 None
             }
         });
-        dest_term_set.extend(to_add);
+        for t in to_add {
+            dest_term_set.insert(t);
+            propagated_term_weighted = true;
+        }
     }
+    propagated_term_weighted
 }
 
-impl<S, C> SolverExt for ContextWavePropagationSolver<S, C>
+impl<S, C> SolverExt for WavePropagationSolver<S, C>
 where
     S: TermSetTrait<Term = IntegerTerm> + Debug,
     C: ContextSelector,
 {
 }
 
-impl<T, S, C> Solver<ContextSensitiveInput<T, C>> for ContextWavePropagationSolver<S, C>
+impl<T, S, C> Solver<ContextSensitiveInput<T, C>> for WavePropagationSolver<S, C>
 where
     T: Hash + Eq + Clone + Debug,
     S: TermSetTrait<Term = IntegerTerm> + Debug,
     C: ContextSelector + Clone,
 {
-    type Solution = ContextWavePropagationSolverState<T, S, C>;
+    type Solution = WavePropagationSolverState<T, S, C>;
 
     fn solve(&self, input: ContextSensitiveInput<T, C>) -> Self::Solution {
         let (context_state, function_term_infos) = ContextState::from_context_input(&input);
@@ -394,43 +535,35 @@ where
             term_types[abstract_term as usize] = *tt;
         }
 
+        let mut new_incoming = vec![];
+
         for (i, function_term_info) in function_term_infos.into_iter().enumerate() {
             let fun_term = context_state.function_to_fun_term(i as u32);
             term_types[fun_term as usize] = function_term_info.term_type;
             sols[function_term_info.pointer_node as usize].insert(fun_term);
+            new_incoming.push(function_term_info.pointer_node);
         }
 
         let parents = Vec::from_iter(0..sols.len() as IntegerTerm);
-        let top_order = Vec::new();
-
-        let left_conds = vec![];
-        let right_conds = vec![];
-        let call_dummies = vec![];
+        let conds = iter::repeat_with(ThinVec::new).take(num_terms).collect();
         let p_old = vec![S::new(); sols.len()];
-        let p_cache_left = vec![S::new(); left_conds.len()];
-        let p_cache_right = vec![S::new(); right_conds.len()];
-        let p_cache_call_dummies = vec![];
-        let mut state = ContextWavePropagationSolverState {
+        let mut state = WavePropagationSolverState {
             context_state,
             edges: Edges {
                 sols,
                 subset,
                 rev_subset,
-                left_conds,
-                right_conds,
-                call_dummies,
+                conds,
                 p_old,
-                p_cache_left,
-                p_cache_right,
-                p_cache_call_dummies,
             },
             term_types,
             parents,
-            top_order,
+            new_incoming,
             iters: 0,
             scc_time: Duration::ZERO,
             propagation_time: Duration::ZERO,
             edge_instantiation_time: Duration::ZERO,
+            aggressive_dedup: self.2,
         };
 
         for c in input.global.constraints {
@@ -453,7 +586,7 @@ where
     }
 }
 
-impl<T, S, C> ContextWavePropagationSolverState<T, S, C>
+impl<T, S, C> WavePropagationSolverState<T, S, C>
 where
     T: Hash + Eq + Clone + Debug,
     S: TermSetTrait<Term = IntegerTerm> + Debug,
@@ -496,7 +629,7 @@ where
     }
 }
 
-impl<T, S, C> SolverSolution for ContextWavePropagationSolverState<T, S, C>
+impl<T, S, C> SolverSolution for WavePropagationSolverState<T, S, C>
 where
     T: Hash + Eq + Clone + Debug,
     S: TermSetTrait<Term = IntegerTerm> + Debug,
@@ -556,13 +689,8 @@ struct Edges<S, C: ContextSelector> {
     sols: Vec<S>,
     subset: Vec<HashMap<IntegerTerm, Offsets>>,
     rev_subset: Vec<HashSet<IntegerTerm>>,
-    left_conds: Vec<CondLeftEntry<C::Context>>,
-    right_conds: Vec<CondRightEntry<C::Context>>,
-    call_dummies: Vec<CallDummyEntry<C::Context>>,
+    conds: Vec<ThinVec<CachedCondEntry<C::Context, S>>>,
     p_old: Vec<S>,
-    p_cache_left: Vec<S>,
-    p_cache_right: Vec<S>,
-    p_cache_call_dummies: Vec<S>,
 }
 
 impl<S, C> Edges<S, C>
@@ -588,14 +716,12 @@ where
                 offset,
                 call_site,
             } => {
-                self.left_conds.push(CondLeftEntry {
-                    cond_node,
+                self.conds[cond_node as usize].push(CachedCondEntry::new(CondEntry::Left {
                     right,
                     offset,
                     call_site,
                     context,
-                });
-                self.p_cache_left.push(S::new());
+                }));
             }
             Constraint::UnivCondSubsetRight {
                 cond_node,
@@ -603,14 +729,12 @@ where
                 offset,
                 call_site,
             } => {
-                self.right_conds.push(CondRightEntry {
-                    cond_node,
+                self.conds[cond_node as usize].push(CachedCondEntry::new(CondEntry::Right {
                     left,
                     offset,
                     call_site,
                     context,
-                });
-                self.p_cache_right.push(S::new());
+                }));
             }
             Constraint::CallDummy {
                 cond_node,
@@ -618,12 +742,10 @@ where
                 result_node: _,
                 call_site,
             } => {
-                self.call_dummies.push(CallDummyEntry {
-                    cond_node,
+                self.conds[cond_node as usize].push(CachedCondEntry::new(CondEntry::CallDummy {
                     call_site,
                     context,
-                });
-                self.p_cache_call_dummies.push(S::new());
+                }));
             }
         };
     }
@@ -637,300 +759,22 @@ where
     }
 }
 
-struct SCC<T, S, C> {
-    node_count: usize,
-    iteration: usize,
-    /// 0 means not visited.
-    d: Vec<usize>,
-    r: Vec<Option<IntegerTerm>>,
-    c: BitVec,
-    s: Vec<IntegerTerm>,
-    top_order: Vec<IntegerTerm>,
-    term_phantom: PhantomData<T>,
-    term_set_type_phantom: PhantomData<S>,
-    context_selector_phantom: PhantomData<C>,
-}
-
-impl<T, S, C> SCC<T, S, C>
+impl<S, C> SccEdges for Edges<S, C>
 where
-    S: TermSetTrait<Term = IntegerTerm> + Debug,
-    T: Hash + Eq + Clone + Debug,
+    S: TermSetTrait<Term = IntegerTerm>,
     C: ContextSelector,
 {
-    fn visit(&mut self, v: IntegerTerm, solver: &ContextWavePropagationSolverState<T, S, C>) {
-        self.iteration += 1;
-        self.d[v as usize] = self.iteration;
-        self.r[v as usize] = Some(v);
-        if solver.edges.subset[v as usize].is_empty() {
-            self.c.set(v as usize, true);
-            return;
-        }
-
-        for (&w, offsets) in &solver.edges.subset[v as usize] {
-            if !offsets.contains(0) {
-                continue;
-            }
-
-            if self.d[w as usize] == 0 {
-                self.visit(w, solver);
-            }
-            if !self.c[w as usize] {
-                let r_v = self.r[v as usize].unwrap();
-                let r_w = self.r[w as usize].unwrap();
-                self.r[v as usize] = Some(if self.d[r_v as usize] < self.d[r_w as usize] {
-                    r_v
-                } else {
-                    r_w
-                });
-            }
-        }
-
-        if self.r[v as usize] == Some(v) {
-            self.c.set(v as usize, true);
-            while let Some(&w) = self.s.last() {
-                if self.d[w as usize] <= self.d[v as usize] {
-                    break;
-                }
-                self.s.pop();
-                self.c.set(w as usize, true);
-                self.r[w as usize] = Some(v);
-            }
-            self.top_order.push(v);
-        } else {
-            self.s.push(v);
-        }
+    fn node_count(&self) -> usize {
+        self.sols.len()
     }
 
-    fn dfs_add_and_finish(
-        &mut self,
-        v: IntegerTerm,
-        solver: &ContextWavePropagationSolverState<T, S, C>,
-    ) {
-        if self.c[v as usize] {
-            return;
-        }
-
-        self.c.set(v as usize, true);
-
-        for (&w, offsets) in &solver.edges.subset[v as usize] {
-            if !offsets.contains(0) || self.r[v as usize] != self.r[w as usize] {
-                continue;
-            }
-
-            self.dfs_add_and_finish(w, solver);
-        }
-
-        self.top_order.push(v);
-    }
-
-    fn visit_with_weighted(
-        &mut self,
-        v: IntegerTerm,
-        state: &ContextWavePropagationSolverState<T, S, C>,
-    ) {
-        self.iteration += 1;
-        self.d[v as usize] = self.iteration;
-        self.r[v as usize] = Some(v);
-        if state.edges.subset[v as usize].is_empty() {
-            self.c.set(v as usize, true);
-            return;
-        }
-
-        for (&w, offsets) in &state.edges.subset[v as usize] {
-            debug_assert!(offsets.len() > 0);
-
-            if self.d[w as usize] == 0 {
-                self.visit_with_weighted(w, state);
-            }
-            if !self.c[w as usize] {
-                let r_v = self.r[v as usize].unwrap();
-                let r_w = self.r[w as usize].unwrap();
-                self.r[v as usize] = Some(if self.d[r_v as usize] < self.d[r_w as usize] {
-                    r_v
-                } else {
-                    r_w
-                });
-            }
-        }
-        if self.r[v as usize] == Some(v) {
-            for &w in self.s.iter().rev() {
-                if self.d[w as usize] <= self.d[v as usize] {
-                    break;
-                }
-                self.r[w as usize] = Some(v);
-            }
-            while let Some(&w) = self.s.last() {
-                if self.d[w as usize] <= self.d[v as usize] {
-                    break;
-                }
-                self.s.pop();
-                self.dfs_add_and_finish(w, state);
-            }
-            self.dfs_add_and_finish(v, state);
-        } else {
-            self.s.push(v);
-        }
-    }
-
-    fn init_result(state: &ContextWavePropagationSolverState<T, S, C>) -> Self {
-        let node_count = state.term_count();
-        Self {
-            node_count,
-            iteration: 0,
-            d: vec![0; node_count],
-            r: vec![None; node_count],
-            c: bitvec![0; node_count],
-            s: vec![],
-            top_order: vec![],
-            term_phantom: PhantomData,
-            term_set_type_phantom: PhantomData,
-            context_selector_phantom: PhantomData,
-        }
-    }
-
-    fn run(solver: &mut ContextWavePropagationSolverState<T, S, C>) -> Self {
-        let mut result = SCC::init_result(solver);
-        for v in 0..result.node_count as u32 {
-            if result.d[v as usize] == 0 {
-                result.visit(v, solver);
-            }
-        }
-        result
-    }
-
-    fn run_with_weighted(solver: &mut ContextWavePropagationSolverState<T, S, C>) -> Self {
-        let mut result = SCC::init_result(solver);
-        for v in 0..result.node_count as u32 {
-            if result.d[v as usize] == 0 {
-                result.visit_with_weighted(v, solver);
-            }
-        }
-
-        result
-    }
-
-    fn unify(
+    fn successors(
         &self,
-        child: IntegerTerm,
-        parent_fn: impl Fn(IntegerTerm) -> IntegerTerm,
-        state: &mut ContextWavePropagationSolverState<T, S, C>,
-    ) {
-        let parent = parent_fn(child);
-        debug_assert_ne!(child, parent);
-
-        let child_sols = mem::take(&mut state.edges.sols[child as usize]);
-        state.edges.sols[parent as usize].union_assign(&child_sols);
-
-        let p_old = &state.edges.p_old[parent as usize];
-        let p_old_vec = Lazy::new(|| p_old.iter().collect::<Vec<IntegerTerm>>());
-        let child_edges = mem::take(&mut state.edges.subset[child as usize]);
-
-        for (&other, offsets) in &child_edges {
-            debug_assert_ne!(0, offsets.len());
-
-            let other_parent = parent_fn(other);
-
-            if offsets.has_non_zero() || other_parent != parent {
-                let other_term_set = &mut state.edges.sols[other_parent as usize];
-                let mut entry = state.edges.subset[parent as usize].entry(other_parent);
-                let mut existing_offsets = match entry {
-                    Entry::Occupied(ref mut entry) => Either::Left(entry.get_mut()),
-                    Entry::Vacant(entry) => Either::Right(entry),
-                };
-
-                for offset in offsets.iter() {
-                    if let Either::Left(offs) = &existing_offsets {
-                        if offs.contains(offset) {
-                            continue;
-                        }
-                    }
-                    propagate_terms_into(
-                        p_old,
-                        p_old_vec.iter().copied(),
-                        offset,
-                        other_term_set,
-                        &state.term_types,
-                    );
-                    match existing_offsets {
-                        Either::Left(ref mut offs) => {
-                            offs.insert(offset);
-                        }
-                        Either::Right(entry) => {
-                            existing_offsets = Either::Left(entry.insert(Offsets::single(offset)));
-                        }
-                    }
-                }
-            }
-
-            state.edges.rev_subset[other as usize].remove(&child);
-            state.edges.rev_subset[other_parent as usize].insert(parent);
-        }
-
-        let child_rev_edges = mem::take(&mut state.edges.rev_subset[child as usize]);
-        for &i in child_rev_edges.iter() {
-            if i == child {
-                continue;
-            }
-            match state.edges.subset[i as usize].remove(&child) {
-                Some(orig_edges) => {
-                    state.edges.subset[i as usize]
-                        .entry(parent)
-                        .and_modify(|e| e.union_assign(&orig_edges))
-                        .or_insert_with(|| orig_edges.clone());
-                }
-                None => {
-                    panic!("Expected edges from {i} to {child}");
-                }
-            }
-        }
-
-        state.edges.rev_subset[parent as usize].union_assign(&child_rev_edges);
-
-        state.parents[child as usize] = parent;
-        state.edges.p_old[child as usize] = S::new();
-    }
-
-    // Collapse cycles and update topological order
-    fn apply_to_graph(self, state: &mut ContextWavePropagationSolverState<T, S, C>) {
-        let mut nodes = vec![];
-        let mut components: HashMap<IntegerTerm, (IntegerTerm, u32)> = HashMap::new();
-        for v in 0..self.node_count as u32 {
-            if let Some(r_v) = self.r[v as usize] {
-                let edge_count = state.edges.subset[v as usize].len() as u32;
-                if edge_count == 0 {
-                    continue;
-                }
-                nodes.push((v, r_v));
-                if let Err(mut cur) = components.try_insert(r_v, (v, edge_count)) {
-                    let (cur_best, best_edge_count) = cur.entry.get_mut();
-                    if edge_count > *best_edge_count {
-                        *cur_best = v;
-                        *best_edge_count = edge_count;
-                    }
-                }
-            }
-        }
-        for (v, r_v) in nodes {
-            let &(rep, _) = components.get(&r_v).unwrap();
-            if v != rep {
-                self.unify(
-                    v,
-                    |w| {
-                        components
-                            .get(&self.r[w as usize].unwrap())
-                            .map(|(rep, _)| *rep)
-                            .unwrap_or(w)
-                    },
-                    state,
-                );
-            }
-        }
-        state.top_order = self.top_order;
-    }
-
-    // Collapse cycles and update topological order
-    fn apply_to_graph_weighted(self, solver: &mut ContextWavePropagationSolverState<T, S, C>) {
-        solver.top_order = self.top_order;
+        node: IntegerTerm,
+    ) -> impl Iterator<Item = (IntegerTerm, super::scc::SccEdgeWeight)> {
+        self.subset[node as usize]
+            .iter()
+            .map(|(w, offsets)| (*w, offsets.scc_edge_weight()))
     }
 }
 
@@ -955,11 +799,11 @@ fn get_representative(parents: &mut Vec<IntegerTerm>, child: IntegerTerm) -> Int
     representative
 }
 
-pub type HashContextWavePropagationSolver<C> =
-    ContextWavePropagationSolver<HashSet<IntegerTerm>, C>;
-pub type RoaringContextWavePropagationSolver<C> = ContextWavePropagationSolver<RoaringBitmap, C>;
-pub type SharedBitVecContextWavePropagationSolver<C> =
-    ContextWavePropagationSolver<SharedBitVec, C>;
+pub type HashWavePropagationSolver<C> = WavePropagationSolver<HashSet<IntegerTerm>, C>;
+pub type RoaringWavePropagationSolver<C> = WavePropagationSolver<RoaringBitmap, C>;
+pub type SharedBitVecWavePropagationSolver<C> = WavePropagationSolver<SharedBitVec, C>;
+pub type RcRoaringWavePropagationSolver<C> = WavePropagationSolver<RcTermSet<RoaringBitmap>, C>;
+pub type RcSharedBitVecWavePropagationSolver<C> = WavePropagationSolver<RcTermSet<SharedBitVec>, C>;
 
 #[derive(Clone)]
 pub struct ContextWavePropagationNode<T, C> {
@@ -974,7 +818,7 @@ impl<T: Display, C: Display> Display for ContextWavePropagationNode<T, C> {
     }
 }
 
-impl<T, S, C> ContextWavePropagationSolverState<T, S, C>
+impl<T, S, C> WavePropagationSolverState<T, S, C>
 where
     T: Display + Debug + Clone + PartialEq + Eq + Hash,
     S: TermSetTrait<Term = IntegerTerm>,
@@ -995,7 +839,7 @@ where
     }
 }
 
-impl<T, S, C> Graph for ContextWavePropagationSolverState<T, S, C>
+impl<T, S, C> Graph for WavePropagationSolverState<T, S, C>
 where
     T: Display + Debug + Clone + PartialEq + Eq + Hash,
     S: TermSetTrait<Term = IntegerTerm> + Debug,

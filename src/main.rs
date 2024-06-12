@@ -8,13 +8,14 @@ use pointer_analysis::cli::{Args, CallGraphMode, CountMode, DemandMode, SolverMo
 use pointer_analysis::module_visitor::VarIdent;
 use pointer_analysis::solver::{
     BasicDemandSolver, BasicHashSolver, BasicRoaringSolver, Demands, HashTidalPropagationSolver,
-    RcSharedBitVecTidalPropagationSolver, RoaringTidalPropagationSolver,
-    SharedBitVecTidalPropagationSolver, StatSolver,
+    RcSharedBitVecTidalPropagationSolver, RcSharedBitVecWavePropagationSolver,
+    RoaringTidalPropagationSolver, SharedBitVecTidalPropagationSolver, StatSolver,
 };
 use pointer_analysis::solver::{
     BasicSharedBitVecSolver, CallStringSelector, ContextInsensitiveSolver, Demand,
-    HashContextWavePropagationSolver, JustificationSolver, RoaringContextWavePropagationSolver,
-    SharedBitVecContextWavePropagationSolver, Solver, SolverExt, SolverSolution, TermSetTrait,
+    HashWavePropagationSolver, JustificationSolver, RcRoaringTidalPropagationSolver,
+    RcRoaringWavePropagationSolver, RoaringWavePropagationSolver,
+    SharedBitVecWavePropagationSolver, Solver, SolverExt, SolverSolution, TermSetTrait,
 };
 use pointer_analysis::visualizer::{AsDynamicVisualizableExt, DynamicVisualizableSolver};
 use serde::Serialize;
@@ -289,16 +290,30 @@ fn main() -> io::Result<()> {
             .as_demand_driven()
             .as_dynamic_visualizable(),
         // Wave prop solver
-        (SolverMode::Wave, TermSet::Hash) => HashContextWavePropagationSolver::new()
+        (SolverMode::Wave, TermSet::Hash) => HashWavePropagationSolver::new()
             .as_demand_driven()
             .as_dynamic_visualizable(),
-        (SolverMode::Wave, TermSet::Roaring) => RoaringContextWavePropagationSolver::new()
-            .as_demand_driven()
-            .as_dynamic_visualizable(),
-        (SolverMode::Wave, TermSet::SharedBitVec) => {
-            SharedBitVecContextWavePropagationSolver::new()
+        (SolverMode::Wave, TermSet::Roaring) => {
+            // if args.aggressive_sharing {
+            //     RcRoaringWavePropagationSolver::new_with_aggressive_dedup()
+            //         .as_demand_driven()
+            //         .as_dynamic_visualizable()
+            // } else {
+            RoaringWavePropagationSolver::new()
                 .as_demand_driven()
                 .as_dynamic_visualizable()
+            // }
+        }
+        (SolverMode::Wave, TermSet::SharedBitVec) => {
+            if args.aggressive_sharing {
+                RcSharedBitVecWavePropagationSolver::new_with_aggressive_dedup()
+                    .as_demand_driven()
+                    .as_dynamic_visualizable()
+            } else {
+                SharedBitVecWavePropagationSolver::new()
+                    .as_demand_driven()
+                    .as_dynamic_visualizable()
+            }
         }
         (SolverMode::DryRun, _) => StatSolver::<Cell>::new()
             .as_context_sensitive()
@@ -310,7 +325,12 @@ fn main() -> io::Result<()> {
             HashTidalPropagationSolver::new().as_dynamic_visualizable()
         }
         (SolverMode::Tidal, TermSet::Roaring) => {
+            // if args.aggressive_sharing {
+            //     RcRoaringTidalPropagationSolver::new_with_aggressive_dedup()
+            //         .as_dynamic_visualizable()
+            // } else {
             RoaringTidalPropagationSolver::new().as_dynamic_visualizable()
+            // }
         }
         (SolverMode::Tidal, TermSet::SharedBitVec) => {
             if args.aggressive_sharing {

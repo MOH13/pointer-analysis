@@ -29,13 +29,14 @@ pub use context::{
     ContextSensitiveInput, ContextSensitiveSolver, DemandContextSensitiveInput, FunctionInput,
 };
 pub use context_wave_prop::{
-    HashContextWavePropagationSolver, RoaringContextWavePropagationSolver,
-    SharedBitVecContextWavePropagationSolver,
+    HashWavePropagationSolver, RcRoaringWavePropagationSolver, RcSharedBitVecWavePropagationSolver,
+    RoaringWavePropagationSolver, SharedBitVecWavePropagationSolver,
 };
 pub use stats::StatSolver;
 pub use tidal_prop::{
-    HashTidalPropagationSolver, RcSharedBitVecTidalPropagationSolver,
-    RoaringTidalPropagationSolver, SharedBitVecTidalPropagationSolver,
+    HashTidalPropagationSolver, RcRoaringTidalPropagationSolver,
+    RcSharedBitVecTidalPropagationSolver, RoaringTidalPropagationSolver,
+    SharedBitVecTidalPropagationSolver,
 };
 
 use crate::visualizer::Node;

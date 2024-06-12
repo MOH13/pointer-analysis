@@ -2,9 +2,9 @@ use llvm_ir::Module;
 use pointer_analysis::analysis::{Cell, Config, PointsToAnalysis};
 use pointer_analysis::solver::{
     BasicDemandSolver, BasicHashSolver, ContextInsensitiveSelector, ContextInsensitiveSolver,
-    ContextSelector, DemandContextSensitiveInput, Demands, RoaringContextWavePropagationSolver,
-    RoaringTidalPropagationSolver, SharedBitVecContextWavePropagationSolver,
-    SharedBitVecTidalPropagationSolver, Solver, SolverExt,
+    ContextSelector, DemandContextSensitiveInput, Demands, RoaringTidalPropagationSolver,
+    RoaringWavePropagationSolver, SharedBitVecTidalPropagationSolver,
+    SharedBitVecWavePropagationSolver, Solver, SolverExt,
 };
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
@@ -60,7 +60,7 @@ fn basic(c: &mut Criterion) {
 }
 
 fn roaring_wave_prop(c: &mut Criterion) {
-    let solver = RoaringContextWavePropagationSolver::new().as_demand_driven();
+    let solver = RoaringWavePropagationSolver::new().as_demand_driven();
     bench_template(
         "RoaringWaveProp",
         solver,
@@ -71,7 +71,7 @@ fn roaring_wave_prop(c: &mut Criterion) {
 }
 
 fn shared_bitvec_wave_prop(c: &mut Criterion) {
-    let solver = SharedBitVecContextWavePropagationSolver::new().as_demand_driven();
+    let solver = SharedBitVecWavePropagationSolver::new().as_demand_driven();
     bench_template(
         "SharedBitVecWaveProp",
         solver,

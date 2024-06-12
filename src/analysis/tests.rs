@@ -15,9 +15,8 @@ use crate::analysis::{Config, PointsToAnalysis, ResultTrait};
 use crate::solver::{
     BasicDemandSolver, BasicHashSolver, BasicRoaringSolver, BasicSharedBitVecSolver,
     CallStringSelector, ContextInsensitiveSolver, ContextSelector, Demand,
-    DemandContextSensitiveInput, Demands, HashContextWavePropagationSolver,
-    RoaringContextWavePropagationSolver, SharedBitVecContextWavePropagationSolver,
-    SharedBitVecTidalPropagationSolver, Solver, SolverExt,
+    DemandContextSensitiveInput, Demands, HashWavePropagationSolver, RoaringWavePropagationSolver,
+    SharedBitVecTidalPropagationSolver, SharedBitVecWavePropagationSolver, Solver, SolverExt,
 };
 
 use super::Cell;
@@ -204,7 +203,7 @@ fn shared_bit_vec(resource: &str) {
 fn wave_prop(resource: &str) {
     run_test_template(
         resource,
-        HashContextWavePropagationSolver::new().as_demand_driven(),
+        HashWavePropagationSolver::new().as_demand_driven(),
         CallStringSelector::<2>::new(),
         false,
     )
@@ -215,7 +214,7 @@ fn wave_prop(resource: &str) {
 fn roaring_wave_prop(resource: &str) {
     run_test_template(
         resource,
-        RoaringContextWavePropagationSolver::new().as_demand_driven(),
+        RoaringWavePropagationSolver::new().as_demand_driven(),
         CallStringSelector::<2>::new(),
         false,
     )
@@ -226,7 +225,7 @@ fn roaring_wave_prop(resource: &str) {
 fn shared_bit_vec_wave_prop(resource: &str) {
     run_test_template(
         resource,
-        SharedBitVecContextWavePropagationSolver::new().as_demand_driven(),
+        SharedBitVecWavePropagationSolver::new().as_demand_driven(),
         CallStringSelector::<2>::new(),
         false,
     )
