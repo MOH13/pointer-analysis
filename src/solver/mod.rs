@@ -72,6 +72,20 @@ pub enum Constraint<T> {
 }
 
 impl<T> Constraint<T> {
+    pub fn get_left_and_right(&self) -> (Option<&T>, &T) {
+        match self {
+            Constraint::Inclusion { term, node } => (Some(node), term),
+            Constraint::Subset { left, right, .. } => (Some(left), right),
+            Constraint::UnivCondSubsetLeft {
+                cond_node, right, ..
+            } => (Some(cond_node), right),
+            Constraint::UnivCondSubsetRight {
+                cond_node, left, ..
+            } => (Some(left), cond_node),
+            Constraint::CallDummy { cond_node, .. } => (None, cond_node),
+        }
+    }
+
     pub fn map_terms<U, F>(&self, mut f: F) -> Constraint<U>
     where
         F: FnMut(&T) -> U,
@@ -256,10 +270,13 @@ pub trait TermSetTrait: Clone + Default + PartialEq {
     {
     }
 
-    fn print_deduplicate_stats<'a>(_sets: impl Iterator<Item = &'a Self>)
+    fn get_deduplicate_stats<'a>(
+        _sets: impl Iterator<Item = &'a Self>,
+    ) -> Box<dyn erased_serde::Serialize>
     where
         Self: 'a,
     {
+        Box::new(())
     }
 }
 

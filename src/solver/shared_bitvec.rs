@@ -1,14 +1,13 @@
 use std::collections::VecDeque;
 use std::hash::Hash;
-use std::mem;
 use std::ops::{BitAnd, BitOr};
 use std::rc::Rc;
 
 use arrayvec::ArrayVec;
 use either::Either;
-use hashbrown::HashMap;
 use itertools::Itertools;
 use sdset::exponential_search_by_key;
+use serde::Serialize;
 use smallvec::SmallVec;
 use tinybitset::TinyBitSet;
 
@@ -819,17 +818,16 @@ impl TermSetTrait for SharedBitVec {
         }
     }
 
-    fn print_deduplicate_stats<'a>(sets: impl Iterator<Item = &'a Self>)
+    fn get_deduplicate_stats<'a>(
+        sets: impl Iterator<Item = &'a Self>,
+    ) -> Box<dyn erased_serde::Serialize>
     where
         Self: 'a,
     {
-        let mut sets: Vec<_> = sets.collect();
+        let sets: Vec<_> = sets.collect();
         let total_term_sets = sets.len();
 
-        let dups: Vec<_> = get_duplicates(sets.as_mut_slice().into_iter(), |s| {
-            (s.len(), s.iter().next())
-        })
-        .collect();
+        let dups: Vec<_> = get_duplicates(sets.iter(), |s| (s.len(), s.iter().next())).collect();
 
         assert_eq!(
             dups.iter()
@@ -840,29 +838,38 @@ impl TermSetTrait for SharedBitVec {
 
         let unique_sets = dups.len();
 
-        dbg!(total_term_sets);
-        dbg!(unique_sets);
-
-        let mut chunks_vec: Vec<_> = sets
-            .iter_mut()
+        let chunks_iter = sets
+            .iter()
             .filter_map(|s| match s {
                 SharedBitVec::BitVec(inner) => Some(inner),
                 _ => None,
             })
-            .flat_map(|inner| inner.segments.iter().map(|s| &s.chunk))
-            .collect();
+            .flat_map(|inner| inner.segments.iter().map(|s| &s.chunk));
 
-        let num_segments = chunks_vec.len();
-        let num_chunks = chunks_vec.iter().counts_by(|chunk| Rc::as_ptr(chunk)).len();
-        let chunk_dups: Vec<_> = get_duplicates(chunks_vec.iter_mut(), |chunk| {
-            (chunk.len, chunk.data.iter().next())
+        let num_segments = chunks_iter.clone().count();
+        let num_chunks = chunks_iter
+            .clone()
+            .counts_by(|chunk| Rc::as_ptr(chunk))
+            .len();
+        let num_unique_chunks = chunks_iter.counts().len();
+
+        Box::new(SharedBitVecDedupStats {
+            total_term_sets,
+            unique_sets,
+            num_segments,
+            num_chunks,
+            num_unique_chunks,
         })
-        .collect();
-        let num_unique_chunks = chunk_dups.len();
-        dbg!(num_segments);
-        dbg!(num_chunks);
-        dbg!(num_unique_chunks);
     }
+}
+
+#[derive(Serialize)]
+pub struct SharedBitVecDedupStats {
+    total_term_sets: usize,
+    unique_sets: usize,
+    num_segments: usize,
+    num_chunks: usize,
+    num_unique_chunks: usize,
 }
 
 impl Hash for SharedBitVec {

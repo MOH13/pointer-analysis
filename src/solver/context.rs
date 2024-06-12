@@ -408,6 +408,10 @@ impl<T, C: ContextSelector + Clone> ContextState<T, C> {
         self.function_term_functions.contains_key(&term)
     }
 
+    pub fn function_to_fun_term(&self, f_index: u32) -> IntegerTerm {
+        self.templates[0].start_index + f_index
+    }
+
     pub fn input_to_abstract(&self, term: &T) -> IntegerTerm
     where
         T: Hash + Eq + Clone + Debug,

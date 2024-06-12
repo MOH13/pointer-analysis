@@ -4,6 +4,7 @@ use std::rc::Rc;
 
 use either::Either;
 use hashbrown::HashMap;
+use serde::Serialize;
 
 use super::TermSetTrait;
 
@@ -166,12 +167,22 @@ where
         }
     }
 
-    fn print_deduplicate_stats<'a>(sets: impl Iterator<Item = &'a Self>)
+    fn get_deduplicate_stats<'a>(
+        sets: impl Iterator<Item = &'a Self>,
+    ) -> Box<dyn erased_serde::Serialize>
     where
         Self: 'a,
     {
-        S::print_deduplicate_stats(sets.filter_map(|s| s.0.as_ref().map(Rc::as_ref)));
+        Box::new(RcDedupStats {
+            set_stats: S::get_deduplicate_stats(sets.filter_map(|s| s.0.as_ref().map(Rc::as_ref))),
+        })
     }
+}
+
+#[derive(Serialize)]
+pub struct RcDedupStats<T: erased_serde::Serialize> {
+    #[serde(flatten)]
+    set_stats: T,
 }
 
 pub fn deduplicate<'a, T, K, F1, F2>(
@@ -201,18 +212,18 @@ pub fn deduplicate<'a, T, K, F1, F2>(
     }
 }
 
-pub fn get_duplicates<'a, T, K, F>(
-    elems: impl Iterator<Item = &'a mut T>,
+pub fn get_duplicates<T, K, F>(
+    elems: impl Iterator<Item = T>,
     mut key_fn: F,
-) -> impl Iterator<Item = (&'a mut T, Vec<&'a mut T>)>
+) -> impl Iterator<Item = (T, Vec<T>)>
 where
-    T: Eq + 'a,
+    T: Eq,
     F: FnMut(&T) -> K,
     K: PartialEq + Eq + Hash,
 {
-    let mut unique_sets_map = HashMap::<K, Vec<(&'a mut T, Vec<&'a mut T>)>>::new();
+    let mut unique_sets_map = HashMap::<K, Vec<(T, Vec<T>)>>::new();
     for elem in elems {
-        let similar_sets = unique_sets_map.entry(key_fn(elem)).or_default();
+        let similar_sets = unique_sets_map.entry(key_fn(&elem)).or_default();
         let mut val = Some(elem);
         for (s2, duplicates) in similar_sets.as_mut_slice() {
             let Some(inner) = &val else { unreachable!() };

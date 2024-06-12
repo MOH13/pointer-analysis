@@ -9,6 +9,7 @@ use bitvec::prelude::*;
 use either::Either;
 use hashbrown::hash_map::Entry;
 use hashbrown::{HashMap, HashSet};
+use itertools::Itertools;
 use once_cell::unsync::Lazy;
 use roaring::RoaringBitmap;
 use serde::Serialize;
@@ -258,8 +259,15 @@ where
                     .context_state
                     .function_term_functions
                     .get(&term)
-                    .expect("function term should have a function")
-                    as usize;
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "function term should have a function: {:?}\n{:?}",
+                            self.context_state.concrete_to_input(term),
+                            (0..self.context_state.num_concrete_terms() as IntegerTerm)
+                                .map(|t| self.context_state.concrete_to_input(t))
+                                .collect_vec()
+                        )
+                    }) as usize;
                 let function_term = self.get_or_instantiate_function(f_index, new_context);
                 (offset <= allowed).then(|| function_term + offset as IntegerTerm)
             }
@@ -387,7 +395,7 @@ where
         }
 
         for (i, function_term_info) in function_term_infos.into_iter().enumerate() {
-            let fun_term = (input.global.terms.len() + i) as IntegerTerm;
+            let fun_term = context_state.function_to_fun_term(i as u32);
             term_types[fun_term as usize] = function_term_info.term_type;
             sols[function_term_info.pointer_node as usize].insert(fun_term);
         }
@@ -432,12 +440,12 @@ where
             );
         }
 
-        // for entrypoint in entrypoints {
-        //     state.get_or_instantiate_function(entrypoint, empty_context.clone());
-        // }
-        for entrypoint in 0..state.context_state.templates.len() {
+        for entrypoint in input.entrypoints {
             state.get_or_instantiate_function(entrypoint, empty_context.clone());
         }
+        // for entrypoint in 0..state.context_state.templates.len() {
+        //     state.get_or_instantiate_function(entrypoint, empty_context.clone());
+        // }
 
         state.run_wave_propagation();
 
