@@ -375,11 +375,14 @@ where
             .drain(..)
             .map(|t| get_representative(&mut self.parents, t))
             .collect();
-        let top_order = scc::<ForwardUnweightedSccVisitState<NoCollapseMarker, _, _, _>>(
-            self,
+        let top_order = scc(
+            &self
+                .edges
+                .scc(SccDirection::Forward, EdgeVisitMode::WithWeighted),
             new_incoming,
-            |_, _, _| {},
-        );
+            |_, _| {},
+        )
+        .into_top_order();
 
         for &v in top_order.iter().rev() {
             // Skip if no new terms in solution set
@@ -1290,6 +1293,18 @@ impl<C: ContextSelector, S: TermSetTrait> Edges<C, S> {
             .iter()
             .filter_map(move |(v, offsets)| offsets.scc_edge_only_unweighted().map(|w| (*v, w)))
     }
+
+    fn scc<'e>(
+        &'e self,
+        direction: SccDirection,
+        mode: EdgeVisitMode,
+    ) -> SccEdgesAdapter<'e, C, E> {
+        SccEdgesAdapter {
+            edges: self,
+            direction,
+            mode,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1304,10 +1319,38 @@ enum EdgeVisitMode {
     WithWeighted,
 }
 
-struct SccEdgesAdapter<'e> {
-    edges: &'e Edges,
+struct SccEdgesAdapter<'e, C: ContextSelector, S> {
+    edges: &'e Edges<C, S>,
     direction: SccDirection,
     mode: EdgeVisitMode,
+}
+
+impl<'e, C: ContextSelector, S> SccEdges for SccEdgesAdapter<'e, C, S> {
+    fn node_count(&self) -> usize {
+        self.edges.subset.len()
+    }
+
+    fn successors(
+        &self,
+        node: IntegerTerm,
+    ) -> impl Iterator<Item = (IntegerTerm, super::scc::SccEdgeWeight)> {
+        let edges_iter = match self.direction {
+            SccDirection::Forward => Either::Left(self.edges.subset[node as usize].iter()),
+            SccDirection::Backward => Either::Right(
+                self.edges.rev_subset[node as usize]
+                    .iter()
+                    .map(move |w| (w, self.edges.subset[*w as usize].get(&node).unwrap())),
+            ),
+        };
+        edges_iter.filter_map(|(w, offsets)| {
+            if self.mode == EdgeVisitMode::OnlyNonWeighted {
+                return offsets
+                    .scc_edge_only_unweighted()
+                    .map(|weight| (*w, weight));
+            }
+            Some((*w, offsets.scc_edge_weight()))
+        })
+    }
 }
 
 // fn successors(

@@ -165,5 +165,4 @@ pub trait SccGraph {
 pub trait SccEdges {
     fn node_count(&self) -> usize;
     fn successors(&self, node: IntegerTerm) -> impl Iterator<Item = (IntegerTerm, SccEdgeWeight)>;
-    fn collapse_mode(&self) -> CollapseMode;
 }
