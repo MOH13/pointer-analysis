@@ -145,12 +145,6 @@ fn dfs_add_and_finish(internal: &mut SccResult, edges: &impl SccEdges, v: Intege
     internal.top_order.push(v);
 }
 
-#[derive(PartialEq, Eq, Clone, Copy)]
-pub enum CollapseMode {
-    On,
-    Off,
-}
-
 #[must_use]
 pub struct SccResult {
     node_count: usize,

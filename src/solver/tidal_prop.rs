@@ -320,8 +320,11 @@ where
                     }
 
                     for &w in &self.edges.stores[v as usize] {
-                        self.new_points_to_queries.push(w);
-                        changed = true;
+                        let w = get_representative(&mut self.parents, w);
+                        if !self.points_to_queries.test(w as usize) {
+                            self.new_points_to_queries.push(w);
+                            changed = true;
+                        }
                     }
 
                     for &w in &self.return_and_parameter_children[v as usize] {
@@ -837,12 +840,12 @@ where
             );
         }
 
-        for (f_index, f) in input.input.functions.iter().enumerate() {
+        for (f_index, f) in state.context_state.templates.iter().enumerate() {
             let f_index = f_index as u32;
-            for c in &f.constrained_terms.constraints {
+            for c in &f.constraints {
                 let (left, right) = c.get_left_and_right();
                 if let Some(left) = left {
-                    if let Some(global) = state.context_state.term_to_concrete_global(left) {
+                    if let TemplateTerm::Global(global) = *left {
                         state.mention_points_to[global as usize].push(f_index);
                         state.mention_pointed_by[global as usize].push(f_index);
 
@@ -851,7 +854,7 @@ where
                         }
                     }
                 }
-                if let Some(global) = state.context_state.term_to_concrete_global(right) {
+                if let TemplateTerm::Global(global) = *right {
                     state.mention_points_to[global as usize].push(f_index);
                     state.mention_pointed_by[global as usize].push(f_index);
 
