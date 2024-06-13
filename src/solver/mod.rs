@@ -570,6 +570,7 @@ pub enum Demands<T> {
     CallGraphPointsTo,
     CallGraphPointedBy,
     NonTrivial,
+    NonTrivialOnlyHalf,
     Escape,
     List(Vec<Demand<T>>),
 }
@@ -1008,6 +1009,9 @@ impl Offsets {
     }
 
     pub fn contains(&self, offset: usize) -> bool {
+        if offset == 0 {
+            return self.has_zero();
+        }
         match self {
             Self::Zero => offset == 0,
             Self::Complex(offsets) => offsets.contains(&offset),
@@ -1073,13 +1077,24 @@ impl Offsets {
             Offsets::Complex(offsets) => offsets.iter().any(|&o| o != 0),
         }
     }
+
+    #[inline(always)]
+    pub fn has_zero(&self) -> bool {
+        match self {
+            Offsets::Zero => true,
+            Offsets::Complex(offsets) => offsets[0] == 0,
+        }
+    }
+
+    #[inline(always)]
     pub fn scc_edge_only_unweighted(&self) -> Option<SccEdgeWeight> {
-        if self.contains(0) {
+        if self.has_zero() {
             return Some(SccEdgeWeight::Unweighted);
         }
         None
     }
 
+    #[inline]
     pub fn scc_edge_weight(&self) -> SccEdgeWeight {
         match self {
             Offsets::Zero => SccEdgeWeight::Unweighted,

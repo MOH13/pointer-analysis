@@ -2,7 +2,7 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::time::Duration;
-use std::{iter, mem};
+use std::{iter, mem, thread};
 
 use bitvec::prelude::*;
 use either::Either;
@@ -18,7 +18,7 @@ use thin_vec::ThinVec;
 use super::context::{ContextState, TemplateTerm};
 use super::context_wave_prop::WavePropSerialize;
 use super::rc_termset::RcTermSet;
-use super::scc::{scc, SccEdges, SccGraph};
+use super::scc::{scc, EdgeVisitMode, SccEdgeWeight, SccEdges, SccGraph, WithWeightedMode};
 use super::shared_bitvec::SharedBitVec;
 use super::{
     insert_edge, try_offset_term, CallSite, Constraint, ContextSelector, Demand,
@@ -26,6 +26,7 @@ use super::{
     SolverSolution, TermSetTrait, TermType,
 };
 
+use crate::solver::scc::OnlyNonWeightedMode;
 use crate::util::GetManyMutExt;
 use crate::visualizer::{Edge, EdgeKind, Graph, Node, OffsetWeight};
 
@@ -76,21 +77,25 @@ impl<S, C> TidalPropagationSolver<S, C> {
 }
 
 struct PointedByQueries<S> {
-    bitset: uniset::BitSet,
+    bitset: BitVec,
     termset: S,
 }
 
 impl<S: TermSetTrait<Term = IntegerTerm>> PointedByQueries<S> {
     fn new(len: usize) -> Self {
         Self {
-            bitset: uniset::BitSet::with_capacity(len),
+            bitset: BitVec::repeat(false, len),
             termset: S::new(),
         }
     }
 
+    fn resize(&mut self, new_len: usize) {
+        self.bitset.resize(new_len, false);
+    }
+
     fn insert(&mut self, term: IntegerTerm) -> bool {
         if !self.contains(term) {
-            self.bitset.set(term as usize);
+            self.bitset.set(term as usize, true);
             self.termset.insert(term);
             return true;
         }
@@ -98,7 +103,7 @@ impl<S: TermSetTrait<Term = IntegerTerm>> PointedByQueries<S> {
     }
 
     fn contains(&self, term: IntegerTerm) -> bool {
-        self.bitset.test(term as usize)
+        self.bitset[term as usize]
     }
 
     fn get_termset(&self) -> &S {
@@ -121,6 +126,8 @@ pub struct TidalPropagationSolverState<T, S, C: ContextSelector> {
     mention_points_to: Vec<SmallVec<[u32; 2]>>,
     /// For each node, track functions to query if node gets pointed-by query
     mention_pointed_by: Vec<SmallVec<[u32; 2]>>,
+    /// For each node, track functions to query if node points to a term with a pointed-by query
+    mention_points_to_pointed_by: Vec<SmallVec<[u32; 2]>>,
     return_and_parameter_children: Vec<SmallVec<[IntegerTerm; 2]>>,
     abstract_points_to_queries: BitVec,
     abstract_pointed_by_queries: BitVec,
@@ -149,6 +156,7 @@ where
 {
     fn run_tidal_propagation(&mut self) {
         let mut changed = true;
+
         while changed {
             self.iters += 1;
 
@@ -188,9 +196,7 @@ where
 
     fn collapse_cycles(&mut self) {
         scc(
-            &self
-                .edges
-                .scc_edges(SccDirection::Forward, EdgeVisitMode::OnlyNonWeighted),
+            &self.edges.scc::<SccForwardMode, OnlyNonWeightedMode>(),
             self.new_incoming.clone(),
             |_, _| {},
         )
@@ -220,14 +226,14 @@ where
 
             // Points-to query propagation
             scc(
-                &self
-                    .edges
-                    .scc_edges(SccDirection::Backward, EdgeVisitMode::WithWeighted),
+                &self.edges.scc::<SccBackwardMode, WithWeightedMode>(),
                 pt_starting_nodes,
                 |v, to_visit| {
                     if self.points_to_queries.test(v as usize) {
                         return;
                     }
+                    // println!("pt: {:?}", self.context_state.concrete_to_input(v));
+                    // thread::sleep(Duration::from_millis(100));
                     self.points_to_queries.set(v as usize);
                     new_queries += 1;
                     self.new_pointed_by_queries.push(v);
@@ -257,6 +263,13 @@ where
                     }
 
                     for f_index in mem::take(&mut self.mention_points_to[v as usize]) {
+                        // println!(
+                        //     "mention pt: {:?} triggers {:?}",
+                        //     self.context_state.concrete_to_input(v),
+                        //     self.context_state.context_of_concrete_index(
+                        //         self.context_state.function_to_fun_term(f_index)
+                        //     )
+                        // );
                         self.new_pointed_by_queries
                             .push(self.context_state.function_to_fun_term(f_index));
                     }
@@ -292,9 +305,7 @@ where
 
             // Pointed-by query propagation
             scc(
-                &self
-                    .edges
-                    .scc_edges(SccDirection::Forward, EdgeVisitMode::OnlyNonWeighted),
+                &self.edges.scc::<SccForwardMode, OnlyNonWeightedMode>(),
                 pb_starting_nodes,
                 |v, to_visit| {
                     if self.visited_pointed_by.test(v as usize) {
@@ -346,6 +357,18 @@ where
                             }
                         }
                     }
+
+                    for f_index in mem::take(&mut self.mention_points_to_pointed_by[v as usize]) {
+                        self.new_pointed_by_queries
+                            .push(self.context_state.function_to_fun_term(f_index));
+                        // println!(
+                        //     "mention pt-pb: {:?} triggers {:?}",
+                        //     self.context_state.concrete_to_input(v),
+                        //     self.context_state.concrete_to_input(
+                        //         self.context_state.function_to_fun_term(f_index)
+                        //     )
+                        // );
+                    }
                 },
             )
             .finish();
@@ -359,6 +382,8 @@ where
                 }
                 if !new_pointed_by_queries_bitset[v as usize] {
                     new_pointed_by_queries_bitset.set(v as usize, true);
+                    // println!("pb: {:?}", self.context_state.concrete_to_input(v));
+                    // thread::sleep(Duration::from_millis(100));
                     for &w in &self.edges.addr_ofs[v as usize] {
                         let w = get_representative(&mut self.parents, w);
                         self.sols[w as usize].insert(v);
@@ -367,6 +392,13 @@ where
                     self.pointed_by_queries.insert(v);
 
                     for f_index in mem::take(&mut self.mention_pointed_by[v as usize]) {
+                        // println!(
+                        //     "mention pb: {:?} triggers {:?}",
+                        //     self.context_state.concrete_to_input(v),
+                        //     self.context_state.context_of_concrete_index(
+                        //         self.context_state.function_to_fun_term(f_index)
+                        //     )
+                        // );
                         self.new_pointed_by_queries
                             .push(self.context_state.function_to_fun_term(f_index));
                     }
@@ -386,9 +418,7 @@ where
             .map(|t| get_representative(&mut self.parents, t))
             .collect();
         let top_order = scc(
-            &self
-                .edges
-                .scc_edges(SccDirection::Forward, EdgeVisitMode::WithWeighted),
+            &self.edges.scc::<SccForwardMode, WithWeightedMode>(),
             new_incoming,
             |_, _| {},
         )
@@ -603,9 +633,13 @@ where
                 (0..num_instantiated).map(|i| (instantiated_start_index + i) as IntegerTerm),
             );
 
+            self.pointed_by_queries.resize(new_len);
+
             self.p_old.resize_with(new_len, S::new);
             self.mention_points_to.resize_with(new_len, SmallVec::new);
             self.mention_pointed_by.resize_with(new_len, SmallVec::new);
+            self.mention_points_to_pointed_by
+                .resize_with(new_len, SmallVec::new);
             self.return_and_parameter_children
                 .resize_with(new_len, SmallVec::new);
             for i in 0..(template.num_return_terms + template.num_parameter_terms) as usize {
@@ -819,6 +853,7 @@ where
             visited_pointed_by: uniset::BitSet::new(),
             mention_points_to: vec![SmallVec::new(); num_terms],
             mention_pointed_by: vec![SmallVec::new(); num_terms],
+            mention_points_to_pointed_by: vec![SmallVec::new(); num_terms],
             return_and_parameter_children: vec![SmallVec::new(); num_terms],
             abstract_points_to_queries: bitvec::bitvec![0; num_abstract_terms],
             abstract_pointed_by_queries: bitvec::bitvec![0; num_abstract_terms],
@@ -843,23 +878,58 @@ where
         for (f_index, f) in state.context_state.templates.iter().enumerate() {
             let f_index = f_index as u32;
             for c in &f.constraints {
-                let (left, right) = c.get_left_and_right();
-                if let Some(left) = left {
-                    if let TemplateTerm::Global(global) = *left {
-                        state.mention_points_to[global as usize].push(f_index);
-                        state.mention_pointed_by[global as usize].push(f_index);
-
-                        if let Some(fun_term) = state.global_to_fun_term(global) {
-                            state.mention_pointed_by[fun_term as usize].push(f_index);
+                match c {
+                    Constraint::Inclusion { term, node } => {
+                        if let TemplateTerm::Global(global) = *term {
+                            state.mention_pointed_by[global as usize].push(f_index);
+                        }
+                        if let TemplateTerm::Global(global) = *node {
+                            state.mention_points_to[global as usize].push(f_index);
                         }
                     }
-                }
-                if let TemplateTerm::Global(global) = *right {
-                    state.mention_points_to[global as usize].push(f_index);
-                    state.mention_pointed_by[global as usize].push(f_index);
-
-                    if let Some(fun_term) = state.global_to_fun_term(global) {
-                        state.mention_pointed_by[fun_term as usize].push(f_index);
+                    Constraint::Subset { left, right, .. } => {
+                        if let TemplateTerm::Global(global) = *left {
+                            state.mention_points_to_pointed_by[global as usize].push(f_index);
+                        }
+                        if let TemplateTerm::Global(global) = *right {
+                            state.mention_points_to[global as usize].push(f_index);
+                        }
+                    }
+                    Constraint::UnivCondSubsetLeft {
+                        cond_node,
+                        right,
+                        call_site,
+                        ..
+                    } => {
+                        if let TemplateTerm::Global(global) = *cond_node {
+                            state.mention_points_to_pointed_by[global as usize].push(f_index);
+                        }
+                        if let TemplateTerm::Global(global) = *right {
+                            state.mention_points_to[global as usize].push(f_index);
+                        }
+                    }
+                    Constraint::UnivCondSubsetRight {
+                        cond_node,
+                        left,
+                        call_site,
+                        ..
+                    } => {
+                        if let TemplateTerm::Global(global) = *left {
+                            state.mention_points_to_pointed_by[global as usize].push(f_index);
+                        }
+                        if let TemplateTerm::Global(global) = *cond_node {
+                            state.mention_points_to_pointed_by[global as usize].push(f_index);
+                        }
+                    }
+                    Constraint::CallDummy {
+                        cond_node,
+                        arguments,
+                        result_node,
+                        call_site,
+                    } => {
+                        if let TemplateTerm::Global(global) = *cond_node {
+                            state.mention_points_to_pointed_by[global as usize].push(f_index);
+                        }
                     }
                 }
             }
@@ -1113,6 +1183,10 @@ where
 
         let child_mention_points_to = mem::take(&mut self.mention_points_to[child as usize]);
         self.mention_points_to[parent as usize].extend_from_slice(&child_mention_points_to);
+        let child_mention_points_to_pointed_by =
+            mem::take(&mut self.mention_points_to_pointed_by[child as usize]);
+        self.mention_points_to_pointed_by[parent as usize]
+            .extend_from_slice(&child_mention_points_to_pointed_by);
 
         let child_return_and_parameter_children =
             mem::take(&mut self.return_and_parameter_children[child as usize]);
@@ -1300,38 +1374,62 @@ impl<C: ContextSelector, S: TermSetTrait> Edges<C, S> {
         self.stores.resize_with(size, SmallVec::new);
     }
 
-    fn scc_edges<'e>(
-        &'e self,
-        direction: SccDirection,
-        mode: EdgeVisitMode,
-    ) -> SccEdgesAdapter<'e, C, S> {
+    fn scc<'e, D: SccDirectionMode, V: EdgeVisitMode>(&'e self) -> SccEdgesAdapter<'e, D, V, C, S> {
         SccEdgesAdapter {
             edges: self,
-            direction,
-            mode,
+            phantom: PhantomData,
         }
     }
 }
 
-#[derive(Clone, Copy)]
-enum SccDirection {
-    Forward,
-    Backward,
-}
-
-#[derive(PartialEq, Eq, Clone, Copy)]
-enum EdgeVisitMode {
-    OnlyNonWeighted,
-    WithWeighted,
-}
-
-struct SccEdgesAdapter<'e, C: ContextSelector, S> {
+struct SccEdgesAdapter<'e, D: SccDirectionMode, V: EdgeVisitMode, C: ContextSelector, S> {
     edges: &'e Edges<C, S>,
-    direction: SccDirection,
-    mode: EdgeVisitMode,
+    phantom: PhantomData<(D, V)>,
 }
 
-impl<'e, C: ContextSelector, S> SccEdges for SccEdgesAdapter<'e, C, S> {
+trait SccDirectionMode {
+    fn successors<C: ContextSelector, S>(
+        edges: &Edges<C, S>,
+        node: IntegerTerm,
+    ) -> impl Iterator<Item = (IntegerTerm, SccEdgeWeight)>;
+}
+
+struct SccForwardMode;
+
+impl SccDirectionMode for SccForwardMode {
+    #[inline(always)]
+    fn successors<C: ContextSelector, S>(
+        edges: &Edges<C, S>,
+        node: IntegerTerm,
+    ) -> impl Iterator<Item = (IntegerTerm, SccEdgeWeight)> {
+        edges.subset[node as usize]
+            .iter()
+            .map(|(w, offsets)| (*w, offsets.scc_edge_weight()))
+    }
+}
+
+struct SccBackwardMode;
+
+impl SccDirectionMode for SccBackwardMode {
+    fn successors<C: ContextSelector, S>(
+        edges: &Edges<C, S>,
+        node: IntegerTerm,
+    ) -> impl Iterator<Item = (IntegerTerm, SccEdgeWeight)> {
+        edges.rev_subset[node as usize].iter().map(move |w| {
+            (
+                *w,
+                edges.subset[*w as usize]
+                    .get(&node)
+                    .unwrap()
+                    .scc_edge_weight(),
+            )
+        })
+    }
+}
+
+impl<'e, D: SccDirectionMode, V: EdgeVisitMode, C: ContextSelector, S> SccEdges
+    for SccEdgesAdapter<'e, D, V, C, S>
+{
     fn node_count(&self) -> usize {
         self.edges.subset.len()
     }
@@ -1340,22 +1438,8 @@ impl<'e, C: ContextSelector, S> SccEdges for SccEdgesAdapter<'e, C, S> {
         &self,
         node: IntegerTerm,
     ) -> impl Iterator<Item = (IntegerTerm, super::scc::SccEdgeWeight)> {
-        let edges_iter = match self.direction {
-            SccDirection::Forward => Either::Left(self.edges.subset[node as usize].iter()),
-            SccDirection::Backward => Either::Right(
-                self.edges.rev_subset[node as usize]
-                    .iter()
-                    .map(move |w| (w, self.edges.subset[*w as usize].get(&node).unwrap())),
-            ),
-        };
-        edges_iter.filter_map(|(w, offsets)| {
-            if self.mode == EdgeVisitMode::OnlyNonWeighted {
-                return offsets
-                    .scc_edge_only_unweighted()
-                    .map(|weight| (*w, weight));
-            }
-            Some((*w, offsets.scc_edge_weight()))
-        })
+        let edges_iter = D::successors(self.edges, node);
+        edges_iter.filter_map(V::filter)
     }
 }
 

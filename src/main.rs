@@ -33,6 +33,7 @@ fn get_demands(args: &Args) -> Demands<Cell> {
             CallGraphMode::PointsTo => Demands::CallGraphPointsTo,
             CallGraphMode::PointedBy => Demands::CallGraphPointedBy,
             CallGraphMode::NonTrivial => Demands::NonTrivial,
+            CallGraphMode::NonTrivialOnlyHalf => Demands::NonTrivialOnlyHalf,
         },
         DemandMode::Escape => Demands::Escape,
         DemandMode::List => {

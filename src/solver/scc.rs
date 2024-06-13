@@ -230,11 +230,31 @@ impl SccResult {
     pub fn finish(self) {}
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone, Copy)]
 pub enum SccEdgeWeight {
     Unweighted,
     Weighted,
     Both,
+}
+
+pub trait EdgeVisitMode {
+    fn filter(entry: (IntegerTerm, SccEdgeWeight)) -> Option<(IntegerTerm, SccEdgeWeight)>;
+}
+
+pub struct OnlyNonWeightedMode;
+
+impl EdgeVisitMode for OnlyNonWeightedMode {
+    fn filter(entry: (IntegerTerm, SccEdgeWeight)) -> Option<(IntegerTerm, SccEdgeWeight)> {
+        (entry.1 != SccEdgeWeight::Weighted).then_some((entry.0, SccEdgeWeight::Unweighted))
+    }
+}
+
+pub struct WithWeightedMode;
+
+impl EdgeVisitMode for WithWeightedMode {
+    fn filter(entry: (IntegerTerm, SccEdgeWeight)) -> Option<(IntegerTerm, SccEdgeWeight)> {
+        Some(entry)
+    }
 }
 
 pub trait SccGraph {

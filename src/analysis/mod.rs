@@ -1,4 +1,5 @@
 use indexmap::IndexMap;
+use itertools::Itertools;
 use std::cell::{RefCell, RefMut};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::mem;
@@ -34,6 +35,15 @@ pub struct Config {
 }
 
 pub struct PointsToAnalysis;
+
+fn try_get_call_dummy_cond_node(cstr: &Constraint<Cell>) -> Option<Cell> {
+    if let Constraint::CallDummy { cond_node, .. } = cstr {
+        if !matches!(cond_node, Cell::Var(VarIdent::Global { .. })) {
+            return Some(cond_node.clone());
+        }
+    }
+    return None;
+}
 
 impl PointsToAnalysis {
     fn solve_module<'a, S, C>(
@@ -157,6 +167,26 @@ impl PointsToAnalysis {
                         }
                     }
                 }
+                (list, false)
+            }
+            Demands::NonTrivialOnlyHalf => {
+                let mut func_vec = functions
+                    .iter()
+                    .map(|f| {
+                        f.constrained_terms
+                            .constraints
+                            .iter()
+                            .filter_map(try_get_call_dummy_cond_node)
+                            .map(Demand::PointsTo)
+                            .collect_vec()
+                    })
+                    .collect_vec();
+                func_vec.sort_by_key(|f| f.len());
+
+                let list = func_vec.into_iter().rev().take(1).flatten().collect_vec();
+
+                dbg!(&list);
+
                 (list, false)
             }
             Demands::Escape => {

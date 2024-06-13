@@ -172,6 +172,7 @@ pub enum CallGraphMode {
     PointsTo,
     PointedBy,
     NonTrivial,
+    NonTrivialOnlyHalf,
 }
 
 impl Display for CallGraphMode {
@@ -180,6 +181,7 @@ impl Display for CallGraphMode {
             CallGraphMode::PointsTo => write!(f, "points-to"),
             CallGraphMode::PointedBy => write!(f, "pointed-by"),
             CallGraphMode::NonTrivial => write!(f, "non-trivial"),
+            CallGraphMode::NonTrivialOnlyHalf => write!(f, "non-trivial-only-half"),
         }
     }
 }
