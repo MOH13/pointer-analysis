@@ -135,11 +135,12 @@ pub struct TidalPropagationSolverState<T, S, C: ContextSelector> {
     new_pointed_by_queries: Vec<IntegerTerm>,
     new_incoming: Vec<IntegerTerm>,
     iters: u64,
+    aggressive_dedup: bool,
     scc_time: Duration,
     query_propagation_time: Duration,
     term_propagation_time: Duration,
     edge_instantiation_time: Duration,
-    aggressive_dedup: bool,
+    dedup_time: Duration,
 }
 
 impl<T, S, C: ContextSelector> TidalPropagationSolverState<T, S, C> {
@@ -178,7 +179,9 @@ where
             self.edge_instantiation_time += edge_instantiation_start.elapsed();
 
             if self.aggressive_dedup {
+                let dedup_start = std::time::Instant::now();
                 self.deduplicate(&changed_terms);
+                self.dedup_time += dedup_start.elapsed();
             }
 
             eprintln!("Iteration {}", self.iters);
@@ -861,11 +864,12 @@ where
             new_pointed_by_queries: vec![],
             new_incoming: vec![],
             iters: 0,
+            aggressive_dedup: self.2,
             scc_time: Duration::ZERO,
             query_propagation_time: Duration::ZERO,
             term_propagation_time: Duration::ZERO,
             edge_instantiation_time: Duration::ZERO,
-            aggressive_dedup: self.2,
+            dedup_time: Duration::ZERO,
         };
 
         for c in &input.input.global.constraints {
@@ -1280,6 +1284,7 @@ where
                 scc_time_ms: self.scc_time.as_secs_f64() * 1000.0,
                 term_propagation_time_ms: self.term_propagation_time.as_secs_f64() * 1000.0,
                 edge_instantiation_time_ms: self.edge_instantiation_time.as_secs_f64() * 1000.0,
+                dedup_time_ms: self.dedup_time.as_secs_f64() * 1000.0,
             },
             query_propagation_time_ms: self.query_propagation_time.as_secs_f64() * 1000.0,
             points_to_queries: points_to_queries.iter().count(),

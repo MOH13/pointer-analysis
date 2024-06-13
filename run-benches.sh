@@ -77,37 +77,42 @@ for bench in "${benches[@]}"; do
 
     echoerr "Tidal Propagation (Shared)"
     echo "    \"tidal_shared\": ["
-    run_three $@ -s tidal $bench
+    run_three $@ -s tidal -a $bench
     echo "    ],"
 
     echoerr "Tidal Propagation (Roaring call graph)"
     echo "    \"tidal_roaring\": ["
-    run_three $@ -s tidal -t roaring -d call-graph $bench
+    run_three $@ -s tidal -t roaring -d call-graph -g non-trivial -a $bench
     echo "    ],"
 
     echoerr "Tidal Propagation (Call graph)"
     echo "    \"tidal_call_graph\": ["
-    run_three $@ -s tidal -d call-graph $bench
+    run_three $@ -s tidal -d call-graph -g non-trivial -a $bench
+    echo "    ],"
+
+    echoerr "Tidal Propagation (Call graph, non-aggressive)"
+    echo "    \"tidal_non_aggressive\": ["
+    run_three $@ -s tidal -d call-graph -g non-trivial $bench
     echo "    ],"
 
     echoerr "Wave Propagation (Shared)"
     echo "    \"wave_shared\": ["
-    run_three $@ -s wave $bench
+    run_three $@ -s wave -a $bench
     echo "    ],"
 
-    echoerr "Wave Propagation (Roaring)"
-    echo "    \"wave_roaring\": ["
-    run_three $@ -s wave -t roaring $bench
-    echo "    ],"
+    # echoerr "Wave Propagation (Roaring)"
+    # echo "    \"wave_roaring\": ["
+    # run_three $@ -s wave -t roaring -a $bench
+    # echo "    ],"
 
-    echoerr "Demand Worklist (Hash)"
-    echo "    \"demand_hash\": ["
-    run_three $@ -s basic-demand -t hash $bench
-    echo "    ],"
+    # echoerr "Demand Worklist (Hash)"
+    # echo "    \"demand_hash\": ["
+    # run_three $@ -s basic-demand -t hash $bench
+    # echo "    ],"
 
     echoerr "Demand Worklist (Call graph)"
     echo "    \"demand_call_graph\": ["
-    run_three $@ -s basic-demand -t hash -d call-graph $bench
+    run_three $@ -s basic-demand -t hash -d call-graph -g non-trivial $bench
     echo "    ]"
 
     if [ "$bench" = ${benches[-1]} ]; then
