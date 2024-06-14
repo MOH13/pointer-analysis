@@ -1940,6 +1940,59 @@
         "dedup_time_ms": 63.842169000000005,
         "memory": 124473344
       }
+    ],
+    "demand_call_graph": [
+      {
+        "module_parse_time_ms": 46.813831,
+        "pre_analysis_time_ms": 12.382126,
+        "constraint_gen_time_ms": 11.931228,
+        "solver_time_ms": 1696.826526,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.0158013544018059,
+        "mean_non_trivial_call_edges": 21.2,
+        "edges": 816371,
+        "instantiated_contexts": 2301,
+        "instantiated_nodes": 161519,
+        "non_empty_nodes": 73273,
+        "points_to_queries": 26970,
+        "pointed_by_queries": 76810,
+        "memory": 255533056
+      },
+      {
+        "module_parse_time_ms": 45.468103,
+        "pre_analysis_time_ms": 12.087977,
+        "constraint_gen_time_ms": 11.588146,
+        "solver_time_ms": 1754.016861,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.0158013544018059,
+        "mean_non_trivial_call_edges": 21.2,
+        "edges": 816371,
+        "instantiated_contexts": 2301,
+        "instantiated_nodes": 161519,
+        "non_empty_nodes": 73273,
+        "points_to_queries": 26970,
+        "pointed_by_queries": 76810,
+        "memory": 255303680
+      },
+      {
+        "module_parse_time_ms": 46.34481,
+        "pre_analysis_time_ms": 12.192806000000001,
+        "constraint_gen_time_ms": 11.638641999999999,
+        "solver_time_ms": 1728.93193,
+        "num_called_functions": 443,
+        "num_called_non_trivial_functions": 10,
+        "mean_call_edges": 1.0158013544018059,
+        "mean_non_trivial_call_edges": 21.2,
+        "edges": 816371,
+        "instantiated_contexts": 2301,
+        "instantiated_nodes": 161519,
+        "non_empty_nodes": 73273,
+        "points_to_queries": 26970,
+        "pointed_by_queries": 76810,
+        "memory": 255528960
+      }
     ]
   },
   "openssl": {
