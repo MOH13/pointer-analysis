@@ -10,6 +10,7 @@ heaptrack.*
 perf.data
 perf.data.old
 *.ll
+table_output/
 
 # Created by run-benches.sh
 stderr.txt

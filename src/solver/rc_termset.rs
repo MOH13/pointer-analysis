@@ -4,6 +4,7 @@ use std::rc::Rc;
 
 use either::Either;
 use hashbrown::HashMap;
+use itertools::Itertools;
 use serde::Serialize;
 
 use super::TermSetTrait;
@@ -174,7 +175,11 @@ where
         Self: 'a,
     {
         Box::new(RcDedupStats {
-            set_stats: S::get_deduplicate_stats(sets.filter_map(|s| s.0.as_ref().map(Rc::as_ref))),
+            set_stats: S::get_deduplicate_stats(
+                sets.filter_map(|s| s.0.as_ref())
+                    .unique_by(|rc| Rc::as_ptr(rc))
+                    .map(Rc::as_ref),
+            ),
         })
     }
 }

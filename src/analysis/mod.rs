@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use hashbrown::{HashMap, HashSet};
 use llvm_ir::Module;
-use log::error;
+use log::{error, warn};
 
 use crate::cstr;
 use crate::module_visitor::pointer::{
@@ -105,6 +105,19 @@ impl PointsToAnalysis {
             .filter_map(|(f, _)| *f)
             .position(|func_name| func_name == "main")
             .expect("Could not find a main function");
+
+        let potential_malloc_wrappers = pre_analyzer
+            .functions
+            .iter()
+            .filter_map(|(f, _)| f.filter(|f| f.contains("alloc")))
+            .collect_vec();
+
+        if potential_malloc_wrappers.len() > 0 {
+            warn!(
+                "Found potential malloc-wrappers: {:?}",
+                potential_malloc_wrappers
+            );
+        }
 
         let functions: Vec<_> = pre_analyzer
             .functions

@@ -428,7 +428,9 @@
       }
     ],
     "demand_call_graph": [
-      { "error": "DNF" }
+      {
+        "error": "DNF"
+      }
     ]
   },
   "curl": {
@@ -1342,7 +1344,9 @@
       }
     ],
     "demand_call_graph": [
-      { "error": "DNF" }
+      {
+        "error": "DNF"
+      }
     ]
   },
   "htop": {
@@ -1872,9 +1876,9 @@
         "query_propagation_time_ms": 10.289648,
         "points_to_queries": 9068,
         "pointed_by_queries": 38373,
-        "total_term_sets": 77083,
+        "total_term_sets": 5964,
         "unique_sets": 4981,
-        "num_segments": 395719,
+        "num_segments": 1834,
         "num_chunks": 471,
         "num_unique_chunks": 471,
         "memory": 85135360
@@ -1901,9 +1905,9 @@
         "query_propagation_time_ms": 10.263076,
         "points_to_queries": 9068,
         "pointed_by_queries": 38373,
-        "total_term_sets": 77083,
+        "total_term_sets": 5964,
         "unique_sets": 4981,
-        "num_segments": 395719,
+        "num_segments": 1834,
         "num_chunks": 471,
         "num_unique_chunks": 471,
         "memory": 85139456
@@ -1930,9 +1934,9 @@
         "query_propagation_time_ms": 10.17605,
         "points_to_queries": 9068,
         "pointed_by_queries": 38373,
-        "total_term_sets": 77083,
+        "total_term_sets": 5964,
         "unique_sets": 4981,
-        "num_segments": 395719,
+        "num_segments": 1834,
         "num_chunks": 471,
         "num_unique_chunks": 471,
         "memory": 85184512
@@ -2035,9 +2039,9 @@
         "query_propagation_time_ms": 10.975133999999999,
         "points_to_queries": 8808,
         "pointed_by_queries": 22239,
-        "total_term_sets": 58685,
+        "total_term_sets": 2381,
         "unique_sets": 2226,
-        "num_segments": 469501,
+        "num_segments": 1085,
         "num_chunks": 357,
         "num_unique_chunks": 357,
         "memory": 81297408
@@ -2064,9 +2068,9 @@
         "query_propagation_time_ms": 11.301158000000001,
         "points_to_queries": 8808,
         "pointed_by_queries": 22239,
-        "total_term_sets": 58685,
+        "total_term_sets": 2381,
         "unique_sets": 2226,
-        "num_segments": 469501,
+        "num_segments": 1085,
         "num_chunks": 357,
         "num_unique_chunks": 357,
         "memory": 81293312
@@ -2093,9 +2097,9 @@
         "query_propagation_time_ms": 11.039439999999999,
         "points_to_queries": 8808,
         "pointed_by_queries": 22239,
-        "total_term_sets": 58685,
+        "total_term_sets": 2381,
         "unique_sets": 2226,
-        "num_segments": 469501,
+        "num_segments": 1085,
         "num_chunks": 357,
         "num_unique_chunks": 357,
         "memory": 81350656
@@ -2127,7 +2131,7 @@
         "total_term_sets": 58685,
         "unique_sets": 2226,
         "num_segments": 469501,
-        "num_chunks": 20676,
+        "num_chunks": 20690,
         "num_unique_chunks": 357,
         "memory": 105148416
       },
@@ -2156,7 +2160,7 @@
         "total_term_sets": 58685,
         "unique_sets": 2226,
         "num_segments": 469501,
-        "num_chunks": 20676,
+        "num_chunks": 20690,
         "num_unique_chunks": 357,
         "memory": 105144320
       },
@@ -2185,7 +2189,7 @@
         "total_term_sets": 58685,
         "unique_sets": 2226,
         "num_segments": 469501,
-        "num_chunks": 20676,
+        "num_chunks": 20690,
         "num_unique_chunks": 357,
         "memory": 105148416
       }
@@ -3220,7 +3224,9 @@
       }
     ],
     "demand_call_graph": [
-      { "error": "DNF" }
+      {
+        "error": "DNF"
+      }
     ]
   },
   "valkey": {
@@ -4134,7 +4140,9 @@
       }
     ],
     "demand_call_graph": [
-      { "error": "DNF" }
+      {
+        "error": "DNF"
+      }
     ]
   }
 }
