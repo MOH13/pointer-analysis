@@ -198,9 +198,9 @@ make_table(
     data,
     "time.tex",
     ["tidal_shared", "tidal_call_graph", "wave_shared", "demand_call_graph"],
-    ["TP (All)", "TP (CG)", "WP", "WL (CG)"],
-    ["solver_time_ms"],
-    ["Time (s)"],
+    ["TP (All)", "TP (CG)", "WP", "WL"],
+    ["solver_time_ms", "memory"],
+    ["Time (s)", "Memory (MB)"],
 )
 
 make_table(
