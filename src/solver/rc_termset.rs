@@ -155,9 +155,6 @@ where
         })
         .collect();
 
-        let total_shared_sets = set_dups.len();
-        dbg!(total_shared_sets);
-
         S::deduplicate(set_dups.iter_mut().map(|(s, _)| Rc::make_mut(s)));
 
         for (set, dups) in set_dups {

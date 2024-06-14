@@ -139,14 +139,8 @@ where
             for (&w, offsets) in &self.edges.subset[v as usize] {
                 let mut should_set_new_incoming = false;
                 for o in offsets.iter() {
-                    should_set_new_incoming = propagate_terms_into(
-                        &p_dif,
-                        p_dif_vec.iter().copied(),
-                        o,
-                        &mut self.edges.sols[w as usize],
-                        &self.term_types,
-                    ) && o > 0;
                     if o == 0 {
+                        self.edges.sols[w as usize].union_assign(&p_dif);
                         if self.aggressive_dedup {
                             if let Some((a, b)) =
                                 self.edges.sols.get_two_mut(v as usize, w as usize)
@@ -154,6 +148,14 @@ where
                                 S::deduplicate_subset_pair(a, b);
                             }
                         }
+                    } else {
+                        should_set_new_incoming = propagate_terms_into(
+                            &p_dif,
+                            p_dif_vec.iter().copied(),
+                            o,
+                            &mut self.edges.sols[w as usize],
+                            &self.term_types,
+                        )
                     }
                 }
 
@@ -491,13 +493,9 @@ fn propagate_terms_into<S: TermSetTrait<Term = IntegerTerm>>(
         dest_term_set.union_assign(term_set);
         return false;
     } else {
-        let to_add = term_set_iter.into_iter().filter_map(|t| {
-            if let TermType::Struct(allowed) = term_types[t as usize] {
-                (offset <= allowed).then(|| t + offset as IntegerTerm)
-            } else {
-                None
-            }
-        });
+        let to_add = term_set_iter
+            .into_iter()
+            .filter_map(|t| try_offset_term(t, term_types[t as usize], offset));
         for t in to_add {
             dest_term_set.insert(t);
             propagated_term_weighted = true;
